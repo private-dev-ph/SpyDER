@@ -1,8 +1,8 @@
 # SpyDER CCTV
 
 An installable Python foundation for concurrent webcam/CCTV monitoring and computer vision.
-Requires Python 3.11 or newer. The initial interface is a local browser dashboard with independent
-camera start/stop controls, JPEG previews, status, and a basic motion metric.
+Requires Python 3.11 or newer. The main GUI is a local browser control room with a responsive
+camera wall, persistent camera management, independent controls, and motion awareness.
 
 ## Development environment
 
@@ -25,14 +25,29 @@ Install the built wheel into a virtual environment with `python -m pip install <
 Then run these commands from **any working directory**:
 
 ```text
-spyder-cctv init
-spyder-cctv check
-spyder-cctv serve
+spyder-cctv gui
 ```
 
-Open the printed `http://127.0.0.1:8765` URL. The default example defines device `0`, with
-autostart disabled. Press **Start** to open it. Ctrl+C stops the server and signals all cameras.
-Use `python -m spyder_cctv` if the console command is not on PATH.
+The command opens `http://127.0.0.1:8765` in your default browser. Running `spyder-cctv` without
+a subcommand also opens the GUI. First launch creates an empty user configuration if needed.
+Press **Add camera**, enter a friendly name, and choose a webcam index, stream URL, or video
+file. Webcam `0` is usually the first camera and `1` the second. Each source can be connected once.
+
+The **Start now and automatically on launch** checkbox connects the feed and remembers it for
+the next launch. **Pause** stops a camera for this session; it does not change that startup setting.
+**Remove** stops the feed and removes it from the saved configuration after confirmation.
+Add/remove changes are saved atomically; no restart is needed. Use **Start all** / **Pause all**
+for bulk control, or a tile's own buttons for independent control.
+
+The wall calculates columns from available width and camera count. **Tile size** offers Auto,
+Compact, or Large; **Fit / Fill** preserves the full frame or crops to fill its tile. The focus button
+enlarges one camera; **Escape** returns to the wall. Light mode is the default; the top-right theme
+button switches to dark mode and remembers your choice. No external fonts or frontend build is
+needed: HTML, CSS, and JavaScript are bundled with the installed Python package.
+
+Ctrl+C in the launching terminal stops the server and cameras. Closing the browser alone keeps
+the server running. Use `gui --no-browser` to run without opening a tab, or `serve` to require an
+existing config. Use `python -m spyder_cctv` if the console command is not on PATH.
 
 `init` prints the configuration path and refuses to overwrite an existing file. The default
 configuration lives in the user's platform config directory (usually `%LOCALAPPDATA%/SpyDER`
@@ -44,33 +59,36 @@ spyder-cctv --config /absolute/path/config.json init
 spyder-cctv --config /absolute/path/config.json serve --port 8766
 ```
 
-Edit the JSON and restart the application to change cameras:
+You can also edit the JSON directly while the application is stopped:
 
 ```json
 {
   "cameras": [
-    {"id": "front", "source": 0, "fps": 10, "pipeline": "motion", "autostart": true},
-    {"id": "back", "source": 1, "fps": 10, "pipeline": "none", "autostart": false}
+    {"id": "front", "name": "Entrance", "source": 0, "fps": 15, "pipeline": "motion", "autostart": true},
+    {"id": "back", "name": "Side view", "source": 1, "fps": 15, "pipeline": "none", "autostart": true}
   ]
 }
 ```
 
 Sources can be device integers, RTSP/HTTP URLs, or video file paths. Relative file paths resolve
-against the configuration directory. Each camera needs a unique ID and preferably a distinct
-source; opening the same physical device twice can fail depending on its driver. Camera sources
+against the configuration directory. Each camera needs a unique ID and a distinct
+source. Camera sources
 and credentials are excluded from API status. Treat your configuration file as private.
 
 ## Current scope
 
 - One capture thread and independent CV pipeline per camera.
-- Start/stop controls, status, fresh JPEG snapshots, and a polling multi-camera dashboard.
+- Responsive light/dark GUI, live counts, focus view, fit/fill, and independent or bulk controls.
+- Add/remove camera controls with persistent settings and duplicate-source prevention.
 - OpenCV capture adapter and replaceable capture/pipeline/encoder interfaces.
 - Validated user configuration and bundled dashboard assets that work from a wheel.
 - No camera access during import, `init`, or `check`.
 
 This is an application skeleton, not a production surveillance service. Recording, camera discovery,
 PTZ/ONVIF controls, object detection models, automatic reconnect, and remote access remain future work.
-Motion is a simple changed-pixel fraction, not an alarm or object classifier. Preview polling is 2 Hz;
+Motion is a simple changed-pixel fraction, not an alarm or object classifier. Preview polling adapts
+to camera count (up to roughly 8 FPS for a small wall), avoids overlapping requests, and pauses in
+hidden tabs. Status updates approximately every 750 milliseconds. The
 configured `fps` caps capture/processing attempts and does not reconfigure physical device FPS.
 
 The server binds only to IPv4 loopback and rejects cross-origin controls. It has no user accounts

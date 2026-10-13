@@ -5,10 +5,12 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from spyder_cctv.capture import Capture, OpenCVCapture, encode_jpeg
-from spyder_cctv.config import CameraConfig
+from spyder_cctv.config import CameraConfig, save_config
 from spyder_cctv.vision import Pipeline, create_pipeline
 
 logger = logging.getLogger(__name__)
@@ -88,6 +90,16 @@ class CameraWorker:
             age = None if self._updated is None else round(time.monotonic() - self._updated, 3)
             return {
                 "id": self.config.id,
+                "name": self.config.name or self.config.id,
+                "source_label": (
+                    f"Webcam {self.config.source}"
+                    if isinstance(self.config.source, int)
+                    else "Network stream"
+                    if "://" in self.config.source
+                    else "Video file"
+                ),
+                "fps": self.config.fps,
+                "pipeline": self.config.pipeline,
                 "state": self._state,
                 "error": self._error,
                 "frames": self._frames,
@@ -141,26 +153,100 @@ class CameraWorker:
 
 
 class CameraManager:
-    def __init__(self, cameras: list[CameraConfig], **worker_options: Any) -> None:
+    def __init__(
+        self,
+        cameras: list[CameraConfig],
+        config_path: Path | None = None,
+        **worker_options: Any,
+    ) -> None:
         if len({camera.id for camera in cameras}) != len(cameras):
             raise ValueError("Camera ids must be unique")
         self.workers = {camera.id: CameraWorker(camera, **worker_options) for camera in cameras}
+        self._registry = threading.RLock()
+        self._mutations = threading.Lock()
+        self._closed = False
+        self._config_path = config_path
+        self._worker_options = worker_options
+
+    def _snapshot(self) -> list[CameraWorker]:
+        with self._registry:
+            return list(self.workers.values())
+
+    def get_worker(self, camera_id: str) -> CameraWorker:
+        with self._registry:
+            return self.workers[camera_id]
+
+    def _persist(self, workers: dict[str, CameraWorker]) -> None:
+        if self._config_path is not None:
+            save_config(self._config_path, [worker.config for worker in workers.values()])
+
+    def add(self, camera: CameraConfig) -> dict[str, Any]:
+        with self._mutations:
+            if self._closed:
+                raise RuntimeError("Camera manager is closed")
+            if isinstance(camera.source, str) and "://" not in camera.source:
+                if self._config_path is None:
+                    raise ValueError("Video files require a configured config path")
+                camera = replace(
+                    camera,
+                    source=str((self._config_path.parent / camera.source).resolve()),
+                )
+            with self._registry:
+                if camera.id in self.workers:
+                    raise RuntimeError("A camera with that id already exists")
+                if any(worker.config.source == camera.source for worker in self.workers.values()):
+                    raise RuntimeError("This camera source is already connected")
+                worker = CameraWorker(camera, **self._worker_options)
+                updated = self.workers | {camera.id: worker}
+                self._persist(updated)
+                self.workers = updated
+            if camera.autostart:
+                worker.start()
+            return worker.status()
+
+    def remove(self, camera_id: str) -> None:
+        with self._mutations:
+            if self._closed:
+                raise RuntimeError("Camera manager is closed")
+            worker = self.get_worker(camera_id)
+            worker.stop()
+            with self._registry:
+                updated = {key: value for key, value in self.workers.items() if key != camera_id}
+                self._persist(updated)
+                worker.request_stop(final=True)
+                self.workers = updated
+
+    def control(self, camera_id: str, action: str) -> dict[str, Any]:
+        with self._mutations:
+            if self._closed:
+                raise RuntimeError("Camera manager is closed")
+            worker = self.get_worker(camera_id)
+            if action == "start":
+                worker.start()
+            elif action == "stop":
+                worker.stop()
+            else:
+                raise ValueError("Unknown camera action")
+            return worker.status()
 
     def start_configured(self) -> None:
-        for worker in self.workers.values():
+        for worker in self._snapshot():
             if worker.config.autostart:
                 worker.start()
 
     def statuses(self) -> list[dict[str, Any]]:
-        return [worker.status() for worker in self.workers.values()]
+        return [worker.status() for worker in self._snapshot()]
 
     def close(self, timeout: float = 2.0) -> None:
         # Signal all workers first; total shutdown wait is bounded, not per-camera.
         deadline = time.monotonic() + timeout
-        for worker in self.workers.values():
-            worker.request_stop(final=True)
+        with self._mutations:
+            self._closed = True
+            workers = self._snapshot()
+            for worker in workers:
+                worker.request_stop(final=True)
         failed = []
-        for worker in self.workers.values():
+        for worker in workers:
             try:
                 worker.stop(max(0, deadline - time.monotonic()))
             except RuntimeError:

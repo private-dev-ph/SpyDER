@@ -4,8 +4,10 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from spyder_cctv.cameras import CameraManager
+from spyder_cctv.config import CameraConfig
 
 
 def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServer:
@@ -25,7 +27,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header(
-                "Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'"
+                "Content-Security-Policy",
+                "default-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'",
             )
             self.end_headers()
             self.wfile.write(body)
@@ -72,10 +75,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             else:
                 parts = path.strip("/").split("/")
                 if len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "frame":
-                    worker = manager.workers.get(parts[2])
-                    if worker is None:
+                    try:
+                        worker = manager.get_worker(parts[2])
+                    except KeyError:
                         self.json(404, {"error": "Unknown camera"})
-                    elif (jpeg := worker.jpeg()) is None:
+                        return
+                    if (jpeg := worker.jpeg()) is None:
                         self.json(503, {"error": "No fresh frame available"})
                     else:
                         self.send(200, jpeg, "image/jpeg")
@@ -90,19 +95,40 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(403, {"error": "Control header required"})
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
-            if len(parts) != 4 or parts[:2] != ["api", "cameras"]:
-                self.json(404, {"error": "Unknown route"})
-                return
-            worker = manager.workers.get(parts[2])
-            if worker is None or parts[3] not in ("start", "stop"):
-                self.json(404, {"error": "Unknown camera or action"})
-                return
             try:
-                if parts[3] == "start":
-                    worker.start()
+                if parts == ["api", "cameras"]:
+                    if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                        raise ValueError("Send camera details as application/json")
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 16384:
+                        raise ValueError("Camera details must be between 1 and 16384 bytes")
+                    data = json.loads(self.rfile.read(length))
+                    if not isinstance(data, dict):
+                        raise ValueError("Camera details must be an object")
+                    data.setdefault("id", "cam-" + uuid4().hex[:12])
+                    try:
+                        camera = CameraConfig(**data)
+                    except TypeError as error:
+                        raise ValueError("Camera contains missing or unknown fields") from error
+                    self.json(201, manager.add(camera))
+                elif len(parts) == 4 and parts[:2] == ["api", "cameras"]:
+                    if parts[3] == "remove":
+                        manager.remove(parts[2])
+                        self.json(200, {"removed": parts[2]})
+                    elif parts[3] in ("start", "stop"):
+                        self.json(200, manager.control(parts[2], parts[3]))
+                    else:
+                        self.json(404, {"error": "Unknown action"})
                 else:
-                    worker.stop()
-                self.json(200, worker.status())
+                    self.json(404, {"error": "Unknown route"})
+            except KeyError:
+                self.json(404, {"error": "Unknown camera"})
+            except (ValueError, UnicodeDecodeError):
+                self.json(
+                    400, {"error": "Invalid camera details. Check source, name, FPS and pipeline."}
+                )
+            except OSError:
+                self.json(500, {"error": "Cannot save configuration. Camera list was not changed."})
             except RuntimeError as error:
                 self.json(409, {"error": str(error)})
 

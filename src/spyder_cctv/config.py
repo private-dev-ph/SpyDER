@@ -2,8 +2,10 @@
 
 import json
 import math
+import os
 import re
-from dataclasses import dataclass
+import tempfile
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from platformdirs import user_config_path
@@ -20,6 +22,7 @@ class CameraConfig:
     fps: float = 10.0
     pipeline: str = "motion"
     autostart: bool = False
+    name: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", self.id):
@@ -38,6 +41,8 @@ class CameraConfig:
             raise ValueError("pipeline must be 'none' or 'motion'")
         if not isinstance(self.autostart, bool):
             raise ValueError("autostart must be a boolean")
+        if not isinstance(self.name, str) or len(self.name) > 80:
+            raise ValueError("Camera name must be text with at most 80 characters")
 
 
 def load_config(path: Path) -> list[CameraConfig]:
@@ -62,8 +67,24 @@ def load_config(path: Path) -> list[CameraConfig]:
                 camera.fps,
                 camera.pipeline,
                 camera.autostart,
+                camera.name,
             )
         cameras.append(camera)
     if len({camera.id for camera in cameras}) != len(cameras):
         raise ValueError("Camera ids must be unique")
     return cameras
+
+
+def save_config(path: Path, cameras: list[CameraConfig]) -> None:
+    """Replace configuration atomically, without truncating a working file on failure."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=".spyder-", suffix=".json", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as target:
+            json.dump({"cameras": [asdict(camera) for camera in cameras]}, target, indent=2)
+            target.write("\n")
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
