@@ -654,6 +654,12 @@
     enumerate().catch(() => {}),
   );
   window.spyderShowcase = {
+    getFrameSource: async (id) => {
+      const camera = get(id);
+      if (camera.state !== "running") throw new Error("Camera is offline.");
+      await frame(camera);
+      return camera.canvas;
+    },
     setRecording: async (id, active) => {
       const camera = get(id);
       if (typeof active !== "boolean")
