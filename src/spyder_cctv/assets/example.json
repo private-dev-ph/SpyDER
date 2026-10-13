@@ -1,0 +1,5 @@
+{
+  "cameras": [
+    {"id": "webcam", "source": 0, "fps": 10, "pipeline": "motion", "autostart": false}
+  ]
+}
