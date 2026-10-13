@@ -25,6 +25,7 @@ def export_showcase(output: Path) -> None:
     html = html.replace(
         '<script src="/dashboard.js" defer></script>',
         '<script src="/showcase.js" defer></script>\n'
+        '    <script src="/browser-recording.js" defer></script>\n'
         '    <script src="/dashboard.js" defer></script>',
     )
     (output / "index.html").write_text(html, encoding="utf-8")
@@ -37,6 +38,9 @@ def export_showcase(output: Path) -> None:
         "activity.js",
         "icons.svg",
         "spyder-emblem.png",
+        "workspaces.js",
+        "workspaces.css",
+        "browser-recording.js",
     ):
         (output / name).write_bytes(assets.joinpath(name).read_bytes())
     (output / "_headers").write_text(HEADERS, encoding="utf-8")

@@ -20,6 +20,9 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "activity.js",
         "icons.svg",
         "spyder-emblem.png",
+        "workspaces.js",
+        "workspaces.css",
+        "browser-recording.js",
         "_headers",
     }
     html = (output / "index.html").read_text(encoding="utf-8")

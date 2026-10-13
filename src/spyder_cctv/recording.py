@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 WIDTH = 1920
 HEIGHT = 1080
 FPS = 15
+MIN_FREE_BYTES = 64 * 1024 * 1024
 _MANIFEST = "manifest.json"
 
 
@@ -37,6 +39,7 @@ class RecordingService:
         self._thread: threading.Thread | None = None
         self._state = "idle"
         self._error: str | None = None
+        self._stop_notice: str | None = None
         self._camera_ids: list[str] = []
         self._started = 0.0
         self._last_elapsed = 0.0
@@ -56,6 +59,8 @@ class RecordingService:
                 self._thread is not None and self._thread.is_alive()
             ):
                 raise RuntimeError("A recording is already active")
+            if shutil.disk_usage(self.output_dir).free < MIN_FREE_BYTES:
+                raise RuntimeError("Recording needs at least 64 MiB of free local storage")
             retained: list[str] = []
             try:
                 for camera_id in ids:
@@ -67,6 +72,7 @@ class RecordingService:
                 raise
             self._camera_ids = ids
             self._error = None
+            self._stop_notice = None
             self._frames = 0
             self._started = time.monotonic()
             self._last_elapsed = 0.0
@@ -104,7 +110,8 @@ class RecordingService:
             for camera_id in before:
                 if camera_id not in ids:
                     self._release(camera_id)
-            self._wake.set()
+            if not ids:
+                self._wake.set()
             return self.status()
 
     def stop(self, timeout: float = 5.0) -> dict[str, Any]:
@@ -133,7 +140,7 @@ class RecordingService:
                 suffix = "jpg"
                 data = self._jpeg(samples[0])
             else:
-                image = self._compose(samples)
+                image = self._compose(samples, ids)
                 kind = "capture"
                 suffix = "jpg"
                 ok, encoded = cv2.imencode(".jpg", image)
@@ -178,7 +185,9 @@ class RecordingService:
         with self._lock:
             self._closed = True
         result = self.stop(timeout)
-        if result["state"] == "stopping":
+        with self._lock:
+            still_alive = self._thread is not None and self._thread.is_alive()
+        if result["state"] == "stopping" or still_alive:
             raise RuntimeError("Recording writer did not stop within timeout")
 
     def _write_loop(self) -> None:
@@ -205,8 +214,13 @@ class RecordingService:
                     self._release(camera_id)
                 if should_stop:
                     break
+                if shutil.disk_usage(self.output_dir).free < MIN_FREE_BYTES:
+                    with self._lock:
+                        self._stop_notice = "Recording saved and stopped: less than 64 MiB free"
+                        self._state = "stopping"
+                    break
                 samples = self._samples(selected)
-                composite = self._compose(samples)
+                composite = self._compose(samples, selected)
                 if self._writer is None:
                     self._open_writer()
                 self._writer.write(composite)
@@ -292,6 +306,7 @@ class RecordingService:
         with self._lock:
             if self._state != "error":
                 self._state = "idle"
+                self._error = self._stop_notice
             self._camera_ids = []
             if self._started:
                 self._last_elapsed = time.monotonic() - self._started
@@ -306,9 +321,7 @@ class RecordingService:
                 jpeg = worker.jpeg()
                 stamp = worker.status().get("frame_age_seconds")
                 image = (
-                    cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-                    if jpeg
-                    else None
+                    cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR) if jpeg else None
                 )
                 if image is None or stamp is None or stamp > 2.0:
                     image = None
@@ -327,7 +340,7 @@ class RecordingService:
         return encoded.tobytes()
 
     @staticmethod
-    def _compose(images: list[np.ndarray | None]) -> np.ndarray:
+    def _compose(images: list[np.ndarray | None], labels: list[str] | None = None) -> np.ndarray:
         count = max(1, len(images))
         columns = math.ceil(math.sqrt(count))
         rows = math.ceil(count / columns)
@@ -347,18 +360,52 @@ class RecordingService:
                 left, top = (w - resized.shape[1]) // 2, (h - resized.shape[0]) // 2
                 tile[top : top + resized.shape[0], left : left + resized.shape[1]] = resized
             canvas[y : y + h, x : x + w] = tile
+            if labels:
+                label = labels[index][: max(1, w // 12)]
+                cv2.rectangle(canvas, (x, y), (x + w - 1, y + 30), (20, 20, 20), -1)
+                cv2.putText(
+                    canvas,
+                    label,
+                    (x + 10, y + 21),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (230, 230, 230),
+                    1,
+                    cv2.LINE_AA,
+                )
+        if labels:
+            stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+            cv2.putText(
+                canvas,
+                stamp,
+                (WIDTH - 330, HEIGHT - 12),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (230, 230, 230),
+                1,
+                cv2.LINE_AA,
+            )
         return canvas
 
     @staticmethod
     def _placeholder(label: str, width: int = 640, height: int = 360) -> np.ndarray:
         image = np.zeros((height, width, 3), dtype=np.uint8)
-        cv2.putText(image, label, (24, max(40, height // 2)), cv2.FONT_HERSHEY_SIMPLEX,
-                    max(0.5, min(width, height) / 600), (220, 220, 220), 2, cv2.LINE_AA)
+        cv2.putText(
+            image,
+            label,
+            (24, max(40, height // 2)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            max(0.5, min(width, height) / 600),
+            (220, 220, 220),
+            2,
+            cv2.LINE_AA,
+        )
         return image
 
     def _validate_ids(self, camera_ids: list[str], *, allow_empty: bool = False) -> list[str]:
         if (
             not isinstance(camera_ids, list)
+            or len(camera_ids) > 64
             or (not camera_ids and not allow_empty)
             or any(not isinstance(x, str) for x in camera_ids)
         ):

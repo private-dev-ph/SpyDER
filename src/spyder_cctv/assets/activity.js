@@ -20,7 +20,7 @@
   function updateNote() {
     note.textContent = release
       ? focused()
-        ? "Cameras release when this view is away"
+        ? "Unrecorded cameras release when this view is away"
         : "Away · idle cameras release automatically"
       : "Keep cameras active while this tab is open";
   }

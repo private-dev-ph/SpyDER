@@ -1,6 +1,8 @@
 """Loopback-only monitoring server. No package-relative filesystem assumptions."""
 
 import json
+import mimetypes
+import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from urllib.parse import urlsplit
@@ -8,9 +10,19 @@ from uuid import uuid4
 
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import CameraConfig, SettingsProfile
+from spyder_cctv.recording import RecordingService
 
 
 def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServer:
+    recorder = RecordingService(manager, manager.media_dir)
+
+    class LocalServer(ThreadingHTTPServer):
+        def server_close(self) -> None:
+            try:
+                recorder.close()
+            finally:
+                super().server_close()
+
     class Handler(BaseHTTPRequestHandler):
         # Reuse preview/status connections instead of exhausting local ephemeral ports.
         protocol_version = "HTTP/1.1"
@@ -95,12 +107,19 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     if asset.endswith(".js")
                     else "text/css; charset=utf-8",
                 )
-            elif path in ("/icons.svg", "/spyder-emblem.png", "/activity.js"):
+            elif path in (
+                "/icons.svg",
+                "/spyder-emblem.png",
+                "/activity.js",
+                "/workspaces.js",
+                "/workspaces.css",
+            ):
                 asset = path.removeprefix("/")
                 content_type = {
                     ".svg": "image/svg+xml",
                     ".png": "image/png",
                     ".js": "text/javascript; charset=utf-8",
+                    ".css": "text/css; charset=utf-8",
                 }[asset[asset.rfind(".") :]]
                 self.send(
                     200,
@@ -111,6 +130,32 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(200, manager.statuses())
             elif path == "/api/profiles":
                 self.json(200, manager.profiles())
+            elif path == "/api/recordings":
+                self.json(200, recorder.status())
+            elif path == "/api/system":
+                disk = shutil.disk_usage(
+                    manager.media_dir if manager.media_dir.exists() else manager.media_dir.parent
+                )
+                self.json(200, {"media_directory": str(manager.media_dir), "free_bytes": disk.free})
+            elif path.startswith("/api/media/"):
+                try:
+                    media = recorder.media_path(path.removeprefix("/api/media/"))
+                    with media.open("rb") as source:
+                        self.send_response(200)
+                        self.send_header(
+                            "Content-Type",
+                            mimetypes.guess_type(media.name)[0] or "application/octet-stream",
+                        )
+                        self.send_header("Content-Length", str(media.stat().st_size))
+                        self.send_header(
+                            "Content-Disposition", f'attachment; filename="{media.name}"'
+                        )
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        self.end_headers()
+                        shutil.copyfileobj(source, self.wfile, length=256 * 1024)
+                except (KeyError, FileNotFoundError, ValueError):
+                    self.json(404, {"error": "Unknown media"})
             else:
                 parts = path.strip("/").split("/")
                 if (
@@ -145,7 +190,27 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
             try:
-                if parts == ["api", "cameras"]:
+                if parts in (
+                    ["api", "recordings", "start"],
+                    ["api", "recordings", "cameras"],
+                    ["api", "captures"],
+                ):
+                    data = self.body()
+                    if set(data) != {"camera_ids"}:
+                        raise ValueError("Send camera_ids")
+                    action = (
+                        recorder.capture
+                        if parts == ["api", "captures"]
+                        else recorder.start
+                        if parts[-1] == "start"
+                        else recorder.select
+                    )
+                    self.json(200, action(data["camera_ids"]))
+                elif parts == ["api", "recordings", "stop"]:
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(200, recorder.stop())
+                elif parts == ["api", "cameras"]:
                     data = self.body()
                     data.setdefault("id", "cam-" + uuid4().hex[:12])
                     try:
@@ -205,11 +270,18 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(404, {"error": "Unknown camera or profile"})
             except (ValueError, UnicodeDecodeError):
                 self.json(
-                    400, {"error": "Invalid details. Check camera fields or settings (0-100%)."}
+                    400,
+                    {
+                        "error": "Invalid details. Check camera selection, fields or "
+                        "settings (0-100%)."
+                    },
                 )
             except OSError:
-                self.json(500, {"error": "Cannot save configuration. Camera list was not changed."})
+                self.json(
+                    500,
+                    {"error": "Cannot save local data. Check storage permissions and free space."},
+                )
             except RuntimeError as error:
                 self.json(409, {"error": str(error)})
 
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    return LocalServer(("127.0.0.1", port), Handler)

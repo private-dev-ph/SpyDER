@@ -9,9 +9,11 @@
     <link rel="icon" type="image/png" href="/spyder-emblem.png" />
     <link rel="stylesheet" href="/dashboard.css" />
     <link rel="stylesheet" href="/settings.css" />
+    <link rel="stylesheet" href="/workspaces.css" />
     <script src="/dashboard.js" defer></script>
     <script src="/settings.js" defer></script>
     <script src="/activity.js" defer></script>
+    <script src="/workspaces.js" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -28,6 +30,12 @@
         <span class="status-dot"></span> LOCAL CONTROL ROOM
       </div>
       <div class="top-actions">
+        <label class="mobile-workspace"
+          >Workspace<select
+            id="workspace-select"
+            aria-label="Choose workspace"
+          ></select
+        ></label>
         <time id="clock"></time
         ><button
           id="theme"
@@ -44,14 +52,21 @@
     <div class="workspace">
       <aside class="rail" aria-label="Workspace">
         <div class="rail-heading">WORKSPACE</div>
-        <div class="rail-current">
-          <span aria-hidden="true"
-            ><svg class="icon" aria-hidden="true" focusable="false">
-              <use href="/icons.svg#grid" /></svg
-          ></span>
-          Camera wall
-          <span id="rail-count" class="rail-count">0</span>
-        </div>
+        <nav id="workspace-nav" aria-label="Workspaces">
+          <a
+            href="#control-room"
+            data-workspace="control-room"
+            class="rail-current"
+            aria-current="page"
+          >
+            <span aria-hidden="true"
+              ><svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#grid" /></svg
+            ></span>
+            Control Room
+            <span id="rail-count" class="rail-count">0</span>
+          </a>
+        </nav>
         <div class="rail-note">
           <svg class="scope-icon" aria-hidden="true" focusable="false">
             <use href="/icons.svg#lens" /></svg
@@ -67,135 +82,142 @@
         </div>
       </aside>
       <main>
-        <section class="page-heading">
-          <div>
-            <p class="eyebrow">OBSERVE / CONTROL</p>
-            <h1>Eyes on everything<span>.</span></h1>
-            <p class="intro">
-              A space for every camera. A clearer picture of what matters.
-            </p>
-          </div>
-          <div class="heading-actions">
-            <button id="open-profiles" class="button secondary">
-              <svg class="icon" aria-hidden="true" focusable="false">
-                <use href="/icons.svg#profiles" /></svg
-              ><span class="action-label">Profiles</span></button
-            ><button id="add-camera" class="button primary">
-              <span aria-hidden="true"
-                ><svg class="icon" aria-hidden="true" focusable="false">
-                  <use href="/icons.svg#plus" /></svg
-              ></span>
-              Add camera
-            </button>
-          </div>
-        </section>
-        <section class="overview" aria-label="Camera summary">
-          <div class="metric">
-            <span class="metric-label">CAMERAS IN WORKSPACE</span
-            ><strong id="total-count">00</strong
-            ><span class="metric-note">in your workspace</span>
-          </div>
-          <div class="metric">
-            <span class="metric-label">LIVE RIGHT NOW</span
-            ><strong id="live-count">00</strong
-            ><span class="metric-note"
-              ><span class="status-dot"></span> independently streaming</span
-            >
-          </div>
-          <div class="metric">
-            <span class="metric-label">NEEDS ATTENTION</span
-            ><strong id="attention-count">00</strong
-            ><span id="attention-note" class="metric-note"
-              >All systems clear</span
-            >
-          </div>
-          <div class="overview-note">
-            <svg class="scope-icon" aria-hidden="true" focusable="false">
-              <use href="/icons.svg#lens" />
-            </svg>
+        <div id="control-room">
+          <section class="page-heading">
             <div>
-              <strong>Built for the bigger picture.</strong>
-              <p>The wall adapts as your camera setup grows.</p>
+              <p class="eyebrow">OBSERVE / CONTROL</p>
+              <h1>Eyes on everything<span>.</span></h1>
+              <p class="intro">
+                A space for every camera. A clearer picture of what matters.
+              </p>
             </div>
-          </div>
-        </section>
-        <section class="wall-section">
-          <div class="wall-toolbar">
-            <div>
-              <h2>Camera wall <span id="wall-count">0</span></h2>
-              <span class="live-label"
-                ><span class="status-dot"></span> LIVE WORKSPACE</span
-              >
-            </div>
-            <div class="wall-controls">
-              <label class="density-label"
-                >Tile size
-                <select id="density">
-                  <option value="auto">Auto</option>
-                  <option value="compact">Compact</option>
-                  <option value="large">Large</option>
-                </select></label
-              ><button id="start-all" class="button secondary">
+            <div class="heading-actions">
+              <button id="open-profiles" class="button secondary">
                 <svg class="icon" aria-hidden="true" focusable="false">
-                  <use href="/icons.svg#play" /></svg
-                ><span class="action-label">Start all</span></button
-              ><button id="stop-all" class="button secondary">
-                <svg class="icon" aria-hidden="true" focusable="false">
-                  <use href="/icons.svg#pause" /></svg
-                ><span class="action-label">Pause all</span>
+                  <use href="/icons.svg#profiles" /></svg
+                ><span class="action-label">Profiles</span></button
+              ><button id="add-camera" class="button primary">
+                <span aria-hidden="true"
+                  ><svg class="icon" aria-hidden="true" focusable="false">
+                    <use href="/icons.svg#plus" /></svg
+                ></span>
+                Add camera
               </button>
             </div>
-          </div>
-          <div class="activity-policy">
-            <label class="release-toggle"
-              ><input id="release-idle" type="checkbox" checked /><svg
-                class="icon"
-                aria-hidden="true"
-                focusable="false"
+          </section>
+          <section class="overview" aria-label="Camera summary">
+            <div class="metric">
+              <span class="metric-label">CAMERAS IN WORKSPACE</span
+              ><strong id="total-count">00</strong
+              ><span class="metric-note">in your workspace</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">LIVE RIGHT NOW</span
+              ><strong id="live-count">00</strong
+              ><span class="metric-note"
+                ><span class="status-dot"></span> independently streaming</span
               >
-                <use href="/icons.svg#leaf" /></svg
-              ><span>Release cameras when away</span></label
-            ><span id="activity-note" role="status" aria-live="polite"
-              >Cameras release when this view is away</span
-            >
-          </div>
-          <div
-            id="message"
-            class="message"
-            role="status"
-            aria-live="polite"
-            hidden
-          ></div>
-          <div id="empty" class="empty-state" hidden>
-            <svg class="scope-icon" aria-hidden="true" focusable="false">
-              <use href="/icons.svg#lens" />
-            </svg>
-            <h3>Your first angle starts here.</h3>
-            <p>
-              Add a webcam, a network stream, or a video file.<br />Your camera
-              wall will take care of the layout.
-            </p>
-            <button id="empty-add" class="button primary">
-              <svg class="icon" aria-hidden="true" focusable="false">
-                <use href="/icons.svg#plus" />
+            </div>
+            <div class="metric">
+              <span class="metric-label">NEEDS ATTENTION</span
+              ><strong id="attention-count">00</strong
+              ><span id="attention-note" class="metric-note"
+                >All systems clear</span
+              >
+            </div>
+            <div class="overview-note">
+              <svg class="scope-icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#lens" />
               </svg>
-              Add your first camera
-            </button>
-          </div>
-          <div
-            id="cameras"
-            role="group"
-            class="camera-grid"
-            data-density="auto"
-            aria-label="Camera feeds"
-          ></div>
-          <div class="wall-footer">
-            <span
-              >LOCAL MONITORING <span aria-hidden="true">/</span> PRIVATE BY
-              DESIGN</span
-            ><span id="wall-hint">Add cameras to begin</span>
-          </div>
-        </section>
+              <div>
+                <strong>Built for the bigger picture.</strong>
+                <p>The wall adapts as your camera setup grows.</p>
+              </div>
+            </div>
+          </section>
+          <section class="wall-section">
+            <div class="wall-toolbar">
+              <div>
+                <h2>Camera wall <span id="wall-count">0</span></h2>
+                <span class="live-label"
+                  ><span class="status-dot"></span> LIVE WORKSPACE</span
+                >
+              </div>
+              <div class="wall-controls">
+                <label class="density-label"
+                  >Tile size
+                  <select id="density">
+                    <option value="auto">Auto</option>
+                    <option value="compact">Compact</option>
+                    <option value="large">Large</option>
+                  </select></label
+                ><button id="start-all" class="button secondary">
+                  <svg class="icon" aria-hidden="true" focusable="false">
+                    <use href="/icons.svg#play" /></svg
+                  ><span class="action-label">Start all</span></button
+                ><button id="stop-all" class="button secondary">
+                  <svg class="icon" aria-hidden="true" focusable="false">
+                    <use href="/icons.svg#pause" /></svg
+                  ><span class="action-label">Pause all</span>
+                </button>
+              </div>
+            </div>
+            <div class="activity-policy">
+              <label class="release-toggle"
+                ><input id="release-idle" type="checkbox" checked /><svg
+                  class="icon"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <use href="/icons.svg#leaf" /></svg
+                ><span>Release cameras when away</span></label
+              ><span id="activity-note" role="status" aria-live="polite"
+                >Unrecorded cameras release when this view is away</span
+              >
+            </div>
+            <div
+              id="message"
+              class="message"
+              role="status"
+              aria-live="polite"
+              hidden
+            ></div>
+            <div id="empty" class="empty-state" hidden>
+              <svg class="scope-icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#lens" />
+              </svg>
+              <h3>Your first angle starts here.</h3>
+              <p>
+                Add a webcam, a network stream, or a video file.<br />Your
+                camera wall will take care of the layout.
+              </p>
+              <button id="empty-add" class="button primary">
+                <svg class="icon" aria-hidden="true" focusable="false">
+                  <use href="/icons.svg#plus" />
+                </svg>
+                Add your first camera
+              </button>
+            </div>
+            <div
+              id="cameras"
+              role="group"
+              class="camera-grid"
+              data-density="auto"
+              aria-label="Camera feeds"
+            ></div>
+            <div class="wall-footer">
+              <span
+                >LOCAL MONITORING <span aria-hidden="true">/</span> PRIVATE BY
+                DESIGN</span
+              ><span id="wall-hint">Add cameras to begin</span>
+            </div>
+          </section>
+        </div>
+        <section
+          id="workspace-page"
+          hidden
+          aria-labelledby="workspace-title"
+        ></section>
       </main>
     </div>
     <dialog id="add-dialog" aria-labelledby="add-title">

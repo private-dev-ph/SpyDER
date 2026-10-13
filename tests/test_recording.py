@@ -81,6 +81,21 @@ def test_tiled_recording_reshapes_and_decodes(rig):
     assert item["size_bytes"] == path.stat().st_size
 
 
+def test_low_storage_stops_and_saves_existing_frames(rig, monkeypatch):
+    manager, service, _ = rig
+    service.start(["red"])
+    wait_for(lambda: service.status()["frames"] >= 3)
+    monkeypatch.setattr(
+        recording_module.shutil, "disk_usage", lambda path: type("Disk", (), {"free": 0})()
+    )
+    wait_for(lambda: service.status()["state"] == "idle")
+    assert service.status()["error"] == "Recording saved and stopped: less than 64 MiB free"
+    assert service.status()["items"][-1]["kind"] == "recording"
+    assert manager.statuses()[0]["recording"] is False
+    with pytest.raises(RuntimeError, match="free local storage"):
+        service.start(["red"])
+
+
 def test_capture_catalog_restart_and_safe_media_lookup(rig):
     manager, service, output = rig
     manager.set_recording("red", True)

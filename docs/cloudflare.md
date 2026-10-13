@@ -67,6 +67,15 @@ are deliberately excluded by CSP.
 
 ## Future `spyder.zachcodes.dev` hostname
 
+The Recordings workspace uses Canvas and MediaRecorder in the visitor's browser.
+Tiles resize within one 1920 × 1080 recording. Recordings and JPEG captures stay
+as local Blob objects until downloaded; the tab does not send media requests to a
+server. Keep the tab visible while recording. Hiding it stops and finalizes the
+recording because browsers throttle background drawing. Download files before
+closing or reloading; the showcase media library is not persistent. A 128 MiB
+memory limit bounds browser recording buffers. Native recordings stream to local
+disk and continue while the browser is away.
+
 No deployment, DNS, or account changes are part of this task. After choosing the
 platform, add `spyder.zachcodes.dev` as a custom domain in the Cloudflare dashboard
 and verify HTTPS before inviting camera access. Workers custom domains require

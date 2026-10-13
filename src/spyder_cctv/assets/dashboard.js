@@ -132,7 +132,8 @@ async function controlAll(action) {
   $("#start-all").disabled = $("#stop-all").disabled = true;
   const selected = cameras.filter((camera) =>
     action === "stop"
-      ? ["running", "starting", "stopping"].includes(camera.state)
+      ? !camera.recording &&
+        ["running", "starting", "stopping"].includes(camera.state)
       : ["stopped", "error"].includes(camera.state),
   );
   const outcomes = await Promise.allSettled(
@@ -158,7 +159,7 @@ function leaveFocus() {
   document.body.classList.remove("has-focus");
   $("#focus-toolbar").hidden = true;
   for (const element of document.querySelectorAll(
-    ".topbar,.rail,.page-heading,.overview,.wall-toolbar,.wall-footer",
+    ".topbar,.rail,.page-heading,.overview,.wall-toolbar,.wall-footer,.activity-policy",
   ))
     element.inert = false;
   for (const card of cards.values()) card.element.inert = false;
@@ -178,7 +179,7 @@ function focusCamera(id, button) {
   document.body.classList.add("has-focus");
   $("#focus-toolbar").hidden = false;
   for (const element of document.querySelectorAll(
-    ".topbar,.rail,.page-heading,.overview,.wall-toolbar,.wall-footer",
+    ".topbar,.rail,.page-heading,.overview,.wall-toolbar,.wall-footer,.activity-policy",
   ))
     element.inert = true;
   for (const [key, other] of cards) other.element.inert = key !== id;
@@ -498,6 +499,7 @@ function render() {
     toggle.setAttribute("aria-label", toggle.textContent + " " + camera.name);
     toggle.disabled =
       !connected || pending.has(camera.id) || camera.state === "stopping";
+    if (camera.recording) $(".toggle-camera", element).disabled = true;
     $(".remove-camera", element).disabled =
       !connected || pending.has(camera.id);
     $(".settings-camera", element).disabled = !connected;
@@ -598,7 +600,10 @@ function render() {
   $("#stop-all").disabled =
     bulkPending ||
     !connected ||
-    !cameras.some((camera) => ["running", "starting"].includes(camera.state));
+    !cameras.some(
+      (camera) =>
+        !camera.recording && ["running", "starting"].includes(camera.state),
+    );
   $("#add-camera").disabled = $("#empty-add").disabled = !connected;
   $("#open-profiles").disabled = !connected;
   $("#connection").textContent = connected
@@ -612,6 +617,9 @@ function render() {
       !cameras.some((c) => ["running", "starting"].includes(c.state)),
   );
   reflow();
+  window.dispatchEvent(
+    new CustomEvent("spyder:cameras", { detail: { cameras, connected } }),
+  );
 }
 async function refresh() {
   if (refreshing) return;
@@ -678,5 +686,6 @@ window.spyder = {
   notify,
   cameras: () => cameras,
   frame: (id) => cards.get(id)?.url,
+  leaveFocus,
 };
 poll();
