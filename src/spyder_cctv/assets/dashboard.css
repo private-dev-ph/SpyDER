@@ -1,0 +1,6 @@
+body { font: 16px system-ui, sans-serif; background: #141b26; color: #e8eef7; margin: 2rem; }
+main { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+article { padding: 1rem; background: #233047; border-radius: 8px; }
+img { width: 100%; min-height: 100px; object-fit: contain; }
+button { padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
+pre { white-space: pre-wrap; }
