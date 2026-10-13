@@ -25,7 +25,7 @@ Cloudflare Pages also supports static HTML and can deploy a prebuilt output dire
 
 `wrangler dev` starts a local preview and does not deploy. From the repository root, run `npx wrangler dev`; then open the printed local URL and confirm `index.html` and the asset routes load. Wrangler's `deploy --dry-run` compiles without deploying, but a local preview is the useful check for a static directory. [Workers commands](https://developers.cloudflare.com/workers/wrangler/commands/workers/), [Get started with Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/)
 
-The no-`main` configuration shape is supported by Cloudflare's static-site examples. A live CLI validation was attempted with a temporary static config, but no Wrangler executable is installed in this worktree and `npm.cmd exec --yes --package=wrangler` produced no output for 60 seconds under the restricted network environment, so it was stopped. Re-run `npx wrangler dev` after Wrangler is available locally to validate the actual root configuration and asset directory. [Workers best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/), [Workers commands](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
+The no-`main` configuration shape is supported by Cloudflare's static-site examples. Initial package acquisition stalled in the restricted research environment. The orchestrator subsequently obtained Wrangler 4.149.0 with authorized network access: `deploy --dry-run` passed with seven static files and no bindings; `dev --local --port 8787` served the site and parsed its `_headers` rule. Neither command deployed the site. Browser inspection confirmed five interface asset downloads and no HTTP camera/profile API requests. [Workers best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/), [Workers commands](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
 
 ## Browser camera and PTZ
 
@@ -56,5 +56,5 @@ Workers custom domains use a separate workflow and should be selected only if th
 - Cloudflare hosting distributes page/bootstrap files. This is unavoidable for a hosted showcase. Runtime capture, motion analysis, and profile use remain in the visitor's browser by design.
 - Static hosting cannot prevent client JavaScript from sending data. Keep frame/profile code free of upload calls and review any third-party scripts before including them.
 - PTZ support is not uniform. Detect support at runtime and report unsupported controls without blocking video.
-- Cloudflare's documentation confirms the no-script static asset configuration, but Wrangler CLI validation remains unverified because package acquisition stalled in this restricted environment.
+- Wrangler 4.149.0 dry-run packaging and local static serving passed; actual Cloudflare deployment remains deliberately deferred.
 - Domain ownership, DNS zone placement, and browser/device PTZ combinations remain unverified.

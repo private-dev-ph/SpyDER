@@ -114,7 +114,21 @@ Capture uses DirectShow for integer webcam sources on Windows and OpenCV's defau
 for other sources/platforms. Browser assets use package resources from either editable or wheel
 installs. `gui` creates empty configuration on first launch; it never overwrites an existing file.
 
-## Limitations and growth
+## Static showcase boundary
+
+`showcase.py` exports packaged assets into a new static directory. `showcase.js`
+implements the dashboard's camera/profile contract entirely in the browser,
+without calling the loopback API. The installed GUI continues to use Python.
+The showcase uses MediaStream tracks for webcams, Blob URLs for chosen files,
+Canvas for bounded preview/motion buffers, and origin-scoped localStorage for
+profiles. Camera state belongs to the current tab; it never requests webcam
+permission on page load. Generated feeds make the wall immediately usable.
+Track capabilities gate hardware controls; real settings readback determines
+whether constraints applied. Pause/removal/page exit releases owned tracks.
+The static CSP forbids network connections. Cloudflare serves assets only;
+there are no server functions or storage bindings. See [hosting guide](cloudflare.md).
+
+## Local backend limitations and growth
 
 OpenCV's [VideoCapture API](https://docs.opencv.org/4.x/d8/dfe/classcv_1_1VideoCapture.html)
 depends on device/backend behavior. Native reads can block beyond the shutdown deadline. Python

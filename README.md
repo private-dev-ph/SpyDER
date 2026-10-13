@@ -4,6 +4,12 @@ An installable Python foundation for concurrent webcam/CCTV monitoring and compu
 Requires Python 3.11 or newer. The main GUI is a local browser control room with a responsive
 camera wall, persistent camera management, independent controls, and motion awareness.
 
+A separate [Cloudflare showcase](docs/cloudflare.md) exports the same GUI as static assets.
+Its generated feeds, optional webcams, local video files, motion analysis, and profiles run
+entirely in the visitor's browser. Build with `.venv/Scripts/python.exe tools/build_showcase.py`;
+no deployment or cloud camera backend is required. The installed Python app remains the
+primary product, including RTSP and native driver controls.
+
 ## Development environment
 
 ```powershell
