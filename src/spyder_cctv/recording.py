@@ -52,7 +52,9 @@ class RecordingService:
         ids = self._validate_ids(camera_ids)
         with self._lock:
             self._ensure_open()
-            if self._state in ("recording", "stopping"):
+            if self._state in ("recording", "stopping") or (
+                self._thread is not None and self._thread.is_alive()
+            ):
                 raise RuntimeError("A recording is already active")
             retained: list[str] = []
             try:
@@ -124,8 +126,9 @@ class RecordingService:
         with self._lock:
             self._ensure_open()
             samples = self._samples(ids)
+            if all(image is None for image in samples):
+                raise RuntimeError("No fresh camera frames are available")
             if len(ids) == 1:
-                image = samples[0]
                 kind = "capture"
                 suffix = "jpg"
                 data = self._jpeg(samples[0])
@@ -173,8 +176,6 @@ class RecordingService:
 
     def close(self, timeout: float = 10.0) -> None:
         with self._lock:
-            if self._closed:
-                return
             self._closed = True
         result = self.stop(timeout)
         if result["state"] == "stopping":
@@ -183,6 +184,7 @@ class RecordingService:
     def _write_loop(self) -> None:
         try:
             while True:
+                frame_started = time.monotonic()
                 with self._lock:
                     selected = list(self._camera_ids)
                     if not selected:
@@ -205,12 +207,13 @@ class RecordingService:
                     break
                 samples = self._samples(selected)
                 composite = self._compose(samples)
+                if self._writer is None:
+                    self._open_writer()
+                self._writer.write(composite)
                 with self._lock:
-                    if self._writer is None:
-                        self._open_writer()
-                    self._writer.write(composite)
                     self._frames += 1
-                self._wake.wait(1.0 / FPS)
+                remaining = max(0.0, 1.0 / FPS - (time.monotonic() - frame_started))
+                self._wake.wait(remaining)
                 self._wake.clear()
         except Exception:
             logger.exception("Recording writer failed")
@@ -317,7 +320,7 @@ class RecordingService:
     @staticmethod
     def _jpeg(image: np.ndarray | None) -> bytes:
         if image is None:
-            image = RecordingService._placeholder("Camera unavailable")
+            raise RuntimeError("No fresh camera frame is available")
         ok, encoded = cv2.imencode(".jpg", image)
         if not ok:
             raise RuntimeError("Cannot encode capture")
@@ -391,18 +394,86 @@ class RecordingService:
     def _load_catalog(self) -> dict[str, dict[str, Any]]:
         try:
             data = json.loads(self._manifest.read_text(encoding="utf-8"))
-            items = data.get("items", [])
-            return {
-                item["id"]: item
-                for item in items
-                if isinstance(item, dict)
-                and isinstance(item.get("id"), str)
-                and isinstance(item.get("filename"), str)
-                and Path(item["filename"]).name == item["filename"]
-                and (self.output_dir / item["filename"]).is_file()
-            }
+            if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+                return {}
+            items: dict[str, dict[str, Any]] = {}
+            for raw in data["items"]:
+                item = self._validated_catalog_item(raw)
+                if item is not None:
+                    items[item["id"]] = item
+            return items
         except (OSError, ValueError, TypeError, AttributeError):
             return {}
+
+    def _validated_catalog_item(self, raw: Any) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        item_id, kind = raw.get("id"), raw.get("kind")
+        try:
+            parsed_id = uuid.UUID(hex=item_id) if isinstance(item_id, str) else None
+        except ValueError:
+            return None
+        if parsed_id is None or parsed_id.hex != item_id:
+            return None
+        if kind == "capture":
+            suffix = "jpg"
+        elif kind == "recording" and raw.get("filename") in (
+            f"{item_id}.mp4",
+            f"{item_id}.avi",
+        ):
+            suffix = Path(raw["filename"]).suffix[1:]
+        else:
+            return None
+        filename = f"{item_id}.{suffix}"
+        if raw.get("filename") != filename:
+            return None
+        created_at = raw.get("created_at")
+        if not isinstance(created_at, str):
+            return None
+        try:
+            parsed_date = datetime.fromisoformat(created_at)
+        except ValueError:
+            return None
+        if parsed_date.tzinfo is None:
+            return None
+        size = raw.get("size_bytes")
+        if type(size) is not int or size < 1:
+            return None
+        if kind == "recording":
+            duration = raw.get("duration_seconds")
+            try:
+                finite_duration = math.isfinite(float(duration))
+            except (OverflowError, TypeError, ValueError):
+                finite_duration = False
+            if (
+                isinstance(duration, bool)
+                or not isinstance(duration, (int, float))
+                or not finite_duration
+                or duration < 0
+            ):
+                return None
+        else:
+            duration = None
+        path = self.output_dir / filename
+        try:
+            if path.resolve().parent != self.output_dir.resolve() or not path.is_file():
+                return None
+            actual_size = path.stat().st_size
+        except OSError:
+            return None
+        if actual_size != size:
+            return None
+        item = {
+            "id": item_id,
+            "kind": kind,
+            "filename": filename,
+            "created_at": created_at,
+            "size_bytes": actual_size,
+            "url": f"/api/media/{item_id}",
+        }
+        if duration is not None:
+            item["duration_seconds"] = duration
+        return item
 
     def _save_catalog(self) -> None:
         data = json.dumps({"items": list(self._items.values())}, indent=2).encode("utf-8")

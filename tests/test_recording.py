@@ -1,3 +1,5 @@
+import json
+import threading
 import time
 
 import cv2
@@ -85,7 +87,10 @@ def test_capture_catalog_restart_and_safe_media_lookup(rig):
     wait_for(lambda: manager.get_worker("red").jpeg() is not None)
     capture = service.capture(["red"])
     assert capture["kind"] == "capture"
-    assert service.media_path(capture["id"]).read_bytes().startswith(b"\xff\xd8")
+    raw_bytes = service.media_path(capture["id"]).read_bytes()
+    assert raw_bytes.startswith(b"\xff\xd8")
+    raw_decoded = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
+    assert raw_decoded.shape[:2] == (90, 160)
     tiled = service.capture(["red", "green"])
     encoded = np.frombuffer(service.media_path(tiled["id"]).read_bytes(), np.uint8)
     decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
@@ -154,3 +159,91 @@ def test_writer_open_failure_tries_fallback_and_releases_retention(rig, monkeypa
     assert all(writer.released for writer in writers)
     assert "red" not in manager._recording
     assert service.status()["items"] == []
+
+
+def test_hung_write_does_not_hold_service_lock_or_allow_restart(rig, monkeypatch):
+    manager, service, _ = rig
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingWriter:
+        def __init__(self, *args):
+            self.opened = True
+
+        def isOpened(self):
+            return self.opened
+
+        def write(self, frame):
+            entered.set()
+            release.wait(5)
+
+        def release(self):
+            self.opened = False
+
+    monkeypatch.setattr(recording_module.cv2, "VideoWriter", BlockingWriter)
+    service.start(["red"])
+    assert entered.wait(3)
+    before = time.monotonic()
+    result = service.stop(timeout=0.05)
+    assert time.monotonic() - before < 0.5
+    assert result["state"] == "stopping"
+    assert service.status()["state"] == "stopping"
+    with pytest.raises(RuntimeError, match="already active"):
+        service.start(["red"])
+    with pytest.raises(RuntimeError, match="did not stop"):
+        service.close(timeout=0.05)
+    release.set()
+    assert service.stop(timeout=3)["state"] == "idle"
+    service.close(timeout=3)
+    manager.close()
+
+
+def test_error_state_cannot_restart_before_old_writer_exits(rig, monkeypatch):
+    manager, service, _ = rig
+    releasing = threading.Event()
+    release = threading.Event()
+
+    class FailingWriter:
+        def isOpened(self):
+            return True
+
+        def write(self, frame):
+            raise RuntimeError("synthetic write failure")
+
+        def release(self):
+            releasing.set()
+            release.wait(5)
+
+    monkeypatch.setattr(recording_module.cv2, "VideoWriter", lambda *args: FailingWriter())
+    service.start(["red"])
+    assert releasing.wait(3)
+    assert service.status()["state"] == "error"
+    with pytest.raises(RuntimeError, match="already active"):
+        service.start(["red"])
+    release.set()
+    wait_for(lambda: service.status()["state"] == "error" and not service._thread)
+    service.close(timeout=3)
+    manager.close()
+
+
+def test_capture_requires_at_least_one_fresh_sample(rig):
+    _, service, _ = rig
+    with pytest.raises(RuntimeError, match="No fresh camera frames"):
+        service.capture(["red"])
+    assert service.status()["items"] == []
+
+
+def test_catalog_revalidates_fields_and_rebuilds_media_urls(rig):
+    manager, service, output = rig
+    manager.set_recording("red", True)
+    wait_for(lambda: manager.get_worker("red").jpeg() is not None)
+    item = service.capture(["red"])
+    manifest = output / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["items"][0]["url"] = "https://evil.example/elsewhere"
+    data["items"].append(data["items"][0] | {"id": "../outside", "filename": "../outside.jpg"})
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    restarted = RecordingService(manager, output)
+    assert restarted.status()["items"] == [item]
+    assert restarted.status()["items"][0]["url"] == f"/api/media/{item['id']}"
+    manager.set_recording("red", False)
