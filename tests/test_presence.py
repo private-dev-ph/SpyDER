@@ -105,7 +105,8 @@ def test_idle_policy_releases_then_resumes_only_policy_paused_camera():
 
 def test_autostart_camera_added_while_idle_keeps_intent():
     manager = CameraManager(
-        [], idle_policy=True,
+        [],
+        idle_policy=True,
         capture_factory=Capture,
         pipeline_factory=lambda name: Pipeline(),
         encoder=lambda frame: b"jpeg",
@@ -123,7 +124,8 @@ def test_autostart_camera_added_while_idle_keeps_intent():
 
 def test_recording_retention_survives_idle_policy():
     manager = CameraManager(
-        [CameraConfig("record", 0)], idle_policy=True,
+        [CameraConfig("record", 0)],
+        idle_policy=True,
         capture_factory=Capture,
         pipeline_factory=lambda name: Pipeline(),
         encoder=lambda frame: b"jpeg",
@@ -236,10 +238,16 @@ def test_presence_endpoint_validates_and_obeys_control_guards(tmp_path):
     url = f"http://127.0.0.1:{server.server_port}"
 
     def post(data, headers=None):
-        return urlopen(Request(
-            url + "/api/presence", method="POST", data=json.dumps(data).encode(),
-            headers={"Content-Type": "application/json", "X-Spyder-Control": "1"} | (headers or {}),
-        ), timeout=2)
+        return urlopen(
+            Request(
+                url + "/api/presence",
+                method="POST",
+                data=json.dumps(data).encode(),
+                headers={"Content-Type": "application/json", "X-Spyder-Control": "1"}
+                | (headers or {}),
+            ),
+            timeout=2,
+        )
 
     try:
         body = {"client_id": "tab-123", "active": True, "release_when_idle": True}

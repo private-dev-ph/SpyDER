@@ -15,6 +15,11 @@ engine contract, built-in OpenCV person detection, and optional YOLO/InsightFace
 adapters. Models load from local files; inference failures leave preview running.
 Use `spyder-cctv vision-info` to inspect installed CV dependencies.
 
+The [UI audit and release guide](docs/ui-audit.md) covers the emblem, SVG controls,
+themed scrollbars/sliders, and focus-based camera lifecycle. The GUI releases idle
+cameras when all views are away, with retention hooks for future recording.
+Use `serve` for continuous headless monitoring.
+
 ## Development environment
 
 ```powershell

@@ -530,10 +530,11 @@ class CameraManager:
         if failed:
             raise RuntimeError(f"Camera shutdown timed out: {', '.join(failed)}")
 
-    def set_presence(self, client_id: str, active: bool, release_when_idle: bool) -> None:
+    def set_presence(self, client_id: str, active: bool, release_when_idle: bool) -> bool:
         if not self._idle_policy:
-            return
+            return False
         self._leases.heartbeat(client_id, active, release_when_idle)
+        return True
 
     def set_recording(self, camera_id: str, active: bool) -> None:
         """Retain one camera for future recording integrations."""

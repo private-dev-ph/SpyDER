@@ -40,6 +40,4 @@ class PresenceLeases:
             return False
 
     def _expire(self, now: float) -> None:
-        self._leases = {
-            key: lease for key, lease in self._leases.items() if lease[0] > now
-        }
+        self._leases = {key: lease for key, lease in self._leases.items() if lease[0] > now}

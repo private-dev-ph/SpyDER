@@ -124,6 +124,7 @@
       slider.id = "control-" + name;
       slider.setAttribute("aria-label", labelText);
       slider.value = draft[name] ?? capability.value ?? 0;
+      slider.style.setProperty("--range-progress", slider.value + "%");
       output.htmlFor = slider.id;
       output.textContent =
         capability.supported || name in draft
@@ -140,6 +141,7 @@
         availability();
       });
       slider.addEventListener("input", () => {
+        slider.style.setProperty("--range-progress", slider.value + "%");
         draft[name] = Number(slider.value);
         output.textContent = percent(slider.value);
         dirty = true;
@@ -311,6 +313,10 @@
         typeof snapshot.capabilities[name].default_percent === "number"
       ) {
         row.slider.value = snapshot.capabilities[name].default_percent;
+        row.slider.style.setProperty(
+          "--range-progress",
+          row.slider.value + "%",
+        );
         row.output.textContent = percent(row.slider.value);
         if (row.include.checked) draft[name] = Number(row.slider.value);
       }
