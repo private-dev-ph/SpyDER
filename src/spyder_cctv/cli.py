@@ -58,8 +58,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not 0 <= args.port <= 65535:
             raise ValueError("port must be between 0 and 65535")
-        manager = CameraManager(cameras, config_path=args.config, profiles=config.profiles)
-        server = create_server(manager, args.port)
+        manager = CameraManager(
+            cameras,
+            config_path=args.config,
+            profiles=config.profiles,
+            idle_policy=args.command == "gui",
+        )
+        try:
+            server = create_server(manager, args.port)
+        except OSError:
+            manager.close()
+            raise
         try:
             manager.start_configured()
             print(f"Dashboard: http://127.0.0.1:{server.server_port}", flush=True)

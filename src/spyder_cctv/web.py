@@ -95,6 +95,18 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     if asset.endswith(".js")
                     else "text/css; charset=utf-8",
                 )
+            elif path in ("/icons.svg", "/spyder-emblem.png", "/activity.js"):
+                asset = path.removeprefix("/")
+                content_type = {
+                    ".svg": "image/svg+xml",
+                    ".png": "image/png",
+                    ".js": "text/javascript; charset=utf-8",
+                }[asset[asset.rfind("."):]]
+                self.send(
+                    200,
+                    files("spyder_cctv").joinpath("assets", asset).read_bytes(),
+                    content_type,
+                )
             elif path == "/api/cameras":
                 self.json(200, manager.statuses())
             elif path == "/api/profiles":
@@ -141,6 +153,23 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     except TypeError as error:
                         raise ValueError("Camera contains missing or unknown fields") from error
                     self.json(201, manager.add(camera))
+                elif parts == ["api", "presence"]:
+                    data = self.body()
+                    if set(data) != {"client_id", "active", "release_when_idle"}:
+                        raise ValueError("Invalid presence fields")
+                    client_id = data["client_id"]
+                    if (
+                        not isinstance(client_id, str)
+                        or not 1 <= len(client_id) <= 128
+                        or any(not (char.isalnum() or char in "-_") for char in client_id)
+                        or type(data["active"]) is not bool
+                        or type(data["release_when_idle"]) is not bool
+                    ):
+                        raise ValueError("Invalid presence fields")
+                    manager.set_presence(
+                        client_id, data["active"], data["release_when_idle"]
+                    )
+                    self.json(200, {"accepted": True})
                 elif parts == ["api", "profiles"]:
                     data = self.body()
                     data.setdefault("id", "profile-" + uuid4().hex[:12])
