@@ -9,6 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from platformdirs import user_data_path
+
 from spyder_cctv.capture import Capture, OpenCVCapture, encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile, save_config
 from spyder_cctv.controls import unavailable_controls, validate_settings
@@ -261,6 +263,7 @@ class CameraManager:
         config_path: Path | None = None,
         profiles: list[SettingsProfile] | None = None,
         idle_policy: bool = False,
+        media_dir: Path | None = None,
         **worker_options: Any,
     ) -> None:
         cameras = [
@@ -293,6 +296,13 @@ class CameraManager:
         self._mutations = threading.Lock()
         self._closed = False
         self._config_path = config_path
+        self.media_dir = (
+            media_dir
+            or (
+                (config_path.parent if config_path else user_data_path("SpyDER", appauthor=False))
+                / "media"
+            )
+        ).resolve()
         self._worker_options = worker_options
         self._idle_policy = idle_policy
         self._leases = PresenceLeases()
@@ -477,6 +487,8 @@ class CameraManager:
                 else:
                     worker.start()
             elif action == "stop":
+                if camera_id in self._recording:
+                    raise RuntimeError("Remove this camera from recording before pausing it")
                 self._intent.discard(camera_id)
                 self._policy_paused.discard(camera_id)
                 worker.stop()
@@ -502,6 +514,7 @@ class CameraManager:
             for worker in self.workers.values():
                 status = worker.status()
                 status["idle_suspended"] = worker.config.id in self._policy_paused
+                status["recording"] = worker.config.id in self._recording
                 profile = self._profiles.get(status["profile_id"])
                 status["profile_name"] = profile.name if profile else None
                 result.append(status)
@@ -537,7 +550,7 @@ class CameraManager:
         return True
 
     def set_recording(self, camera_id: str, active: bool) -> None:
-        """Retain one camera for future recording integrations."""
+        """Retain one camera while a local recording uses its frames."""
         if type(active) is not bool:
             raise ValueError("Recording state must be boolean")
         with self._mutations:

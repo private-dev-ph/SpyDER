@@ -37,11 +37,11 @@ tracks, pause local video, clear preview/motion buffers, and resume policy-pause
 feeds on return. Local file playback resumes from its previous position. Presence
 requests stay in the browser adapter; Cloudflare receives no camera heartbeat.
 
-Recording is not implemented. `CameraManager.set_recording(camera_id, active)`
-and showcase `setRecording` are future-recorder integration hooks. Retained recording
-cameras are exempt from idle suspension independently of other cameras. These
-hooks do not start a recorder or claim footage is saved. Leaving the showcase
-page still releases its browser-owned tracks.
+`CameraManager.set_recording(camera_id, active)` and showcase `setRecording`
+retain cameras used by the tiled recorder. Recorded cameras are exempt from idle
+suspension independently of other cameras. Native recording continues while the
+browser is away. The showcase finalizes recording when hidden and releases its
+tracks when the page is left. See [recording behavior](recording.md).
 
 Native camera/ML calls can block. Suspension retries failures instead of creating
 another owner; process isolation remains future work.
@@ -61,3 +61,18 @@ reachable in normal view, focused-camera controls were reachable, and no horizon
 overflow occurred. An End-key check at 1600x320 reached the last camera. Browser
 zoom was 80%, so these are measured CSS sizes rather than emulator dimensions.
 These checks cover Chromium; other browser engines remain unverified.
+
+## Workspace and media navigation
+
+The sidebar links to Control Room, Vision Lab, Camera Setup, Recordings, Events,
+Layouts, and System. A workspace selector provides the same destinations on
+small screens. Hash navigation supports browser Back/Forward without restarting
+camera or recorder state. Page titles and focus identify the active workspace.
+Shorter desktops hide the decorative sidebar note to make room for navigation.
+
+Recording controls appear on camera cards and in the Recordings workspace.
+The top bar shows elapsed recording time. Selected feeds resize within a preview;
+checkbox changes apply to the current video. Pause controls protect recorded
+cameras. Capture uses a separate browser canvas so it cannot alter a recording.
+Library links download finalized files only. Planned workspaces describe their
+scope without offering controls that pretend unfinished features already work.

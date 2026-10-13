@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="SpyDER local camera monitoring")
     parser.add_argument("--version", action="version", version=version("spyder-cctv"))
     parser.add_argument("--config", type=Path, default=default_config_path())
+    parser.add_argument("--media-dir", type=Path, help="Local folder for recordings and captures")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("init", help="Create a safe example configuration; never overwrite")
     commands.add_parser("check", help="Validate configuration without opening cameras")
@@ -63,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             config_path=args.config,
             profiles=config.profiles,
             idle_policy=args.command == "gui",
+            media_dir=args.media_dir,
         )
         try:
             server = create_server(manager, args.port)
@@ -80,8 +82,10 @@ def main(argv: list[str] | None = None) -> int:
             except KeyboardInterrupt:
                 pass
         finally:
-            server.server_close()
-            manager.close()
+            try:
+                server.server_close()
+            finally:
+                manager.close()
         return 0
     except (OSError, ValueError, RuntimeError) as error:
         logging.error("%s", error)

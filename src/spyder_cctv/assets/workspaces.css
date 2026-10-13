@@ -1,0 +1,243 @@
+.workspace-link,
+.rail-current {
+  color: var(--ink);
+  text-decoration: none;
+}
+#workspace-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.workspace-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.workspace-link:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+.rail-current {
+  font-size: 12px;
+}
+.rail-note {
+  margin-top: 28px;
+}
+.mobile-workspace {
+  display: none;
+}
+.workspace-badge {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+#workspace-title:focus {
+  outline: none;
+}
+.workspace-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 22px;
+  box-shadow: var(--shadow);
+}
+.workspace-description {
+  color: var(--muted);
+  line-height: 1.7;
+  max-width: 850px;
+}
+.recording-heading,
+.device-item,
+.media-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.recording-actions,
+.layout-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+.recording-preview {
+  background: #111313;
+  color: var(--gold);
+  display: grid;
+  grid-auto-rows: minmax(0, 1fr);
+  grid-template-columns: repeat(var(--preview-columns, 1), minmax(0, 1fr));
+  aspect-ratio: 16/9;
+  max-height: 360px;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  align-items: stretch;
+}
+.recording-preview > div {
+  position: relative;
+  min-height: 0;
+  background: #242020;
+  overflow: hidden;
+}
+.recording-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.recording-preview span {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 7px 10px;
+  background: #000a;
+  color: white;
+  font-size: 10px;
+}
+#recording-cameras {
+  border: 0;
+  padding: 0;
+  margin: 20px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+}
+#recording-cameras legend {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 0 12px;
+}
+#recording-cameras label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  cursor: pointer;
+}
+#recording-cameras input {
+  accent-color: var(--accent);
+  width: 17px;
+  height: 17px;
+}
+.device-item,
+.media-item {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+.device-item:last-child,
+.media-item:last-child {
+  border-bottom: 0;
+}
+.device-item p,
+.media-item p {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 7px 0 0;
+  line-height: 1.5;
+}
+.media-item > div {
+  flex: 1;
+  min-width: 0;
+}
+.media-item a {
+  text-decoration: none;
+}
+.system-details {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  margin-top: 18px;
+}
+.foundation-panel p {
+  color: var(--muted);
+  line-height: 1.8;
+}
+.recording-indicator[data-recording="true"],
+#recording-state[data-recording="true"] {
+  color: var(--danger);
+  font-weight: 700;
+}
+.record-camera[aria-pressed="true"] {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.camera-card[data-recording="true"] {
+  border-color: var(--accent);
+}
+.workspace-message {
+  margin: 0 0 18px;
+}
+@media (max-height: 900px) {
+  .rail-note {
+    display: none;
+  }
+}
+@media (max-width: 1100px) {
+  #clock {
+    display: none;
+  }
+  .top-actions {
+    gap: 10px;
+  }
+}
+@media (max-width: 800px) {
+  .mobile-workspace {
+    display: block;
+    font-size: 0;
+  }
+  .mobile-workspace select {
+    font-size: 11px;
+    width: 140px;
+    padding: 8px;
+    margin: 0;
+  }
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 70px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    gap: 10px;
+  }
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+  }
+  .brand {
+    font-size: 20px;
+  }
+  .recording-indicator {
+    padding: 8px;
+    font-size: 10px;
+  }
+  .workspace-panel {
+    padding: 18px;
+  }
+  .recording-heading {
+    flex-wrap: wrap;
+  }
+  .device-item,
+  .media-item {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 500px) {
+  .top-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .workspace-badge {
+    display: none;
+  }
+  .recording-preview {
+    min-height: 140px;
+  }
+}

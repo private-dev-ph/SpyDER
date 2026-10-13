@@ -17,7 +17,7 @@ Use `spyder-cctv vision-info` to inspect installed CV dependencies.
 
 The [UI audit and release guide](docs/ui-audit.md) covers the emblem, SVG controls,
 themed scrollbars/sliders, and focus-based camera lifecycle. The GUI releases idle
-cameras when all views are away, with retention hooks for future recording.
+cameras when all views are away, while retaining cameras used by active recordings.
 Use `serve` for continuous headless monitoring.
 
 ## Development environment
@@ -141,8 +141,23 @@ and credentials are excluded from API status. Treat your configuration file as p
 - OpenCV capture adapter and replaceable capture/pipeline/encoder interfaces.
 - Validated user configuration and bundled dashboard assets that work from a wheel.
 - No camera access during import, `init`, or `check`.
+- Control Room plus Vision Lab, Camera Setup, Recordings, Events, Layouts and System workspaces.
+- One dynamically tiled local recording, per-camera inclusion controls, and single/tiled frame captures.
+- A persistent local media library with downloads; browser-only recording in the static showcase.
 
-This is an application skeleton, not a production surveillance service. Recording, camera discovery,
+Recording uses a fixed 1920 × 1080 canvas at 15 fps. Tiles resize as selected cameras join or leave;
+the session remains one video. Start or end an individual camera's recording from its card,
+or select cameras in **Recordings**. **Capture** saves a frame; **Capture selected feeds** saves
+a tiled image. Stop recording to finalize and download the file. Footage contains no audio.
+The local media folder is beside the configuration, under `media`; override it with
+`spyder-cctv --media-dir "D:\SpyDER Media" gui`. Recording cameras remain active while the browser
+is away. See [recording behavior and formats](docs/recording.md).
+
+The additional workspaces provide foundations for model tuning, event history, named layouts,
+and resource graphs. Camera Setup opens existing hardware controls and profiles; System shows
+actual local storage details. These foundations do not imply those planned features are active.
+
+This is a local application, not a production surveillance service. Camera discovery,
 network-camera ONVIF/PTZ protocols, vendor-specific FOV controls, object detection models,
 automatic reconnect, and remote access remain future work.
 Motion is a simple changed-pixel fraction, not an alarm or object classifier. Preview polling adapts

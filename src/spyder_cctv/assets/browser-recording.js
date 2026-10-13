@@ -35,15 +35,22 @@
   let currentIds = [];
   let stopPromise = null;
   let requestQueue = Promise.resolve();
+  let generation = 0;
 
   function snapshot() {
-    return { ...state, camera_ids: [...state.camera_ids], items: [...state.items] };
+    return {
+      ...state,
+      camera_ids: [...state.camera_ids],
+      items: state.items.map((item) => ({ ...item })),
+    };
   }
   function safeName(value) {
-    return String(value || "showcase")
-      .replace(/[^a-z0-9_-]+/gi, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "showcase";
+    return (
+      String(value || "showcase")
+        .replace(/[^a-z0-9_-]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 48) || "showcase"
+    );
   }
   function filename(kind, extension) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -60,11 +67,12 @@
     };
     if (duration !== undefined) item.duration_seconds = duration;
     state.items.push(item);
-    state.items.sort((a, b) =>
-      a.created_at.localeCompare(b.created_at) ||
-      (a.kind === "recording" ? -1 : b.kind === "recording" ? 1 : 0),
+    state.items.sort(
+      (a, b) =>
+        a.created_at.localeCompare(b.created_at) ||
+        (a.kind === "recording" ? -1 : b.kind === "recording" ? 1 : 0),
     );
-    return item;
+    return { ...item };
   }
   function storedBytes() {
     return state.items.reduce((sum, item) => sum + item.size_bytes, 0);
@@ -88,7 +96,9 @@
       await Promise.all(added.map(release));
       throw error;
     }
-    await Promise.all([...retained].filter((id) => !wanted.has(id)).map(release));
+    await Promise.all(
+      [...retained].filter((id) => !wanted.has(id)).map(release),
+    );
   }
   function placeholder(targetCtx, label, x, y, w, h) {
     targetCtx.fillStyle = "#171b23";
@@ -114,7 +124,16 @@
     const dh = sh * scale;
     ctx2d.drawImage(source, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
   }
-  async function drawFrame(ids, target = canvas, { countFrame = false, fresh = false, overlays = true } = {}) {
+  async function drawFrame(
+    ids,
+    target = canvas,
+    {
+      countFrame = false,
+      fresh = false,
+      overlays = true,
+      epoch = generation,
+    } = {},
+  ) {
     const targetCtx = target.getContext("2d");
     const width = target.width;
     const height = target.height;
@@ -128,35 +147,51 @@
     const cellW = width / cols;
     const cellH = height / rows;
     const failures = [];
-    await Promise.all(ids.map(async (id, index) => {
-      const x = (index % cols) * cellW;
-      const y = Math.floor(index / cols) * cellH;
-      try {
-        const source = await showcase.getFrameSource(id);
-        if (fresh && source.width === 0 && source.height === 0)
-          throw new Error("No fresh camera frame.");
-        fit(targetCtx, source, x, y, cellW, cellH);
-        if (overlays && ids.length > 1) {
-          targetCtx.fillStyle = "rgba(0,0,0,.65)";
-          targetCtx.fillRect(x, y + cellH - 52, cellW, 52);
-          targetCtx.fillStyle = "white";
-          targetCtx.font = "24px sans-serif";
-          targetCtx.fillText(safeName(id), x + 18, y + cellH - 18);
+    await Promise.all(
+      ids.map(async (id, index) => {
+        const x = (index % cols) * cellW;
+        const y = Math.floor(index / cols) * cellH;
+        try {
+          const source = await showcase.getFrameSource(id);
+          if (target === canvas && epoch !== generation) return;
+          if (fresh && source.width === 0 && source.height === 0)
+            throw new Error("No fresh camera frame.");
+          fit(targetCtx, source, x, y, cellW, cellH);
+          if (overlays && ids.length > 1) {
+            targetCtx.fillStyle = "rgba(0,0,0,.65)";
+            targetCtx.fillRect(x, y + cellH - 52, cellW, 52);
+            targetCtx.fillStyle = "white";
+            targetCtx.font = "24px sans-serif";
+            targetCtx.fillText(safeName(id), x + 18, y + cellH - 18);
+          }
+        } catch (error) {
+          if (target === canvas && epoch !== generation) return;
+          if (fresh) failures.push(error);
+          else
+            placeholder(
+              targetCtx,
+              `${safeName(id)} · offline`,
+              x,
+              y,
+              cellW,
+              cellH,
+            );
         }
-      } catch (error) {
-        if (fresh) failures.push(error);
-        else placeholder(targetCtx, `${safeName(id)} · offline`, x, y, cellW, cellH);
-      }
-    }));
+      }),
+    );
     if (failures.length) throw failures[0];
-    if (countFrame) state.frames++;
+    if (countFrame && epoch === generation) state.frames++;
   }
   async function tick() {
     if (pendingFrame || state.state !== "recording") return;
     pendingFrame = true;
+    const epoch = generation;
     try {
-      const all = await showcase.fetch("/api/cameras").then((response) => response.json());
+      const all = await showcase
+        .fetch("/api/cameras")
+        .then((response) => response.json());
       const present = new Set(all.map((camera) => camera.id));
+      if (epoch !== generation || state.state !== "recording") return;
       const next = currentIds.filter((id) => present.has(id));
       if (next.length !== currentIds.length) {
         currentIds = next;
@@ -167,10 +202,12 @@
           return;
         }
       }
-      await drawFrame(currentIds, canvas, { countFrame: true });
+      await drawFrame(currentIds, canvas, { countFrame: true, epoch });
+      if (epoch !== generation) return;
       state.elapsed_seconds = Math.max(0, (Date.now() - startedAt) / 1000);
     } catch (error) {
-      state.error = error.message || "Frame rendering failed.";
+      if (epoch === generation)
+        state.error = error.message || "Frame rendering failed.";
     } finally {
       pendingFrame = false;
     }
@@ -186,17 +223,25 @@
     return choices.find((type) => Recorder.isTypeSupported?.(type)) || "";
   }
   function stopRecording(reason = null) {
+    if (reason) stopReason = reason;
     if (stopPromise) return stopPromise;
-    if (state.state === "idle" || state.state === "error") return Promise.resolve(snapshot());
+    if (state.state === "stopping") return Promise.resolve(snapshot());
+    if (state.state === "idle" || state.state === "error")
+      return Promise.resolve(snapshot());
     state.state = "stopping";
-    stopReason = reason;
+    generation++;
+    if (!reason) stopReason = null;
     clearInterval(timer);
     timer = null;
     stopPromise = (async () => {
       await new Promise((resolve) => {
         if (!recorder || recorder.state === "inactive") return resolve();
         recorder.addEventListener("stop", resolve, { once: true });
-        try { recorder.stop(); } catch { resolve(); }
+        try {
+          recorder.stop();
+        } catch {
+          resolve();
+        }
       });
       await Promise.all([...retained].map(release));
       stream?.getTracks().forEach((track) => track.stop());
@@ -206,28 +251,47 @@
         const blob = new Blob(chunks, { type });
         const extension = type.includes("mp4") ? "mp4" : "webm";
         const duration = Math.max(0, (Date.now() - startedAt) / 1000);
-        makeItem(blob, "recording", filename("recording", extension), duration, new Date(startedAt));
+        makeItem(
+          blob,
+          "recording",
+          filename("recording", extension),
+          duration,
+          new Date(startedAt),
+        );
       }
       chunks = [];
       chunkBytes = 0;
       recorder = null;
-      state.elapsed_seconds = startedAt ? Math.max(0, (Date.now() - startedAt) / 1000) : 0;
+      state.elapsed_seconds = startedAt
+        ? Math.max(0, (Date.now() - startedAt) / 1000)
+        : 0;
       state.state = stopReason ? "error" : "idle";
       state.error = stopReason;
       state.camera_ids = [];
       currentIds = [];
       return snapshot();
-    })().finally(() => { stopPromise = null; });
+    })().finally(() => {
+      stopPromise = null;
+    });
     return stopPromise;
   }
   function dataAvailable(event) {
     if (!event.data?.size) return;
     if (storedBytes() + chunkBytes + event.data.size > MAX_BYTES) {
-      stopRecording("128 MiB local buffer reached. Final chunk was discarded; saved recording may be incomplete.");
+      stopRecording(
+        "128 MiB local buffer reached. Final chunk was discarded; saved recording may be incomplete.",
+      );
       return;
     }
     chunks.push(event.data);
     chunkBytes += event.data.size;
+    if (
+      state.state === "recording" &&
+      storedBytes() + chunkBytes >= MAX_BYTES - 8 * 1024 * 1024
+    )
+      stopRecording(
+        "Recording saved at the local memory limit. Download files and reload to continue.",
+      );
   }
   async function startRecording(ids) {
     if (state.state === "recording" || state.state === "stopping") {
@@ -235,7 +299,8 @@
     }
     if (storedBytes() >= MAX_BYTES) {
       state.state = "error";
-      state.error = "Local media buffer reached 128 MiB. Download items and reload the showcase to record again.";
+      state.error =
+        "Local media buffer reached 128 MiB. Download items and reload the showcase to record again.";
       throw new Error(state.error);
     }
     state.error = null;
@@ -249,7 +314,9 @@
       state.error = "This browser cannot record a canvas stream.";
       throw new Error(state.error);
     }
-    const all = await showcase.fetch("/api/cameras").then((response) => response.json());
+    const all = await showcase
+      .fetch("/api/cameras")
+      .then((response) => response.json());
     const available = new Set(all.map((camera) => camera.id));
     const selected = [...new Set(ids || [])].filter((id) => available.has(id));
     if (!selected.length) {
@@ -264,21 +331,29 @@
     chunks = [];
     chunkBytes = 0;
     startedAt = Date.now();
+    generation++;
     currentIds = selected;
     state.camera_ids = [...selected];
     try {
       await retain(selected);
+      if (document.hidden)
+        throw new Error("Showcase must stay visible while recording.");
       await drawFrame(selected);
+      if (document.hidden)
+        throw new Error("Showcase must stay visible while recording.");
       stream = canvas.captureStream(FPS);
       const type = mimeType();
       const Recorder = window.MediaRecorder;
-      recorder = type ? new Recorder(stream, { mimeType: type }) : new Recorder(stream);
+      recorder = type
+        ? new Recorder(stream, { mimeType: type })
+        : new Recorder(stream);
       recorder.addEventListener("dataavailable", dataAvailable);
       recorder.addEventListener("error", (event) => {
         stopRecording(event.error?.message || "Browser recording failed.");
       });
       recorder.addEventListener("stop", () => {
-        if (state.state !== "stopping") stopRecording("Recording stopped unexpectedly.");
+        if (state.state !== "stopping")
+          stopRecording("Recording stopped unexpectedly.");
       });
       recorder.start(1000);
       state.state = "recording";
@@ -297,8 +372,11 @@
     }
   }
   async function setCameras(ids) {
-    if (state.state === "stopping") throw new Error("Recording is stopping. Try again shortly.");
-    const all = await showcase.fetch("/api/cameras").then((response) => response.json());
+    if (state.state === "stopping")
+      throw new Error("Recording is stopping. Try again shortly.");
+    const all = await showcase
+      .fetch("/api/cameras")
+      .then((response) => response.json());
     const available = new Set(all.map((camera) => camera.id));
     const selected = [...new Set(ids || [])].filter((id) => available.has(id));
     if (state.state === "recording") {
@@ -310,41 +388,72 @@
     return snapshot();
   }
   async function capture(ids) {
-    if (state.state === "stopping") throw new Error("Recording is stopping. Try capture again shortly.");
+    if (state.state === "stopping")
+      throw new Error("Recording is stopping. Try capture again shortly.");
     if (storedBytes() >= MAX_BYTES)
-      throw new Error("Local media buffer reached 128 MiB. Download items and reload the showcase to capture again.");
-    const all = await showcase.fetch("/api/cameras").then((response) => response.json());
+      throw new Error(
+        "Local media buffer reached 128 MiB. Download items and reload the showcase to capture again.",
+      );
+    const all = await showcase
+      .fetch("/api/cameras")
+      .then((response) => response.json());
     const available = new Set(all.map((camera) => camera.id));
     const selected = [...new Set(ids || [])].filter((id) => available.has(id));
     if (!selected.length) throw new Error("Select at least one camera.");
-    const sources = await Promise.all(selected.map((id) => showcase.getFrameSource(id)));
-    const captureWidth = selected.length === 1 ? sources[0].width || sources[0].videoWidth : WIDTH;
-    const captureHeight = selected.length === 1 ? sources[0].height || sources[0].videoHeight : HEIGHT;
-    if (!captureWidth || !captureHeight) throw new Error("No fresh camera frame.");
-    if (storedBytes() + captureWidth * captureHeight * 4 > MAX_BYTES)
-      throw new Error("Local media buffer has insufficient space for this capture.");
+    const sources = await Promise.all(
+      selected.map((id) => showcase.getFrameSource(id)),
+    );
+    const captureWidth =
+      selected.length === 1 ? sources[0].width || sources[0].videoWidth : WIDTH;
+    const captureHeight =
+      selected.length === 1
+        ? sources[0].height || sources[0].videoHeight
+        : HEIGHT;
+    if (!captureWidth || !captureHeight)
+      throw new Error("No fresh camera frame.");
+    if (
+      storedBytes() + chunkBytes + captureWidth * captureHeight * 4 >
+      MAX_BYTES
+    )
+      throw new Error(
+        "Local media buffer has insufficient space for this capture.",
+      );
     captureCanvas.width = captureWidth;
     captureCanvas.height = captureHeight;
-    await drawFrame(selected, captureCanvas, { fresh: true, overlays: selected.length > 1 });
-    const blob = await new Promise((resolve, reject) => captureCanvas.toBlob(
-      (image) => image ? resolve(image) : reject(new Error("JPEG capture failed.")),
-      "image/jpeg",
-      0.9,
-    ));
-    if (storedBytes() + blob.size > MAX_BYTES)
-      throw new Error("Local media buffer reached 128 MiB. Download items and reload the showcase to capture again.");
+    await drawFrame(selected, captureCanvas, {
+      fresh: true,
+      overlays: selected.length > 1,
+    });
+    const blob = await new Promise((resolve, reject) =>
+      captureCanvas.toBlob(
+        (image) =>
+          image ? resolve(image) : reject(new Error("JPEG capture failed.")),
+        "image/jpeg",
+        0.9,
+      ),
+    );
+    if (storedBytes() + chunkBytes + blob.size > MAX_BYTES)
+      throw new Error(
+        "Local media buffer reached 128 MiB. Download items and reload the showcase to capture again.",
+      );
     return makeItem(blob, "capture", filename("capture", "jpg"));
   }
   async function dispatch(path, data = {}) {
-    if (path === "/api/recordings/start") return startRecording(data.camera_ids);
+    if (path === "/api/recordings/start")
+      return startRecording(data.camera_ids);
     if (path === "/api/recordings/cameras") return setCameras(data.camera_ids);
     if (path === "/api/recordings/stop") return stopRecording();
     if (path === "/api/captures") return capture(data.camera_ids);
     throw new Error("Unknown browser media route.");
   }
   function request(path, data = {}) {
-    if (path === "/api/recordings/start" && (state.state === "recording" || state.state === "stopping"))
-      return Promise.reject(new Error("A recording is already active or stopping."));
+    if (
+      path === "/api/recordings/start" &&
+      (state.state === "recording" || state.state === "stopping")
+    )
+      return Promise.reject(
+        new Error("A recording is already active or stopping."),
+      );
     const result = requestQueue.then(() => dispatch(path, data));
     requestQueue = result.catch(() => {});
     return result;

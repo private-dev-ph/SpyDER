@@ -6,6 +6,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+import cv2
 import numpy as np
 import pytest
 
@@ -51,6 +52,8 @@ def test_dashboard_assets_and_status(server):
         ("/activity.js", "text/javascript"),
         ("/icons.svg", "image/svg+xml"),
         ("/spyder-emblem.png", "image/png"),
+        ("/workspaces.js", "text/javascript"),
+        ("/workspaces.css", "text/css"),
     ]:
         with urlopen(url + path, timeout=2) as response:
             assert response.status == 200
@@ -125,6 +128,97 @@ def test_add_remove_camera_routes(server):
     ) as response:
         assert response.status == 200
     assert len(manager.statuses()) == 1
+
+
+def test_record_capture_and_download_routes(server, tmp_path):
+    url, manager = server
+
+    def post(path, data):
+        with urlopen(
+            Request(
+                url + path,
+                method="POST",
+                data=json.dumps(data).encode(),
+                headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+            ),
+            timeout=8,
+        ) as response:
+            return json.load(response)
+
+    result = post("/api/recordings/start", {"camera_ids": ["front"]})
+    assert result["state"] == "recording"
+    assert manager.statuses()[0]["recording"] is True
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        with urlopen(url + "/api/recordings", timeout=2) as response:
+            if json.load(response)["frames"] >= 2:
+                break
+        time.sleep(0.01)
+    else:
+        pytest.fail("Recorder did not write frames")
+    with pytest.raises(HTTPError) as error:
+        post("/api/cameras/front/stop", {})
+    assert error.value.code == 409
+    capture = post("/api/captures", {"camera_ids": ["front"]})
+    assert capture["kind"] == "capture"
+    with urlopen(url + capture["url"], timeout=2) as response:
+        assert "attachment" in response.headers["Content-Disposition"]
+        assert cv2.imdecode(np.frombuffer(response.read(), np.uint8), cv2.IMREAD_COLOR).shape[
+            :2
+        ] == (32, 32)
+    result = post("/api/recordings/stop", {})
+    assert result["state"] == "idle"
+    assert manager.statuses()[0]["recording"] is False
+    video = next(item for item in result["items"] if item["kind"] == "recording")
+    with urlopen(url + video["url"], timeout=2) as response:
+        video_path = tmp_path / video["filename"]
+        video_path.write_bytes(response.read())
+    reader = cv2.VideoCapture(str(video_path))
+    try:
+        ok, frame = reader.read()
+        assert ok and frame.shape[:2] == (1080, 1920)
+    finally:
+        reader.release()
+
+
+@pytest.mark.parametrize(
+    "path,data,code",
+    [
+        ("/api/recordings/start", {"camera_ids": []}, 400),
+        ("/api/recordings/start", {"camera_ids": ["missing"]}, 404),
+        ("/api/recordings/start", {"camera_ids": "front"}, 400),
+        ("/api/captures", {"camera_ids": ["front"]}, 409),
+        ("/api/recordings/stop", {"extra": True}, 400),
+    ],
+)
+def test_media_invalid_requests(server, path, data, code):
+    url, _ = server
+    with pytest.raises(HTTPError) as error:
+        urlopen(
+            Request(
+                url + path,
+                method="POST",
+                data=json.dumps(data).encode(),
+                headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+            ),
+            timeout=3,
+        )
+    assert error.value.code == code
+
+
+def test_media_rejects_arbitrary_paths_and_cross_origin(server):
+    url, _ = server
+    for path in ["/api/media/../../config.json", "/api/media/manifest.json", "/api/media/unknown"]:
+        with pytest.raises(HTTPError) as error:
+            urlopen(url + path, timeout=2)
+        assert error.value.code == 404
+    with pytest.raises(HTTPError) as error:
+        urlopen(
+            Request(url + "/api/recordings", headers={"Origin": "https://evil.example"}), timeout=2
+        )
+    assert error.value.code == 403
+    with urlopen(url + "/api/system", timeout=2) as response:
+        assert json.load(response)["free_bytes"] > 0
 
 
 @pytest.mark.parametrize(

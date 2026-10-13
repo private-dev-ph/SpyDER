@@ -138,6 +138,26 @@ whether constraints applied. Pause/removal/page exit releases owned tracks.
 The static CSP forbids network connections. Cloudflare serves assets only;
 there are no server functions or storage bindings. See [hosting guide](cloudflare.md).
 
+## Recording and frame captures
+
+`recording.py` owns one writer thread per active composite session. It samples
+fresh JPEGs from existing camera workers; it never opens another device backend.
+Frames are letterboxed into a fixed 1080p grid whose dimensions respond to selected
+camera count. Recording membership retains capture across GUI idle transitions.
+The writer performs native I/O outside its state lock so status and stop timeouts
+remain responsive. Close finalizes recording before camera-manager shutdown.
+
+Finalized videos and captures live in the user media directory, never package
+resources or the current working directory. A validated, atomic local manifest
+indexes opaque media IDs. The HTTP adapter streams cataloged downloads in bounded
+chunks with the existing loopback and Origin protections. See [recording](recording.md).
+
+`browser-recording.js` provides the same recording/capture contract in the static
+showcase using Canvas and MediaRecorder. It uses a separate capture canvas,
+serialized mutations, recording-retention rollback, and a bounded Blob library.
+`workspaces.js` uses the Python API locally and the browser media adapter in the
+showcase. Both use packaged assets and keep media on the user's computer.
+
 ## Local backend limitations and growth
 
 OpenCV's [VideoCapture API](https://docs.opencv.org/4.x/d8/dfe/classcv_1_1VideoCapture.html)
@@ -146,8 +166,8 @@ threads cannot terminate these calls safely; a subprocess boundary is the next s
 streams and stronger recovery. No automatic reconnection policy is implemented.
 
 The HTTP server is a small local adapter for this skeleton. Remote deployment requires an
-authenticated production server and a separate authorization model. Recording needs a bounded
-sink interface and retention policy. Network-camera ONVIF/PTZ and vendor-specific FOV need
+authenticated production server and a separate authorization model. Automatic media retention
+and process isolation for native encoders remain future work. Network-camera ONVIF/PTZ and vendor-specific FOV need
 additional device-control adapters; retain worker ownership. Package future model assets in the
 application or acquire them into user data
 directories; never assume a source-tree `models/` folder exists after installation.
