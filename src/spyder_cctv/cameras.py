@@ -12,6 +12,7 @@ from typing import Any
 from spyder_cctv.capture import Capture, OpenCVCapture, encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile, save_config
 from spyder_cctv.controls import unavailable_controls, validate_settings
+from spyder_cctv.presence import PresenceLeases
 from spyder_cctv.vision import Pipeline, create_pipeline
 
 logger = logging.getLogger(__name__)
@@ -259,6 +260,7 @@ class CameraManager:
         cameras: list[CameraConfig],
         config_path: Path | None = None,
         profiles: list[SettingsProfile] | None = None,
+        idle_policy: bool = False,
         **worker_options: Any,
     ) -> None:
         cameras = [
@@ -292,6 +294,18 @@ class CameraManager:
         self._closed = False
         self._config_path = config_path
         self._worker_options = worker_options
+        self._idle_policy = idle_policy
+        self._leases = PresenceLeases()
+        self._intent: set[str] = set()
+        self._policy_paused: set[str] = set()
+        self._recording: set[str] = set()
+        self._keepalive = threading.Event()
+        self._monitor: threading.Thread | None = None
+        if idle_policy:
+            self._monitor = threading.Thread(
+                target=self._presence_loop, name="camera-presence", daemon=True
+            )
+            self._monitor.start()
 
     def _snapshot(self) -> list[CameraWorker]:
         with self._registry:
@@ -427,8 +441,14 @@ class CameraManager:
                 self._persist(updated)
                 self.workers = updated
             if camera.autostart:
-                worker.start()
-            return worker.status()
+                self._intent.add(camera.id)
+                if self._should_suspend():
+                    self._policy_paused.add(camera.id)
+                else:
+                    worker.start()
+            status = worker.status()
+            status["idle_suspended"] = camera.id in self._policy_paused
+            return status
 
     def remove(self, camera_id: str) -> None:
         with self._mutations:
@@ -441,6 +461,9 @@ class CameraManager:
                 self._persist(updated)
                 worker.request_stop(final=True)
                 self.workers = updated
+                self._intent.discard(camera_id)
+                self._policy_paused.discard(camera_id)
+                self._recording.discard(camera_id)
 
     def control(self, camera_id: str, action: str) -> dict[str, Any]:
         with self._mutations:
@@ -448,23 +471,37 @@ class CameraManager:
                 raise RuntimeError("Camera manager is closed")
             worker = self.get_worker(camera_id)
             if action == "start":
-                worker.start()
+                self._intent.add(camera_id)
+                if self._should_suspend() and camera_id not in self._recording:
+                    self._policy_paused.add(camera_id)
+                else:
+                    worker.start()
             elif action == "stop":
+                self._intent.discard(camera_id)
+                self._policy_paused.discard(camera_id)
                 worker.stop()
             else:
                 raise ValueError("Unknown camera action")
-            return worker.status()
+            status = worker.status()
+            status["idle_suspended"] = camera_id in self._policy_paused
+            return status
 
     def start_configured(self) -> None:
-        for worker in self._snapshot():
-            if worker.config.autostart:
-                worker.start()
+        with self._mutations:
+            for worker in self._snapshot():
+                if worker.config.autostart:
+                    self._intent.add(worker.config.id)
+                    if self._should_suspend() and worker.config.id not in self._recording:
+                        self._policy_paused.add(worker.config.id)
+                    else:
+                        worker.start()
 
     def statuses(self) -> list[dict[str, Any]]:
         with self._registry:
             result = []
             for worker in self.workers.values():
                 status = worker.status()
+                status["idle_suspended"] = worker.config.id in self._policy_paused
                 profile = self._profiles.get(status["profile_id"])
                 status["profile_name"] = profile.name if profile else None
                 result.append(status)
@@ -475,14 +512,80 @@ class CameraManager:
         deadline = time.monotonic() + timeout
         with self._mutations:
             self._closed = True
+            self._keepalive.set()
             workers = self._snapshot()
             for worker in workers:
                 worker.request_stop(final=True)
+        if self._monitor is not None:
+            self._monitor.join(max(0, timeout))
         failed = []
         for worker in workers:
             try:
                 worker.stop(max(0, deadline - time.monotonic()))
             except RuntimeError:
-                failed.append(worker.config.id)
+                try:
+                    worker.stop(max(0, deadline - time.monotonic()))
+                except RuntimeError:
+                    failed.append(worker.config.id)
         if failed:
             raise RuntimeError(f"Camera shutdown timed out: {', '.join(failed)}")
+
+    def set_presence(self, client_id: str, active: bool, release_when_idle: bool) -> None:
+        if not self._idle_policy:
+            return
+        self._leases.heartbeat(client_id, active, release_when_idle)
+
+    def set_recording(self, camera_id: str, active: bool) -> None:
+        """Retain one camera for future recording integrations."""
+        if type(active) is not bool:
+            raise ValueError("Recording state must be boolean")
+        with self._mutations:
+            if self._closed:
+                raise RuntimeError("Camera manager is closed")
+            worker = self.get_worker(camera_id)
+            if active:
+                worker.start()
+                self._recording.add(camera_id)
+                self._intent.add(camera_id)
+                self._policy_paused.discard(camera_id)
+            else:
+                self._recording.discard(camera_id)
+        if not active:
+            self._reconcile_presence()
+
+    def _should_suspend(self) -> bool:
+        return self._idle_policy and not self._leases.keeps_cameras()
+
+    def _presence_loop(self) -> None:
+        while not self._keepalive.wait(0.25):
+            try:
+                self._reconcile_presence()
+            except RuntimeError:
+                logger.warning("Camera idle transition failed; will retry")
+
+    def _reconcile_presence(self) -> None:
+        if not self._idle_policy:
+            return
+        with self._mutations:
+            if self._closed:
+                return
+            suspend = self._should_suspend()
+            if suspend:
+                stopping = []
+                for camera_id in tuple(self._intent):
+                    if camera_id in self._recording or camera_id not in self.workers:
+                        continue
+                    worker = self.workers[camera_id]
+                    self._policy_paused.add(camera_id)
+                    worker.request_stop()
+                    stopping.append(worker)
+                for worker in stopping:
+                    try:
+                        worker.stop()
+                    except RuntimeError:
+                        logger.warning("Camera %s did not stop; will retry", worker.config.id)
+            else:
+                for camera_id in tuple(self._policy_paused):
+                    if camera_id in self._intent and camera_id in self.workers:
+                        self.workers[camera_id].start()
+                    self._policy_paused.discard(camera_id)
