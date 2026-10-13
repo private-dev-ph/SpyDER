@@ -45,3 +45,19 @@ page still releases its browser-owned tracks.
 
 Native camera/ML calls can block. Suspension retries failures instead of creating
 another owner; process isolation remains future work.
+
+## Short-window scrolling
+
+At viewport heights of 700 CSS pixels or less, the header and sidebar join normal
+document flow. The sidebar no longer owns a nested scrollbar, so scrolling the
+workspace reaches the camera wall. Taller windows retain the sticky navigation.
+Focused cameras have an internal vertical scrollbar when necessary, a minimum
+120-pixel preview, and non-shrinking header/footer controls. Short windows place
+the focused card 12 pixels from the top while preserving the exit toolbar.
+
+Browser checks against the installed 0.6.1 wheel covered actual CSS viewports
+1600x300, 1000x320, 487x320, 1600x600, and 1600x1000. The last camera footer was
+reachable in normal view, focused-camera controls were reachable, and no horizontal
+overflow occurred. An End-key check at 1600x320 reached the last camera. Browser
+zoom was 80%, so these are measured CSS sizes rather than emulator dimensions.
+These checks cover Chromium; other browser engines remain unverified.

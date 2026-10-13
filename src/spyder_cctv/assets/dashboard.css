@@ -810,12 +810,17 @@ body.has-focus {
   inset: 90px 32px 75px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
   box-shadow: 0 0 0 100vmax var(--canvas);
 }
 .is-focused .video-stage {
   flex: 1;
   aspect-ratio: auto;
-  min-height: 0;
+  min-height: 120px;
+}
+.is-focused .camera-heading,
+.is-focused .camera-footer {
+  flex-shrink: 0;
 }
 #focus-toolbar {
   position: fixed;
@@ -1134,13 +1139,27 @@ button:disabled {
   }
 }
 /* Keep the camera wall visible on laptop displays and short app windows. */
+/* One document scrollbar avoids trapping wheel input in the sidebar. */
+@media (max-height: 700px) {
+  .topbar {
+    position: relative;
+  }
+  .rail {
+    position: static;
+    height: auto;
+    overflow: visible;
+    align-self: stretch;
+  }
+  .camera-card.is-focused {
+    top: 12px;
+  }
+}
 @media (max-height: 700px) and (min-width: 801px) {
   .topbar {
     height: 56px;
   }
   .rail {
-    top: 56px;
-    height: calc(100dvh - 56px);
+    min-height: calc(100dvh - 56px);
   }
   .workspace {
     min-height: calc(100vh - 56px);
