@@ -5,6 +5,8 @@ from typing import Any, Protocol
 
 import cv2
 
+from spyder_cctv.controls import apply_settings, unavailable_controls
+
 
 class Capture(Protocol):
     def read(self) -> tuple[bool, Any]: ...
@@ -21,12 +23,39 @@ class OpenCVCapture:
         if not self.capture.isOpened():
             self.capture.release()
             raise RuntimeError("Cannot open camera")
+        self._controls = None
+        if sys.platform == "win32" and isinstance(source, int):
+            from spyder_cctv.directshow import DirectShowControls
+
+            try:
+                self._controls = DirectShowControls(source)
+            except Exception:
+                # Missing native control interfaces must never prevent video capture.
+                pass
+
+    def get_controls(self) -> dict[str, Any]:
+        return self._controls.capabilities() if self._controls else unavailable_controls()
+
+    def apply_controls(self, settings: dict[str, float]) -> dict[str, Any]:
+        if self._controls:
+            return apply_settings(self._controls, settings)
+        return {
+            "capabilities": self.get_controls(),
+            "results": {
+                name: {"status": "unsupported", "requested": value}
+                for name, value in settings.items()
+            },
+        }
 
     def read(self) -> tuple[bool, Any]:
         return self.capture.read()
 
     def close(self) -> None:
-        self.capture.release()
+        try:
+            if self._controls:
+                self._controls.close()
+        finally:
+            self.capture.release()
 
 
 def encode_jpeg(frame: Any) -> bytes:
