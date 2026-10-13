@@ -22,19 +22,22 @@ class CameraWorker:
         self,
         config: CameraConfig,
         capture_factory: Callable[[int | str], Capture] = OpenCVCapture,
-        pipeline_factory: Callable[[str], Pipeline] = create_pipeline,
+        pipeline_factory: Callable[[str], Pipeline] | None = None,
         encoder: Callable[[Any], bytes] = encode_jpeg,
         desired_settings: dict[str, float] | None = None,
     ) -> None:
         self.config = config
         self._capture_factory = capture_factory
-        self._pipeline_factory = pipeline_factory
+        self._pipeline_factory = pipeline_factory or (
+            lambda name: create_pipeline(name, config.vision)
+        )
         self._encoder = encoder
         self._lock = threading.Lock()
         self._lifecycle = threading.Lock()
         self._closed = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._retiring_pipeline: Any = None
         self._state = "stopped"
         self._error: str | None = None
         self._jpeg: bytes | None = None
@@ -121,6 +124,10 @@ class CameraWorker:
         with self._lifecycle, self._lock:
             if self._closed:
                 raise RuntimeError("Camera manager is closed")
+            if self._retiring_pipeline is not None:
+                if self._retiring_pipeline.is_alive:
+                    raise RuntimeError("CV engine is still stopping")
+                self._retiring_pipeline = None
             if self._thread is not None and self._thread.is_alive():
                 if self._stop.is_set():
                     raise RuntimeError("Camera is still stopping")
@@ -161,6 +168,8 @@ class CameraWorker:
                 thread.join(max(0, deadline - time.monotonic()))
                 if thread.is_alive():
                     raise RuntimeError("Camera backend did not stop within timeout")
+            if self._retiring_pipeline is not None and self._retiring_pipeline.is_alive:
+                raise RuntimeError("CV engine is still stopping")
         finally:
             self._lifecycle.release()
 
@@ -198,6 +207,7 @@ class CameraWorker:
 
     def _run(self) -> None:
         capture = None
+        pipeline = None
         try:
             capture = self._capture_factory(self.config.source)
             pipeline = self._pipeline_factory(self.config.pipeline)
@@ -223,6 +233,15 @@ class CameraWorker:
             with self._lock:
                 self._state, self._error = "error", "Capture or processing failed"
         finally:
+            if pipeline is not None and hasattr(pipeline, "close"):
+                try:
+                    pipeline.close()
+                except Exception:
+                    logger.warning("Pipeline release failed for camera %s", self.config.id)
+                    if getattr(pipeline, "is_alive", False):
+                        with self._lock:
+                            self._retiring_pipeline = pipeline
+                            self._state, self._error = "error", "CV engine is still stopping"
             if capture is not None:
                 try:
                     capture.close()
@@ -242,6 +261,14 @@ class CameraManager:
         profiles: list[SettingsProfile] | None = None,
         **worker_options: Any,
     ) -> None:
+        cameras = [
+            replace(
+                camera, vision=camera.vision.resolve(config_path.parent if config_path else None)
+            )
+            if camera.vision is not None
+            else camera
+            for camera in cameras
+        ]
         if len({camera.id for camera in cameras}) != len(cameras):
             raise ValueError("Camera ids must be unique")
         profiles = profiles or []
@@ -374,6 +401,13 @@ class CameraManager:
         with self._mutations:
             if self._closed:
                 raise RuntimeError("Camera manager is closed")
+            if camera.vision is not None:
+                camera = replace(
+                    camera,
+                    vision=camera.vision.resolve(
+                        self._config_path.parent if self._config_path else None
+                    ),
+                )
             if isinstance(camera.source, str) and "://" not in camera.source:
                 if self._config_path is None:
                     raise ValueError("Video files require a configured config path")

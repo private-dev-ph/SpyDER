@@ -1,0 +1,19 @@
+{
+  "cameras": [
+    {
+      "id": "opencv-preview",
+      "name": "OpenCV person detection",
+      "source": 0,
+      "fps": 15,
+      "autostart": false,
+      "pipeline": "vision",
+      "vision": {
+        "engine": "opencv",
+        "device": "cpu",
+        "inference_fps": 3,
+        "input_size": 640,
+        "max_detections": 100
+      }
+    }
+  ]
+}

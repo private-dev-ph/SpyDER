@@ -114,7 +114,17 @@ Capture uses DirectShow for integer webcam sources on Windows and OpenCV's defau
 for other sources/platforms. Browser assets use package resources from either editable or wheel
 installs. `gui` creates empty configuration on first launch; it never overwrites an existing file.
 
-## Static showcase boundary
+## Computer vision engines
+
+`cv/contracts.py` defines validated per-camera model options, standard pixel-box
+detections, and the engine lifecycle. `cv/engines.py` lazily adapts OpenCV HOG,
+Ultralytics YOLO, and InsightFace ONNX detection. `cv/runtime.py` separates model
+loading/inference from capture with one replaceable pending frame per camera.
+Engine errors become bounded metadata instead of stopping preview. Engines stay
+thread-owned; pipeline cleanup runs when capture stops. A hung inference worker
+blocks duplicate engine startup for that camera. See [CV guide](computer-vision.md).
+
+## Static showcase runtime
 
 `showcase.py` exports packaged assets into a new static directory. `showcase.js`
 implements the dashboard's camera/profile contract entirely in the browser,

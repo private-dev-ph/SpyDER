@@ -4,6 +4,8 @@ from typing import Any, Protocol
 
 import cv2
 
+from spyder_cctv.cv.contracts import VisionConfig
+
 
 class Pipeline(Protocol):
     def process(self, frame: Any) -> tuple[Any, dict[str, Any]]: ...
@@ -30,7 +32,11 @@ class Motion:
         return frame, {"motion_fraction": round(fraction, 4)}
 
 
-def create_pipeline(name: str) -> Pipeline:
+def create_pipeline(name: str, vision: VisionConfig | None = None) -> Pipeline:
+    if name == "vision":
+        from spyder_cctv.cv.runtime import VisionPipeline
+
+        return VisionPipeline(vision or VisionConfig())
     if name == "motion":
         return Motion()
     if name == "none":
