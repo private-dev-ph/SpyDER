@@ -7,11 +7,14 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from spyder_cctv.cameras import CameraManager
-from spyder_cctv.config import CameraConfig
+from spyder_cctv.config import CameraConfig, SettingsProfile
 
 
 def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
+        # Reuse preview/status connections instead of exhausting local ephemeral ports.
+        protocol_version = "HTTP/1.1"
+
         def setup(self) -> None:
             super().setup()
             self.connection.settimeout(5)
@@ -24,6 +27,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header(
@@ -35,6 +40,17 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
 
         def json(self, code: int, value: object) -> None:
             self.send(code, json.dumps(value).encode(), "application/json")
+
+        def body(self) -> dict:
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                raise ValueError("Send application/json")
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 16384:
+                raise ValueError("Request must contain 1-16384 bytes")
+            data = json.loads(self.rfile.read(length))
+            if not isinstance(data, dict):
+                raise ValueError("Request must contain an object")
+            return data
 
         def allowed(self) -> bool:
             # Reject hostile Host headers (DNS rebinding) and cross-origin control.
@@ -70,15 +86,33 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     files("spyder_cctv").joinpath("assets/dashboard.css").read_bytes(),
                     "text/css; charset=utf-8",
                 )
+            elif path in ("/settings.js", "/settings.css"):
+                asset = path.removeprefix("/")
+                self.send(
+                    200,
+                    files("spyder_cctv").joinpath("assets", asset).read_bytes(),
+                    "text/javascript; charset=utf-8"
+                    if asset.endswith(".js")
+                    else "text/css; charset=utf-8",
+                )
             elif path == "/api/cameras":
                 self.json(200, manager.statuses())
+            elif path == "/api/profiles":
+                self.json(200, manager.profiles())
             else:
                 parts = path.strip("/").split("/")
-                if len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "frame":
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["api", "cameras"]
+                    and parts[3] in ("frame", "settings")
+                ):
                     try:
                         worker = manager.get_worker(parts[2])
                     except KeyError:
                         self.json(404, {"error": "Unknown camera"})
+                        return
+                    if parts[3] == "settings":
+                        self.json(200, worker.settings_snapshot())
                         return
                     if (jpeg := worker.jpeg()) is None:
                         self.json(503, {"error": "No fresh frame available"})
@@ -88,6 +122,9 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     self.json(404, {"error": "Unknown route"})
 
         def do_POST(self) -> None:
+            # Action requests may carry an unused body. Close rather than allowing
+            # those bytes to be interpreted as another request on a persistent socket.
+            self.close_connection = True
             if not self.allowed():
                 return
             # A custom header prevents browser form requests from controlling cameras.
@@ -97,35 +134,49 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             parts = urlsplit(self.path).path.strip("/").split("/")
             try:
                 if parts == ["api", "cameras"]:
-                    if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
-                        raise ValueError("Send camera details as application/json")
-                    length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= 16384:
-                        raise ValueError("Camera details must be between 1 and 16384 bytes")
-                    data = json.loads(self.rfile.read(length))
-                    if not isinstance(data, dict):
-                        raise ValueError("Camera details must be an object")
+                    data = self.body()
                     data.setdefault("id", "cam-" + uuid4().hex[:12])
                     try:
                         camera = CameraConfig(**data)
                     except TypeError as error:
                         raise ValueError("Camera contains missing or unknown fields") from error
                     self.json(201, manager.add(camera))
+                elif parts == ["api", "profiles"]:
+                    data = self.body()
+                    data.setdefault("id", "profile-" + uuid4().hex[:12])
+                    try:
+                        profile = SettingsProfile(**data)
+                    except TypeError as error:
+                        raise ValueError("Invalid profile fields") from error
+                    self.json(201, manager.create_profile(profile))
+                elif len(parts) == 4 and parts[:2] == ["api", "profiles"] and parts[3] == "remove":
+                    manager.remove_profile(parts[2])
+                    self.json(200, {"removed": parts[2]})
                 elif len(parts) == 4 and parts[:2] == ["api", "cameras"]:
                     if parts[3] == "remove":
                         manager.remove(parts[2])
                         self.json(200, {"removed": parts[2]})
                     elif parts[3] in ("start", "stop"):
                         self.json(200, manager.control(parts[2], parts[3]))
+                    elif parts[3] == "settings":
+                        data = self.body()
+                        if set(data) != {"settings"}:
+                            raise ValueError("Send a settings object")
+                        self.json(202, manager.set_settings(parts[2], data["settings"]))
+                    elif parts[3] == "profile":
+                        data = self.body()
+                        if set(data) != {"profile_id"}:
+                            raise ValueError("Send a profile id")
+                        self.json(202, manager.assign_profile(parts[2], data["profile_id"]))
                     else:
                         self.json(404, {"error": "Unknown action"})
                 else:
                     self.json(404, {"error": "Unknown route"})
             except KeyError:
-                self.json(404, {"error": "Unknown camera"})
+                self.json(404, {"error": "Unknown camera or profile"})
             except (ValueError, UnicodeDecodeError):
                 self.json(
-                    400, {"error": "Invalid camera details. Check source, name, FPS and pipeline."}
+                    400, {"error": "Invalid details. Check camera fields or settings (0-100%)."}
                 )
             except OSError:
                 self.json(500, {"error": "Cannot save configuration. Camera list was not changed."})

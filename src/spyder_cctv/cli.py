@@ -8,7 +8,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from spyder_cctv.cameras import CameraManager
-from spyder_cctv.config import default_config_path, load_config, save_config
+from spyder_cctv.config import default_config_path, load_app_config, save_config
 from spyder_cctv.web import create_server
 
 
@@ -38,13 +38,14 @@ def main(argv: list[str] | None = None) -> int:
         args.config = args.config.resolve()
         if args.command == "gui" and not args.config.exists():
             save_config(args.config, [])
-        cameras = load_config(args.config)
+        config = load_app_config(args.config)
+        cameras = config.cameras
         if args.command == "check":
             print(f"Valid configuration: {len(cameras)} camera(s)")
             return 0
         if not 0 <= args.port <= 65535:
             raise ValueError("port must be between 0 and 65535")
-        manager = CameraManager(cameras, config_path=args.config)
+        manager = CameraManager(cameras, config_path=args.config, profiles=config.profiles)
         server = create_server(manager, args.port)
         try:
             manager.start_configured()

@@ -7,7 +7,9 @@
     <title>SpyDER · Control room</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/dashboard.css" />
+    <link rel="stylesheet" href="/settings.css" />
     <script src="/dashboard.js" defer></script>
+    <script src="/settings.js" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -57,9 +59,12 @@
               A space for every camera. A clearer picture of what matters.
             </p>
           </div>
-          <button id="add-camera" class="button primary">
-            <span aria-hidden="true">＋</span> Add camera
-          </button>
+          <div class="heading-actions">
+            <button id="open-profiles" class="button secondary">Profiles</button
+            ><button id="add-camera" class="button primary">
+              <span aria-hidden="true">＋</span> Add camera
+            </button>
+          </div>
         </section>
         <section class="overview" aria-label="Camera summary">
           <div class="metric">
@@ -277,13 +282,17 @@
           </div>
         </div>
         <div class="camera-footer">
-          <span class="motion-reading"><i></i><span></span></span>
+          <div class="camera-tuning">
+            <span class="motion-reading"><i></i><span></span></span
+            ><span class="camera-profile"></span>
+          </div>
           <div class="tile-actions">
             <button
               class="fit-button"
               title="Switch between full frame and filled tile"
             >
               Fit</button
+            ><button class="settings-camera">Settings</button
             ><button class="toggle-camera">Start</button
             ><button
               class="remove-camera"
@@ -296,6 +305,123 @@
         </div>
       </article>
     </template>
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">REFINE YOUR VIEW</p>
+          <h2 id="settings-title">Camera settings</h2>
+          <p id="settings-camera-label" class="dialog-description"></p>
+        </div>
+        <button
+          class="icon-button close-settings"
+          aria-label="Close camera settings"
+        >
+          ×
+        </button>
+      </div>
+      <div class="settings-layout">
+        <section aria-label="Camera controls">
+          <p class="field-help">
+            Select the controls to apply or save. Values are positions within
+            this camera’s supported range.
+          </p>
+          <div id="camera-controls"></div>
+          <div class="settings-actions">
+            <button id="control-defaults" class="button secondary">
+              Driver defaults</button
+            ><button id="apply-settings" class="button primary">
+              Apply to this camera
+            </button>
+          </div>
+          <p
+            id="settings-result"
+            class="settings-result"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </section>
+        <aside class="settings-side">
+          <div class="settings-preview">
+            <img
+              id="settings-preview"
+              alt="Camera settings preview"
+              hidden
+            /><span id="settings-preview-note"
+              >Start the camera for a live preview</span
+            >
+          </div>
+          <section class="profile-block">
+            <h3>Camera profile</h3>
+            <label for="profile-choice">Choose a saved profile</label
+            ><select id="profile-choice">
+              <option value="">Custom settings</option>
+            </select>
+            <p class="field-help">
+              Profiles adapt to each camera’s range. Unsupported controls are
+              skipped.
+            </p>
+            <button id="assign-profile" class="button secondary">
+              Assign profile
+            </button>
+          </section>
+          <form id="save-profile-form" class="profile-block">
+            <h3>Save this setup</h3>
+            <label for="profile-name">New profile name</label
+            ><input
+              id="profile-name"
+              placeholder="e.g. Indoor neutral"
+              maxlength="80"
+              required
+              autocomplete="off"
+            /><button id="save-profile" class="button primary" type="submit">
+              Save as profile
+            </button>
+          </form>
+        </aside>
+      </div>
+    </dialog>
+    <dialog id="profiles-dialog" aria-labelledby="profiles-title">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">CONSISTENT AT EVERY ANGLE</p>
+          <h2 id="profiles-title">Settings profiles</h2>
+        </div>
+        <button class="icon-button close-profiles" aria-label="Close profiles">
+          ×
+        </button>
+      </div>
+      <p class="dialog-description">
+        Save a setup once. Assign it to any of your cameras.
+      </p>
+      <div id="profiles-empty" class="field-help" hidden>
+        No profiles yet. Open a camera’s Settings to save your first profile.
+      </div>
+      <div id="profiles-content">
+        <label for="library-profile">Saved profile</label
+        ><select id="library-profile"></select>
+        <p id="library-details" class="field-help"></p>
+        <fieldset id="profile-targets">
+          <legend>Assign to cameras</legend>
+        </fieldset>
+        <p class="field-help">
+          Unchecked cameras keep their current profile. To detach a profile,
+          choose Custom settings in that camera’s Settings.
+        </p>
+        <div class="settings-actions">
+          <button id="delete-profile" class="button secondary">
+            Delete profile</button
+          ><button id="apply-profile-many" class="button primary">
+            Assign to selected
+          </button>
+        </div>
+      </div>
+      <p
+        id="profiles-result"
+        class="settings-result"
+        role="status"
+        aria-live="polite"
+      ></p>
+    </dialog>
     <div id="focus-toolbar" hidden>
       <span>FOCUS VIEW</span
       ><button id="leave-focus" class="button secondary">

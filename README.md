@@ -49,6 +49,46 @@ Ctrl+C in the launching terminal stops the server and cameras. Closing the brows
 the server running. Use `gui --no-browser` to run without opening a tab, or `serve` to require an
 existing config. Use `python -m spyder_cctv` if the console command is not on PATH.
 
+## Camera tuning and profiles
+
+Open **Settings** on a camera tile. The app queries the driver's supported controls and reports
+current values, limits, and steps. Windows webcams can expose **zoom, pan, tilt, brightness,
+contrast, and saturation** through the native DirectShow interface. Unsupported controls are
+disabled with an explanation. **FOV** is included in the settings model but is unavailable when
+the driver has no standard FOV interface; it is not simulated with a software crop.
+Native controls are currently implemented for Windows USB/built-in webcams. Other platforms,
+network streams, and video files continue to capture video but report native tuning unavailable.
+
+Select the controls you want to include, move their sliders, and choose **Apply to this camera**.
+Changes are saved first, then applied asynchronously by that camera's capture worker. Readbacks
+show actual driver values, including quantization, adjustments, or rejected settings. The live
+preview shares the camera's existing feed. **Driver defaults** stages the selected controls'
+defaults; it does not change the device until you apply. Controls are applied in manual mode
+where the driver supports it. Settings not included in a request are left unchanged on the device.
+
+Sliders and profiles use **0–100% of the supported device range**, not absolute degrees, optical
+zoom ratios, or a percentage adjustment to the image. This lets the same profile adapt to different
+camera ranges. Native device values are displayed below the sliders. A shared percentage does
+not guarantee identical images or framing across different camera models.
+
+To reuse a setup, enter a **New profile name** and click **Save as profile**. It saves the checked
+controls and assigns the new profile to the current camera. Open **Profiles** above the camera
+wall, select that profile, check target cameras, and choose **Assign to selected**. Unchecked
+cameras keep their current assignments. You can also select and assign a profile in any camera's
+Settings. Assignments made while paused apply on the next camera start.
+
+Profiles are reusable snapshots. Applying custom settings to one camera detaches its profile
+without modifying other cameras or the saved profile. Assign **Custom settings** to detach while
+keeping the existing desired values. Save a new named profile for a revised setup. An assigned
+profile must be detached from its cameras before it can be deleted. Unsupported controls in a
+profile are skipped per camera and reported as partial application; supported controls still apply.
+Creating a profile and assigning it are separate saves, so a failed assignment can leave a valid
+saved profile available for retry.
+
+Camera settings, profiles, and assignments live in the user configuration file and are restored
+after restart. Older camera-only configurations are read automatically; the next save upgrades
+them to the versioned schema. No configuration is written inside the installed package.
+
 `init` prints the configuration path and refuses to overwrite an existing file. The default
 configuration lives in the user's platform config directory (usually `%LOCALAPPDATA%/SpyDER`
 on Windows, `~/.config/SpyDER` on Linux, or `~/Library/Application Support/SpyDER` on macOS).
@@ -80,12 +120,15 @@ and credentials are excluded from API status. Treat your configuration file as p
 - One capture thread and independent CV pipeline per camera.
 - Responsive light/dark GUI, live counts, focus view, fit/fill, and independent or bulk controls.
 - Add/remove camera controls with persistent settings and duplicate-source prevention.
+- Driver-supported native Windows camera tuning with confirmed readbacks.
+- Portable settings profiles, per-camera assignment, and bulk assignment from the GUI.
 - OpenCV capture adapter and replaceable capture/pipeline/encoder interfaces.
 - Validated user configuration and bundled dashboard assets that work from a wheel.
 - No camera access during import, `init`, or `check`.
 
 This is an application skeleton, not a production surveillance service. Recording, camera discovery,
-PTZ/ONVIF controls, object detection models, automatic reconnect, and remote access remain future work.
+network-camera ONVIF/PTZ protocols, vendor-specific FOV controls, object detection models,
+automatic reconnect, and remote access remain future work.
 Motion is a simple changed-pixel fraction, not an alarm or object classifier. Preview polling adapts
 to camera count (up to roughly 8 FPS for a small wall), avoids overlapping requests, and pauses in
 hidden tabs. Status updates approximately every 750 milliseconds. The

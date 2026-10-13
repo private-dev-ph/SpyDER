@@ -304,6 +304,11 @@ function createCard(camera) {
   $(".remove-camera", element).addEventListener("click", () =>
     askRemove(camera.id),
   );
+  $(".settings-camera", element).addEventListener("click", () => {
+    document.dispatchEvent(
+      new CustomEvent("spyder:camera-settings", { detail: { id: camera.id } }),
+    );
+  });
   $(".video-focus", element).addEventListener("click", (event) =>
     focusCamera(camera.id, event.currentTarget),
   );
@@ -372,6 +377,9 @@ async function loadFrame(card) {
     card.url = url;
     card.lastFrame = Date.now();
     $(".camera-image", card.element).src = url;
+    document.dispatchEvent(
+      new CustomEvent("spyder:frame", { detail: { id: card.camera.id, url } }),
+    );
     if (old) URL.revokeObjectURL(old);
   } catch {
     if (card.lastFrame && Date.now() - card.lastFrame > 3000) {
@@ -442,6 +450,23 @@ function render() {
       !connected || pending.has(camera.id) || camera.state === "stopping";
     $(".remove-camera", element).disabled =
       !connected || pending.has(camera.id);
+    $(".settings-camera", element).disabled = !connected;
+    $(".settings-camera", element).setAttribute(
+      "aria-label",
+      "Settings for " + camera.name,
+    );
+    const profileLabel =
+      camera.profile_name ||
+      (camera.profile_id ? "Saved profile" : "Custom settings");
+    $(".camera-profile", element).textContent =
+      profileLabel +
+      (["pending", "scheduled", "partial"].includes(camera.settings_state)
+        ? " · " + camera.settings_state
+        : "");
+    $(".camera-profile", element).title = $(
+      ".camera-profile",
+      element,
+    ).textContent;
     const fraction = camera.metadata.motion_fraction || 0;
     element.dataset.motion =
       connected && fraction > 0.02 && camera.state === "running"
@@ -509,6 +534,7 @@ function render() {
     !connected ||
     !cameras.some((camera) => ["running", "starting"].includes(camera.state));
   $("#add-camera").disabled = $("#empty-add").disabled = !connected;
+  $("#open-profiles").disabled = !connected;
   $("#connection").textContent = connected
     ? "Local server online"
     : "Server disconnected";
@@ -570,4 +596,11 @@ function clock() {
 }
 clock();
 setInterval(clock, 10000);
+window.spyder = {
+  request: api,
+  refresh,
+  notify,
+  cameras: () => cameras,
+  frame: (id) => cards.get(id)?.url,
+};
 poll();

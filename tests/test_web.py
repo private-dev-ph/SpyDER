@@ -1,7 +1,9 @@
+import http.client
 import json
 import threading
 import time
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import numpy as np
@@ -137,3 +139,73 @@ def test_invalid_add_does_not_change_registry(server, data):
         urlopen(request, timeout=2)
     assert error.value.code == 400
     assert len(manager.statuses()) == 1
+
+
+def test_profile_settings_api_persist_and_validate(server):
+    url, manager = server
+
+    def post(path, data):
+        return urlopen(
+            Request(
+                url + path,
+                method="POST",
+                data=json.dumps(data).encode(),
+                headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+            ),
+            timeout=2,
+        )
+
+    with post("/api/profiles", {"name": "Indoor", "settings": {"brightness": 60}}) as response:
+        assert response.status == 201
+        profile = json.load(response)
+    with post("/api/cameras/front/profile", {"profile_id": profile["id"]}) as response:
+        assert response.status == 202
+        assert json.load(response)["settings_state"] == "scheduled"
+    with urlopen(url + "/api/cameras/front/settings", timeout=2) as response:
+        assert json.load(response)["desired"] == {"brightness": 60}
+    with pytest.raises(HTTPError) as error:
+        post("/api/profiles/" + profile["id"] + "/remove", {})
+    assert error.value.code == 409
+    with post("/api/cameras/front/settings", {"settings": {"brightness": 20}}) as response:
+        assert json.load(response)["profile_id"] is None
+    with post("/api/profiles/" + profile["id"] + "/remove", {}) as response:
+        assert response.status == 200
+    assert manager.profiles() == []
+    for path, data in [
+        ("/api/cameras/front/settings", {"settings": {"brightness": 101}}),
+        ("/api/cameras/front/profile", {"profile_id": []}),
+        ("/api/profiles", {"name": "Empty", "settings": {}}),
+    ]:
+        with pytest.raises(HTTPError) as error:
+            post(path, data)
+        assert error.value.code == 400
+
+
+def test_preview_connections_reuse_and_actions_close_unread_bodies(server):
+    url, _ = server
+    address = urlsplit(url)
+    connection = http.client.HTTPConnection(address.hostname, address.port, timeout=2)
+    try:
+        connection.request("GET", "/api/cameras")
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        socket = connection.sock
+        connection.request("GET", "/settings.js")
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        assert connection.sock is socket
+        connection.request(
+            "POST",
+            "/api/cameras/front/stop",
+            body="{}",
+            headers={"X-Spyder-Control": "1", "Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.headers["Connection"] == "close"
+        response.read()
+        assert connection.sock is None
+    finally:
+        connection.close()
