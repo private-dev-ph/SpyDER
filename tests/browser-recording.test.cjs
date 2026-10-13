@@ -31,29 +31,35 @@ class FakeRecorder {
   }
 }
 
-function runtime({ recorder = FakeRecorder, sourceState = "running", fetchFailure = false } = {}) {
+function runtime({ recorder = FakeRecorder, sourceState = "running", fetchFailure = false, sourceWidth = 640, sourceHeight = 360 } = {}) {
   const listeners = {};
   const revoked = [];
   const stoppedTracks = [];
-  const sourceCanvas = { width: 640, height: 360 };
+  let downloadClicks = 0;
+  const sourceCanvas = { width: sourceWidth, height: sourceHeight };
   const sourceIds = new Set(["cam-a", "cam-b"]);
   let intervalCallback;
-  const canvas = {
-    width: 0, height: 0, draws: [],
-    getContext: () => ({
-      fillRect() {}, fillText() {}, drawImage(...args) { canvas.draws.push(args); },
-    }),
-    captureStream(fps) {
-      canvas.captureFps = fps;
-      return { getTracks: () => [{ stop: () => stoppedTracks.push(true) }] };
-    },
-    toBlob(callback, type) { callback(new Blob(["jpeg"], { type })); },
-  };
+  const canvases = [];
+  function makeCanvas() {
+    const result = {
+      width: 0, height: 0, draws: [], clicks: 0,
+      getContext: () => ({
+        fillRect() {}, fillText() {}, drawImage(...args) { result.draws.push(args); },
+      }),
+      captureStream(fps) {
+        result.captureFps = fps;
+        return { getTracks: () => [{ stop: () => stoppedTracks.push(true) }] };
+      },
+      toBlob(callback, type) { callback(new Blob(["jpeg"], { type })); },
+    };
+    canvases.push(result);
+    return result;
+  }
   const document = {
     hidden: false,
     createElement(tag) {
-      if (tag === "canvas") return canvas;
-      return { click() { this.clicked = true; } };
+      if (tag === "canvas") return makeCanvas();
+      return { click() { downloadClicks++; } };
     },
     addEventListener(name, fn) { listeners[`doc:${name}`] = fn; },
   };
@@ -87,7 +93,7 @@ function runtime({ recorder = FakeRecorder, sourceState = "running", fetchFailur
     setInterval: (fn, ms) => { intervalCallback = fn; return { fn, ms }; }, clearInterval() {},
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../src/spyder_cctv/assets/browser-recording.js"), "utf8"), context);
-  return { api: window.spyderBrowserMedia, showcase, canvas, document, listeners, revoked, stoppedTracks, recorder: () => recorder?.last, sourceIds, tick: () => intervalCallback?.() };
+  return { api: window.spyderBrowserMedia, showcase, canvas: canvases[0], canvases, document, listeners, revoked, stoppedTracks, recorder: () => recorder?.last, sourceIds, tick: () => intervalCallback?.(), downloadClicks: () => downloadClicks };
 }
 
 test("records local tiled canvas with selected cameras and chosen browser MIME", async () => {
@@ -103,7 +109,7 @@ test("records local tiled canvas with selected cameras and chosen browser MIME",
   await app.api.request("/api/recordings/stop");
   const done = await app.api.status();
   assert.equal(done.state, "idle");
-  assert.equal(done.items[0].kind, "video");
+  assert.equal(done.items[0].kind, "recording");
   assert.match(done.items[0].filename, /\.webm$/);
   assert.equal(done.items[0].size_bytes, 5);
   assert.deepEqual(app.showcase.retention.slice(-2), [["cam-a", false], ["cam-b", false]]);
@@ -121,6 +127,20 @@ test("selection changes release removed retention and zero selection stops recor
   assert.equal(done.camera_ids.length, 0);
 });
 
+test("selection acquisition failure rolls back additions and keeps prior selection", async () => {
+  const app = runtime();
+  await app.api.request("/api/recordings/start", { camera_ids: ["cam-a"] });
+  const setRecording = app.showcase.setRecording;
+  app.showcase.setRecording = async (id, active) => {
+    if (id === "cam-b" && active) throw new Error("new camera failed");
+    return setRecording(id, active);
+  };
+  await assert.rejects(app.api.request("/api/recordings/cameras", { camera_ids: ["cam-b"] }), /new camera failed/);
+  assert.deepEqual(Array.from((await app.api.status()).camera_ids), ["cam-a"]);
+  assert.deepEqual(app.showcase.retention, [["cam-a", true]]);
+  await app.api.request("/api/recordings/stop");
+});
+
 test("unsupported and failed starts release retained cameras", async () => {
   class Unsupported { static isTypeSupported() { return false; } }
   const unsupported = runtime({ recorder: null });
@@ -131,14 +151,66 @@ test("unsupported and failed starts release retained cameras", async () => {
   assert.ok(Unsupported);
 });
 
-test("captures one local JPEG and never calls network fetch", async () => {
+test("captures raw JPEG on separate canvas without downloading or touching active recording", async () => {
   const app = runtime();
+  await app.api.request("/api/recordings/start", { camera_ids: ["cam-a"] });
+  const drawsBefore = app.canvas.draws.length;
+  const framesBefore = (await app.api.status()).frames;
   const result = await app.api.request("/api/captures", { camera_ids: ["cam-a"] });
-  assert.equal(result.items[0].kind, "capture");
-  assert.match(result.items[0].filename, /\.jpg$/);
-  assert.equal(result.items[0].size_bytes, 4);
+  assert.equal(result.kind, "capture");
+  assert.match(result.filename, /\.jpg$/);
+  assert.equal(result.size_bytes, 4);
   assert.equal(app.canvas.width, 1920);
-  assert.equal(app.showcase.retention.length, 0);
+  assert.equal(app.canvases[1].width, 640);
+  assert.equal(app.canvases[1].height, 360);
+  assert.equal(app.canvas.draws.length, drawsBefore);
+  assert.equal((await app.api.status()).frames, framesBefore);
+  assert.equal(app.downloadClicks(), 0);
+  assert.deepEqual(app.showcase.retention, [["cam-a", true]]);
+  await app.api.request("/api/recordings/stop");
+  const items = (await app.api.status()).items;
+  assert.deepEqual(Array.from(items, (item) => item.kind), ["recording", "capture"]);
+});
+
+test("multi-camera capture preserves aspect ratio in 1080p layout", async () => {
+  const app = runtime();
+  const result = await app.api.request("/api/captures", { camera_ids: ["cam-a", "cam-b"] });
+  assert.equal(result.kind, "capture");
+  assert.equal(app.canvases[1].width, 1920);
+  assert.equal(app.canvases[1].draws[0][1], 0);
+  assert.equal(app.canvases[1].draws[0][2], 270);
+  assert.equal(app.canvases[1].draws[0][3], 960);
+  assert.equal(app.canvases[1].draws[0][4], 540);
+  assert.equal(app.canvases[1].draws[1][1], 960);
+  assert.equal(app.canvases[1].draws[1][2], 270);
+  assert.equal(app.canvases[1].draws[1][3], 960);
+  assert.equal(app.canvases[1].draws[1][4], 540);
+});
+
+test("concurrent starts reject duplicate recording and starts during stop", async () => {
+  const app = runtime();
+  const starts = await Promise.allSettled([
+    app.api.request("/api/recordings/start", { camera_ids: ["cam-a"] }),
+    app.api.request("/api/recordings/start", { camera_ids: ["cam-b"] }),
+  ]);
+  assert.equal(starts.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(starts.filter((result) => result.status === "rejected").length, 1);
+  class DelayedStop extends FakeRecorder {
+    stop() {
+      if (this.state === "inactive") return;
+      this.state = "inactive";
+      setImmediate(() => {
+        this.emit("dataavailable", { data: new Blob(["video"], { type: this.mimeType }) });
+        this.emit("stop");
+      });
+    }
+  }
+  const delayed = runtime({ recorder: DelayedStop });
+  await delayed.api.request("/api/recordings/start", { camera_ids: ["cam-a"] });
+  const stopping = delayed.api.request("/api/recordings/stop");
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(delayed.api.request("/api/recordings/start", { camera_ids: ["cam-b"] }), /active or stopping/);
+  await stopping;
 });
 
 test("missing cameras drop from selection and failed source draws use offline tile", async () => {
@@ -150,8 +222,7 @@ test("missing cameras drop from selection and failed source draws use offline ti
   assert.equal(status.state, "idle");
   assert.equal(status.camera_ids.length, 0);
   const offline = runtime({ sourceState: "stopped" });
-  const capture = await offline.api.request("/api/captures", { camera_ids: ["cam-a"] });
-  assert.equal(capture.items.length, 1);
+  await assert.rejects(offline.api.request("/api/captures", { camera_ids: ["cam-a"] }), /offline/);
 });
 
 test("status starts idle and page visibility ends recording", async () => {
@@ -174,4 +245,18 @@ test("buffer cap stops recording and reports clear error", async () => {
   assert.equal(status.state, "error");
   assert.match(status.error, /128 MiB/);
   assert.deepEqual(app.showcase.retention.slice(-1), [["cam-a", false]]);
+});
+
+test("capture rejects when estimated blob would exceed local buffer cap", async () => {
+  const app = runtime({ sourceWidth: 6000, sourceHeight: 6000 });
+  await assert.rejects(app.api.request("/api/captures", { camera_ids: ["cam-a"] }), /insufficient space/);
+  assert.equal((await app.api.status()).items.length, 0);
+});
+
+test("saved media items count against shared local buffer cap", async () => {
+  const app = runtime();
+  const item = await app.api.request("/api/captures", { camera_ids: ["cam-a"] });
+  item.size_bytes = 128 * 1024 * 1024;
+  await assert.rejects(app.api.request("/api/recordings/start", { camera_ids: ["cam-a"] }), /Download items and reload/);
+  await assert.rejects(app.api.request("/api/captures", { camera_ids: ["cam-a"] }), /Download items and reload/);
 });
