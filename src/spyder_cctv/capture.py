@@ -1,5 +1,6 @@
 """Capture adapter. A worker owns the backend for its entire lifetime."""
 
+import sys
 from typing import Any, Protocol
 
 import cv2
@@ -12,7 +13,11 @@ class Capture(Protocol):
 
 class OpenCVCapture:
     def __init__(self, source: int | str) -> None:
-        self.capture = cv2.VideoCapture(source)
+        # DirectShow avoids slow MSMF startup and supports simultaneous USB cameras on Windows.
+        backend = (
+            cv2.CAP_DSHOW if sys.platform == "win32" and isinstance(source, int) else cv2.CAP_ANY
+        )
+        self.capture = cv2.VideoCapture(source, backend)
         if not self.capture.isOpened():
             self.capture.release()
             raise RuntimeError("Cannot open camera")

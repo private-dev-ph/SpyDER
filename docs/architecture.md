@@ -9,8 +9,8 @@ The distribution is called `spyder-cctv` to avoid conflicting with the Spyder ID
 | Module | Responsibility |
 | --- | --- |
 | `cli.py` | Composition root: parse options, load config, start server, clean up |
-| `config.py` | Immutable camera settings, validation, platform config paths |
-| `cameras.py` | Camera lifecycle, concurrent workers, locked status/frame snapshots |
+| `config.py` | Immutable camera settings, validation, platform config paths, atomic saving |
+| `cameras.py` | Camera lifecycle, concurrent workers, dynamic registry, locked snapshots |
 | `capture.py` | Capture protocol, OpenCV adapter, JPEG encoder |
 | `vision.py` | Pipeline protocol, passthrough and motion implementations |
 | `web.py` | Loopback HTTP adapter and independent camera controls |
@@ -30,6 +30,13 @@ Closing the manager is terminal: late requests cannot restart a worker after shu
 Lifecycle calls serialize independently of the state lock, and waiting for control ownership
 counts against the shutdown deadline.
 
+The manager serializes registry mutations and control requests separately from capture threads.
+Add validates unique IDs and sources, saves the proposed list, then publishes the worker. Remove
+stops the worker, saves the remaining list, closes the removed worker permanently, then publishes
+the list. Failed writes leave the existing registry and configuration intact (a failed removal can
+leave that camera paused). Status reads take a registry snapshot to avoid iteration races.
+Configuration writes use a temporary file beside the target, flush/fsync, and atomic replacement.
+
 `CameraManager` accepts factories for capture and pipeline objects, plus an encoder. A fresh pipeline
 is created on each start to keep temporal CV state isolated. Extend these seams for detectors,
 hardware adapters, or tests; keep transport and device code out of pipeline algorithms.
@@ -43,9 +50,22 @@ recordings, downloaded models, cache, and logs should use the corresponding plat
 cache, and log directories, with explicit overrides for deployment. No such artifacts are created yet.
 
 The local API provides `GET /api/cameras`, `GET /api/cameras/{id}/frame`, and
-`POST /api/cameras/{id}/start` or `/stop`. Controls require `X-Spyder-Control: 1`.
+`POST /api/cameras` to add, and `POST /api/cameras/{id}/start`, `/stop`, or `/remove`.
+Controls require `X-Spyder-Control: 1`. Add accepts JSON camera settings and generates an ID
+if omitted; it returns 201. Invalid settings return 400, duplicate IDs/sources return 409,
+and configuration write failures return 500 without publishing the changed registry.
 Use the printed IPv4 URL so the Host guard accepts requests. Frame routes return 503 when no
 fresh frame is available; control conflicts return 409; unknown routes/cameras return 404.
+
+The GUI uses the supplied red/gold palette with neutral cream or charcoal surfaces, light by
+default. Theme and density preferences belong to browser localStorage, not the camera config.
+The camera grid responds to width and camera count. Each tile fetches at most one frame at a
+time, revokes previous blob URLs, and cancels work on removal, disconnection, or hidden tabs.
+Preview cadence decreases as more cameras are added. Focus view suspends the other previews
+and makes background controls inert; Escape restores focus to the originating button.
+Capture uses DirectShow for integer webcam sources on Windows and OpenCV's default backend
+for other sources/platforms. Browser assets use package resources from either editable or wheel
+installs. `gui` creates empty configuration on first launch; it never overwrites an existing file.
 
 ## Limitations and growth
 

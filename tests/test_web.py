@@ -13,7 +13,7 @@ from spyder_cctv.web import create_server
 
 
 @pytest.fixture
-def server():
+def server(tmp_path):
     class SyntheticCapture:
         def __init__(self, source):
             pass
@@ -24,7 +24,11 @@ def server():
         def close(self):
             pass
 
-    manager = CameraManager([CameraConfig("front", 0)], capture_factory=SyntheticCapture)
+    manager = CameraManager(
+        [CameraConfig("front", 0)],
+        config_path=tmp_path / "config.json",
+        capture_factory=SyntheticCapture,
+    )
     server = create_server(manager, 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -89,3 +93,47 @@ def test_start_frame_stop_routes(server):
         timeout=2,
     ) as response:
         assert json.load(response)["state"] == "stopped"
+
+
+def test_add_remove_camera_routes(server):
+    url, manager = server
+    request = Request(
+        url + "/api/cameras",
+        method="POST",
+        headers={"X-Spyder-Control": "1", "Content-Type": "application/json"},
+        data=json.dumps({"name": "Back door", "source": 1, "autostart": True}).encode(),
+    )
+    with urlopen(request, timeout=2) as response:
+        assert response.status == 201
+        camera = json.load(response)
+        assert camera["name"] == "Back door"
+    with pytest.raises(HTTPError) as error:
+        urlopen(request, timeout=2)
+    assert error.value.code == 409
+    with urlopen(
+        Request(
+            url + "/api/cameras/" + camera["id"] + "/remove",
+            method="POST",
+            headers={"X-Spyder-Control": "1"},
+        ),
+        timeout=2,
+    ) as response:
+        assert response.status == 200
+    assert len(manager.statuses()) == 1
+
+
+@pytest.mark.parametrize(
+    "data", [{}, [], {"source": True}, {"source": 1, "name": 123}, {"source": 1, "extra": "bad"}]
+)
+def test_invalid_add_does_not_change_registry(server, data):
+    url, manager = server
+    request = Request(
+        url + "/api/cameras",
+        method="POST",
+        headers={"X-Spyder-Control": "1", "Content-Type": "application/json"},
+        data=json.dumps(data).encode(),
+    )
+    with pytest.raises(HTTPError) as error:
+        urlopen(request, timeout=2)
+    assert error.value.code == 400
+    assert len(manager.statuses()) == 1

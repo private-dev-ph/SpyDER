@@ -1,16 +1,306 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SpyDER camera monitor</title>
-  <link rel="stylesheet" href="/dashboard.css">
-  <script src="/dashboard.js" defer></script>
-</head>
-<body>
-  <h1>SpyDER camera monitor</h1>
-  <p>Start or stop each camera independently. Frames refresh twice per second.</p>
-  <p id="message" role="status"></p>
-  <main id="cameras"></main>
-</body>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>SpyDER · Control room</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <script src="/dashboard.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="SpyDER home"
+        ><span class="brand-mark" aria-hidden="true">S<span>+</span></span
+        ><span>SpyDER<small>VISION SYSTEMS</small></span></a
+      >
+      <div class="room-label">
+        <span class="status-dot"></span> LOCAL CONTROL ROOM
+      </div>
+      <div class="top-actions">
+        <time id="clock"></time
+        ><button
+          id="theme"
+          class="icon-button"
+          aria-label="Switch to dark mode"
+          title="Switch theme"
+        >
+          ◐
+        </button>
+      </div>
+    </header>
+    <div class="workspace">
+      <aside class="rail" aria-label="Workspace">
+        <div class="rail-heading">WORKSPACE</div>
+        <div class="rail-current">
+          <span aria-hidden="true">▦</span> Camera wall
+          <span id="rail-count" class="rail-count">0</span>
+        </div>
+        <div class="rail-note">
+          <span class="scope-icon" aria-hidden="true"></span
+          ><strong>Every angle.<br />One clear view.</strong>
+          <p>Your cameras, together.<br />Control each one independently.</p>
+        </div>
+        <div class="rail-footer">
+          <span class="status-dot"></span
+          ><span id="connection">Connecting…</span
+          ><small>Runs on this computer</small>
+        </div>
+      </aside>
+      <main>
+        <section class="page-heading">
+          <div>
+            <p class="eyebrow">OBSERVE / CONTROL</p>
+            <h1>Eyes on everything<span>.</span></h1>
+            <p class="intro">
+              A space for every camera. A clearer picture of what matters.
+            </p>
+          </div>
+          <button id="add-camera" class="button primary">
+            <span aria-hidden="true">＋</span> Add camera
+          </button>
+        </section>
+        <section class="overview" aria-label="Camera summary">
+          <div class="metric">
+            <span class="metric-label">CAMERAS IN WORKSPACE</span
+            ><strong id="total-count">00</strong
+            ><span class="metric-note">in your workspace</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">LIVE RIGHT NOW</span
+            ><strong id="live-count">00</strong
+            ><span class="metric-note"
+              ><span class="status-dot"></span> independently streaming</span
+            >
+          </div>
+          <div class="metric">
+            <span class="metric-label">NEEDS ATTENTION</span
+            ><strong id="attention-count">00</strong
+            ><span id="attention-note" class="metric-note"
+              >All systems clear</span
+            >
+          </div>
+          <div class="overview-note">
+            <span class="scope-icon" aria-hidden="true"></span>
+            <div>
+              <strong>Built for the bigger picture.</strong>
+              <p>The wall adapts as your camera setup grows.</p>
+            </div>
+          </div>
+        </section>
+        <section class="wall-section">
+          <div class="wall-toolbar">
+            <div>
+              <h2>Camera wall <span id="wall-count">0</span></h2>
+              <span class="live-label"
+                ><span class="status-dot"></span> LIVE WORKSPACE</span
+              >
+            </div>
+            <div class="wall-controls">
+              <label class="density-label"
+                >Tile size
+                <select id="density">
+                  <option value="auto">Auto</option>
+                  <option value="compact">Compact</option>
+                  <option value="large">Large</option>
+                </select></label
+              ><button id="start-all" class="button secondary">Start all</button
+              ><button id="stop-all" class="button secondary">Pause all</button>
+            </div>
+          </div>
+          <div
+            id="message"
+            class="message"
+            role="status"
+            aria-live="polite"
+            hidden
+          ></div>
+          <div id="empty" class="empty-state" hidden>
+            <span class="scope-icon" aria-hidden="true"></span>
+            <h3>Your first angle starts here.</h3>
+            <p>
+              Add a webcam, a network stream, or a video file.<br />Your camera
+              wall will take care of the layout.
+            </p>
+            <button id="empty-add" class="button primary">
+              ＋ Add your first camera
+            </button>
+          </div>
+          <div
+            id="cameras"
+            class="camera-grid"
+            data-density="auto"
+            aria-label="Camera feeds"
+          ></div>
+          <div class="wall-footer">
+            <span
+              >LOCAL MONITORING <span aria-hidden="true">/</span> PRIVATE BY
+              DESIGN</span
+            ><span id="wall-hint">Add cameras to begin</span>
+          </div>
+        </section>
+      </main>
+    </div>
+    <dialog id="add-dialog" aria-labelledby="add-title">
+      <form id="add-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">EXPAND YOUR VIEW</p>
+            <h2 id="add-title">Add a camera</h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-dialog"
+            aria-label="Close add camera"
+          >
+            ×
+          </button>
+        </div>
+        <p class="dialog-description">
+          Choose a source. Give it a name. Make it part of your wall.
+        </p>
+        <label
+          >Camera name<input
+            id="camera-name"
+            name="name"
+            placeholder="e.g. Front entrance"
+            maxlength="80"
+            required
+            autocomplete="off"
+            autofocus
+        /></label>
+        <label
+          >Source type<select id="source-type">
+            <option value="webcam">USB / built-in webcam</option>
+            <option value="network">Network camera</option>
+            <option value="file">Video file</option>
+          </select></label
+        >
+        <label
+          ><span id="source-label">Device index</span
+          ><input
+            id="camera-source"
+            name="source"
+            type="number"
+            min="0"
+            max="99"
+            step="1"
+            value="0"
+            required
+        /></label>
+        <p id="source-help" class="field-help">
+          First webcam is 0, second is 1. Each source can be connected once.
+        </p>
+        <div class="form-row">
+          <label
+            >Capture limit<select id="camera-fps">
+              <option value="10">10 FPS · Balanced</option>
+              <option value="15" selected>15 FPS · Smooth</option>
+              <option value="30">30 FPS · High</option>
+              <option value="5">5 FPS · Low load</option>
+            </select></label
+          ><label
+            >Computer vision<select id="camera-pipeline">
+              <option value="motion">Motion awareness</option>
+              <option value="none">Video only</option>
+            </select></label
+          >
+        </div>
+        <label class="checkbox-label"
+          ><input id="camera-autostart" type="checkbox" checked /><span
+            >Start now and automatically on launch</span
+          ></label
+        >
+        <p id="form-error" class="form-error" role="alert" hidden></p>
+        <div class="dialog-footer">
+          <button type="button" class="button secondary close-dialog">
+            Cancel</button
+          ><button id="connect-camera" class="button primary" type="submit">
+            Connect camera <span aria-hidden="true">↗</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="remove-dialog" aria-labelledby="remove-title">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">CAMERA SETTINGS</p>
+          <h2 id="remove-title">Remove camera?</h2>
+        </div>
+        <button
+          class="icon-button close-remove"
+          aria-label="Close remove confirmation"
+        >
+          ×
+        </button>
+      </div>
+      <p id="remove-description" class="dialog-description"></p>
+      <p class="field-help">
+        The feed will stop and leave your saved camera list. You can add it
+        again anytime.
+      </p>
+      <div class="dialog-footer">
+        <button class="button secondary close-remove">Keep camera</button
+        ><button id="confirm-remove" class="button primary">
+          Remove camera
+        </button>
+      </div>
+    </dialog>
+    <template id="camera-template">
+      <article class="camera-card">
+        <div class="camera-heading">
+          <div class="camera-identity">
+            <span class="camera-number"></span>
+            <div>
+              <h3 class="camera-name"></h3>
+              <p class="camera-source"></p>
+            </div>
+          </div>
+          <span class="camera-state"><i></i><span></span></span>
+        </div>
+        <div class="video-stage">
+          <img class="camera-image" alt="" hidden />
+          <div class="video-placeholder">
+            <span class="scope-icon" aria-hidden="true"></span><strong></strong>
+            <p></p>
+          </div>
+          <div class="video-overlay">
+            <span class="video-caption"></span
+            ><button
+              class="video-focus"
+              aria-label="Focus camera"
+              title="Focus view"
+            >
+              ⛶
+            </button>
+          </div>
+        </div>
+        <div class="camera-footer">
+          <span class="motion-reading"><i></i><span></span></span>
+          <div class="tile-actions">
+            <button
+              class="fit-button"
+              title="Switch between full frame and filled tile"
+            >
+              Fit</button
+            ><button class="toggle-camera">Start</button
+            ><button
+              class="remove-camera"
+              aria-label="Remove camera"
+              title="Remove camera"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      </article>
+    </template>
+    <div id="focus-toolbar" hidden>
+      <span>FOCUS VIEW</span
+      ><button id="leave-focus" class="button secondary">
+        Back to wall <kbd>Esc</kbd>
+      </button>
+    </div>
+  </body>
 </html>
