@@ -497,10 +497,20 @@ function render() {
           ? (fraction > 0.02 ? "Motion " : "Quiet scene · ") +
             (fraction * 100).toFixed(1) +
             "%"
-          : "Video only"
+          : camera.pipeline === "vision"
+            ? camera.metadata.cv?.state === "ready"
+              ? camera.metadata.cv.engine +
+                " · " +
+                camera.metadata.cv.detections.length +
+                " detections"
+              : camera.metadata.cv?.state === "error"
+                ? "CV needs setup · preview stays live"
+                : "CV loading · preview stays live"
+            : "Video only"
         : camera.state === "error"
           ? "Connection needs attention"
           : "Not streaming";
+    $(".motion-reading", element).title = camera.metadata.cv?.message || "";
     $(".video-placeholder strong", element).textContent = !connected
       ? "Server disconnected"
       : {

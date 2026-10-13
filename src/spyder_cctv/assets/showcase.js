@@ -513,6 +513,7 @@
     return Response.json(data);
   }
   const sourceType = document.querySelector("#source-type");
+  document.querySelector('#camera-pipeline option[value="vision"]')?.remove();
   sourceType.replaceChildren(
     new Option("Generated demo feed", "demo"),
     new Option("Webcam on this computer", "webcam"),

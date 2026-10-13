@@ -181,3 +181,6 @@ cython_debug/
 .cursorindexingignore
 .worktrees/
 .wrangler/
+*.pt
+*.onnx
+*.safetensors

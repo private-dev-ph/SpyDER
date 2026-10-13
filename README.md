@@ -10,6 +10,11 @@ entirely in the visitor's browser. Build with `.venv/Scripts/python.exe tools/bu
 no deployment or cloud camera backend is required. The installed Python app remains the
 primary product, including RTSP and native driver controls.
 
+The [computer-vision foundation](docs/computer-vision.md) includes an asynchronous
+engine contract, built-in OpenCV person detection, and optional YOLO/InsightFace
+adapters. Models load from local files; inference failures leave preview running.
+Use `spyder-cctv vision-info` to inspect installed CV dependencies.
+
 ## Development environment
 
 ```powershell

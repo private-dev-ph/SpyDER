@@ -30,6 +30,7 @@ function runtime(
       pause() {},
       load() {},
       removeAttribute() {},
+      remove() {},
       play: async () => {},
       readyState: 2,
       videoWidth: 640,

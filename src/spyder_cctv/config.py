@@ -11,6 +11,7 @@ from pathlib import Path
 from platformdirs import user_config_path
 
 from spyder_cctv.controls import validate_settings
+from spyder_cctv.cv.contracts import VisionConfig
 
 
 def default_config_path() -> Path:
@@ -27,6 +28,7 @@ class CameraConfig:
     name: str = ""
     settings: dict[str, float] = field(default_factory=dict)
     profile_id: str | None = None
+    vision: VisionConfig | dict | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", self.id):
@@ -41,8 +43,21 @@ class CameraConfig:
             raise ValueError("fps must be a number")
         if not math.isfinite(self.fps) or not 0 < self.fps <= 60:
             raise ValueError("fps must be greater than 0 and at most 60")
-        if self.pipeline not in ("none", "motion"):
-            raise ValueError("pipeline must be 'none' or 'motion'")
+        if self.pipeline not in ("none", "motion", "vision"):
+            raise ValueError("pipeline must be 'none', 'motion' or 'vision'")
+        vision = self.vision
+        if isinstance(vision, dict):
+            try:
+                vision = VisionConfig(**vision)
+            except TypeError as error:
+                raise ValueError("Invalid vision configuration fields") from error
+        if vision is not None and not isinstance(vision, VisionConfig):
+            raise ValueError("Invalid vision configuration")
+        if self.pipeline != "vision" and vision is not None:
+            raise ValueError("Vision options require the vision pipeline")
+        object.__setattr__(
+            self, "vision", (vision or VisionConfig()) if self.pipeline == "vision" else None
+        )
         if not isinstance(self.autostart, bool):
             raise ValueError("autostart must be a boolean")
         if not isinstance(self.name, str) or len(self.name) > 80:
@@ -106,6 +121,8 @@ def load_app_config(path: Path) -> AppConfig:
                 camera,
                 source=str((path.parent / camera.source).resolve()),
             )
+        if camera.vision is not None:
+            camera = replace(camera, vision=camera.vision.resolve(path.parent))
         cameras.append(camera)
     if len({camera.id for camera in cameras}) != len(cameras):
         raise ValueError("Camera ids must be unique")
