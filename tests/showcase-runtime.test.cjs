@@ -290,3 +290,40 @@ test("recording retention exempts only its camera and disabling release keeps fe
   });
   assert.ok((await list(app)).every((c) => c.state === "running"));
 });
+
+test("recording state appears in camera status and manual pause is blocked until release", async () => {
+  const app = runtime();
+  const camera = (await list(app))[0];
+  await app.setRecording(camera.id, true);
+  assert.equal((await list(app)).find((entry) => entry.id === camera.id).recording, true);
+  await assert.rejects(app.request(`/api/cameras/${camera.id}/stop`), /Remove this camera from recording/);
+  await app.setRecording(camera.id, false);
+  assert.equal((await list(app)).find((entry) => entry.id === camera.id).recording, false);
+  await app.request(`/api/cameras/${camera.id}/stop`);
+});
+
+test("failed recording start rolls back the recording flag", async () => {
+  const app = runtime(async () => { throw new DOMException("denied", "NotAllowedError"); });
+  const camera = await app.request("/api/cameras", cameraData);
+  assert.equal(camera.state, "error");
+  await assert.rejects(app.setRecording(camera.id, true), /permission denied/);
+  assert.equal((await list(app)).find((entry) => entry.id === camera.id).recording, false);
+});
+
+test("frame source shares pending and cached JPEG work", async () => {
+  let encodes = 0;
+  let finish;
+  const app = runtime(undefined, new Map(), (callback) => {
+    encodes++;
+    finish = callback;
+  });
+  const camera = (await list(app))[0];
+  const one = app.getFrameSource(camera.id);
+  const two = app.getFrameSource(camera.id);
+  await Promise.resolve();
+  assert.equal(encodes, 1);
+  finish(new Blob(["jpeg"], { type: "image/jpeg" }));
+  assert.equal(await one, await two);
+  await app.getFrameSource(camera.id);
+  assert.equal(encodes, 1);
+});

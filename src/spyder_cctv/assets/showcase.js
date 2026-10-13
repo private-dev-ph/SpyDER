@@ -167,6 +167,7 @@
       desired: desired(camera),
       results: camera.results,
       settings_state: camera.settings_state,
+      recording: recording.has(camera.id),
       idle_suspended: sleeping.has(camera.id),
     };
   }
@@ -178,6 +179,7 @@
       fps: camera.fps,
       pipeline: camera.pipeline,
       state: camera.state,
+      recording: recording.has(camera.id),
       error: camera.error,
       frames: camera.frames,
       metadata: { motion_fraction: camera.motion || 0 },
@@ -235,6 +237,7 @@
   }
   function stop(camera) {
     camera.epoch++;
+    camera.framePromise = null;
     camera.track = null;
     camera.stream?.getTracks().forEach((track) => track.stop());
     camera.stream = null;
@@ -417,6 +420,14 @@
     const epoch = camera.epoch;
     if (camera.blob && performance.now() - camera.frameTime < 1000 / camera.fps)
       return camera.blob;
+    if (camera.framePromise) return camera.framePromise;
+    const pending = encodeFrame(camera, epoch).finally(() => {
+      if (camera.framePromise === pending) camera.framePromise = null;
+    });
+    camera.framePromise = pending;
+    return pending;
+  }
+  async function encodeFrame(camera, epoch) {
     const { context: ctx, canvas } = camera;
     if (camera.kind === "demo") {
       const t = performance.now() / 1000;
@@ -519,6 +530,8 @@
     const camera = get(parts[2]);
     // Serialize mutations per camera; stop/remove remain immediate to cancel permission prompts.
     if (parts[3] === "stop" || parts[3] === "remove") {
+      if (parts[3] === "stop" && recording.has(camera.id))
+        throw new Error("Remove this camera from recording before pausing it.");
       sleeping.delete(camera.id);
       stop(camera);
       if (parts[3] === "remove") {
@@ -667,7 +680,14 @@
       if (active) {
         recording.add(id);
         sleeping.delete(id);
-        await start(camera);
+        try {
+          await start(camera);
+          if (camera.state !== "running")
+            throw new Error(camera.error || "Camera could not start for recording.");
+        } catch (error) {
+          recording.delete(id);
+          throw error;
+        }
       } else {
         recording.delete(id);
         await reconcileActivity();
