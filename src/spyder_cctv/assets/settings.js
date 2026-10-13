@@ -31,7 +31,7 @@
   async function get(path, controller = new AbortController()) {
     const timeout = setTimeout(() => controller.abort(), 4000);
     try {
-      const response = await fetch(path, {
+      const response = await (window.spyderShowcase?.fetch || fetch)(path, {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -74,7 +74,15 @@
         busy || (!capability?.supported && !(name in draft));
     }
     find("#apply-settings").disabled = busy || !snapshot?.available;
-    find("#control-defaults").disabled = busy || !snapshot?.available;
+    find("#control-defaults").disabled =
+      busy ||
+      !snapshot?.available ||
+      !Object.values(snapshot.capabilities).some(
+        (c) => c.supported && typeof c.default_percent === "number",
+      );
+    find("#control-defaults").title = window.spyderShowcase
+      ? "Browsers do not report driver defaults"
+      : "Stage defaults for selected controls";
     find("#save-profile").disabled =
       busy || !Object.keys(selectedSettings()).length;
     find("#assign-profile").disabled = busy || !snapshot;
@@ -297,7 +305,11 @@
   });
   find("#control-defaults").addEventListener("click", () => {
     for (const [name, row] of rows)
-      if (snapshot.capabilities[name]?.supported && row.include.checked) {
+      if (
+        snapshot.capabilities[name]?.supported &&
+        row.include.checked &&
+        typeof snapshot.capabilities[name].default_percent === "number"
+      ) {
         row.slider.value = snapshot.capabilities[name].default_percent;
         row.output.textContent = percent(row.slider.value);
         if (row.include.checked) draft[name] = Number(row.slider.value);

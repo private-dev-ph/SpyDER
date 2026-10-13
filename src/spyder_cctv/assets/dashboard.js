@@ -72,6 +72,8 @@ function notify(text) {
   message.hidden = !text;
 }
 async function api(path, data) {
+  if (window.spyderShowcase)
+    return window.spyderShowcase.request(path, data || {});
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -190,7 +192,11 @@ $("#confirm-remove").addEventListener("click", async () => {
     await api("/api/cameras/" + removing + "/remove");
     if (focused === removing) leaveFocus();
     removeDialog.close();
-    notify("Camera removed. Your workspace is saved.");
+    notify(
+      window.spyderShowcase
+        ? "Camera removed from this tab."
+        : "Camera removed. Your workspace is saved.",
+    );
     await refresh();
   } catch (error) {
     removeDialog.close();
@@ -201,6 +207,7 @@ $("#confirm-remove").addEventListener("click", async () => {
 });
 
 function sourceTypeChanged() {
+  if (window.spyderShowcase) return window.spyderShowcase.configureSource();
   const type = $("#source-type").value;
   const input = $("#camera-source");
   input.value = type === "webcam" ? "0" : "";
@@ -233,7 +240,7 @@ function openAdd() {
   const used = new Set(cameras.map((camera) => camera.source_label));
   let device = 0;
   while (used.has("Webcam " + device)) device++;
-  $("#camera-source").value = device;
+  if (!window.spyderShowcase) $("#camera-source").value = device;
   $("#form-error").hidden = true;
   addDialog.showModal();
 }
@@ -263,14 +270,22 @@ $("#add-form").addEventListener("submit", async (event) => {
   try {
     const result = await api("/api/cameras", {
       name,
-      source: type === "webcam" ? Number(value) : value,
+      source: window.spyderShowcase
+        ? window.spyderShowcase.readSource()
+        : type === "webcam"
+          ? Number(value)
+          : value,
       fps: Number($("#camera-fps").value),
       pipeline: $("#camera-pipeline").value,
       autostart: $("#camera-autostart").checked,
     });
     addDialog.close();
     notify(
-      "“" + result.name + "” added. Your camera list is saved automatically.",
+      "“" +
+        result.name +
+        (window.spyderShowcase
+          ? "” added to this tab’s workspace."
+          : "” added. Your camera list is saved automatically."),
     );
     await refresh();
   } catch (failure) {
@@ -360,10 +375,13 @@ async function loadFrame(card) {
   card.controller = controller;
   const timeout = setTimeout(() => controller.abort(), 3500);
   try {
-    const response = await fetch("/api/cameras/" + card.camera.id + "/frame", {
-      cache: "no-store",
-      signal: controller.signal,
-    });
+    const response = await (window.spyderShowcase?.fetch || fetch)(
+      "/api/cameras/" + card.camera.id + "/frame",
+      {
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    );
     if (!response.ok) throw new Error("Frame unavailable");
     const blob = await response.blob();
     if (
@@ -536,7 +554,9 @@ function render() {
   $("#add-camera").disabled = $("#empty-add").disabled = !connected;
   $("#open-profiles").disabled = !connected;
   $("#connection").textContent = connected
-    ? "Local server online"
+    ? window.spyderShowcase
+      ? "Browser workspace ready"
+      : "Local server online"
     : "Server disconnected";
   reflow();
 }
@@ -546,10 +566,13 @@ async function refresh() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4000);
   try {
-    const response = await fetch("/api/cameras", {
-      cache: "no-store",
-      signal: controller.signal,
-    });
+    const response = await (window.spyderShowcase?.fetch || fetch)(
+      "/api/cameras",
+      {
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    );
     if (!response.ok) throw new Error("Status unavailable");
     cameras = await response.json();
     if (!connected) notify("");

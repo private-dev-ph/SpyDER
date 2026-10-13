@@ -16,6 +16,11 @@ jobs:
       - run: python -m ruff check .
       - run: python -m ruff format --check .
       - run: python -m pytest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/showcase-runtime.test.cjs
+      - run: python tools/build_showcase.py
       - run: python -m build
       - name: Verify installed wheel outside checkout
         shell: bash

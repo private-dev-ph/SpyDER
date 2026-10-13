@@ -9,6 +9,7 @@ from pathlib import Path
 
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import default_config_path, load_app_config, save_config
+from spyder_cctv.showcase import export_showcase
 from spyder_cctv.web import create_server
 
 
@@ -19,6 +20,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("init", help="Create a safe example configuration; never overwrite")
     commands.add_parser("check", help="Validate configuration without opening cameras")
+    showcase = commands.add_parser("export-showcase", help="Export a browser-only static showcase")
+    showcase.add_argument("--output", type=Path, default=Path("dist/showcase"))
     serve = commands.add_parser("serve", help="Start the local dashboard")
     serve.add_argument("--port", type=int, default=8765)
     gui = commands.add_parser("gui", help="Open the camera control room in your browser")
@@ -29,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
         args.command, args.port, args.no_browser = "gui", 8765, False
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
+        if args.command == "export-showcase":
+            export_showcase(args.output)
+            print(f"Static showcase: {args.output.resolve()}")
+            return 0
         if args.command == "init":
             args.config.parent.mkdir(parents=True, exist_ok=True)
             with args.config.open("x", encoding="utf-8") as target:
