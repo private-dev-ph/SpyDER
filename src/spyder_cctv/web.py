@@ -101,7 +101,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     ".svg": "image/svg+xml",
                     ".png": "image/png",
                     ".js": "text/javascript; charset=utf-8",
-                }[asset[asset.rfind("."):]]
+                }[asset[asset.rfind(".") :]]
                 self.send(
                     200,
                     files("spyder_cctv").joinpath("assets", asset).read_bytes(),
@@ -166,10 +166,10 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         or type(data["release_when_idle"]) is not bool
                     ):
                         raise ValueError("Invalid presence fields")
-                    manager.set_presence(
+                    enabled = manager.set_presence(
                         client_id, data["active"], data["release_when_idle"]
                     )
-                    self.json(200, {"accepted": True})
+                    self.json(200, {"accepted": True, "idle_policy": enabled})
                 elif parts == ["api", "profiles"]:
                     data = self.body()
                     data.setdefault("id", "profile-" + uuid4().hex[:12])

@@ -20,6 +20,17 @@ const stateLabels = {
 const addDialog = $("#add-dialog");
 const removeDialog = $("#remove-dialog");
 
+function makeIcon(name) {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.classList.add("icon");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", "/icons.svg#" + name);
+  icon.append(use);
+  return icon;
+}
+
 function readPreference(key, fallback) {
   try {
     return localStorage.getItem(key) || fallback;
@@ -39,6 +50,11 @@ function setTheme(theme) {
   const next = theme === "light" ? "dark" : "light";
   $("#theme").setAttribute("aria-label", "Switch to " + next + " mode");
   $("#theme").title = "Switch to " + next + " mode";
+  $("#theme").replaceChildren(makeIcon(next === "dark" ? "moon" : "sun"));
+  $("meta[name=theme-color]")?.setAttribute(
+    "content",
+    theme === "dark" ? "#141313" : "#f7f5ef",
+  );
 }
 setTheme(readPreference("spyder-theme", "light") === "dark" ? "dark" : "light");
 $("#theme").addEventListener("click", () => {
@@ -330,7 +346,7 @@ function createCard(camera) {
   $(".fit-button", element).addEventListener("click", (event) => {
     const fill = element.dataset.fit !== "fill";
     element.dataset.fit = fill ? "fill" : "fit";
-    event.currentTarget.textContent = fill ? "Fill" : "Fit";
+    $(".action-label", event.currentTarget).textContent = fill ? "Fill" : "Fit";
     event.currentTarget.setAttribute("aria-pressed", String(fill));
   });
   $(".camera-image", element).addEventListener("load", () => {
@@ -434,7 +450,12 @@ function render() {
     const card = cards.get(camera.id) || createCard(camera);
     card.camera = camera;
     const element = card.element;
-    element.dataset.state = connected ? camera.state : "disconnected";
+    const released = camera.idle_suspended && camera.state === "stopped";
+    element.dataset.state = connected
+      ? released
+        ? "released"
+        : camera.state
+      : "disconnected";
     $(".camera-number", element).textContent = String(index + 1).padStart(
       2,
       "0",
@@ -444,7 +465,9 @@ function render() {
     $(".camera-source", element).textContent =
       camera.source_label + " · " + camera.fps + " FPS cap";
     $(".camera-state span", element).textContent = connected
-      ? stateLabels[camera.state] || camera.state
+      ? released
+        ? "RELEASED"
+        : stateLabels[camera.state] || camera.state
       : "DISCONNECTED";
     $(".camera-image", element).alt = "Live camera: " + camera.name;
     $(".video-caption", element).textContent = camera.name;
@@ -457,12 +480,21 @@ function render() {
       "Remove " + camera.name,
     );
     const toggle = $(".toggle-camera", element);
-    toggle.textContent =
+    const toggleLabel =
       camera.state === "error"
         ? "Retry"
         : ["running", "starting"].includes(camera.state)
           ? "Pause"
-          : "Start";
+          : released
+            ? "Resume"
+            : "Start";
+    if (toggle.dataset.label !== toggleLabel) {
+      toggle.replaceChildren(
+        makeIcon(toggleLabel === "Pause" ? "pause" : "play"),
+        document.createTextNode(toggleLabel),
+      );
+      toggle.dataset.label = toggleLabel;
+    }
     toggle.setAttribute("aria-label", toggle.textContent + " " + camera.name);
     toggle.disabled =
       !connected || pending.has(camera.id) || camera.state === "stopping";
@@ -509,24 +541,30 @@ function render() {
             : "Video only"
         : camera.state === "error"
           ? "Connection needs attention"
-          : "Not streaming";
+          : released
+            ? "Released while away"
+            : "Not streaming";
     $(".motion-reading", element).title = camera.metadata.cv?.message || "";
     $(".video-placeholder strong", element).textContent = !connected
       ? "Server disconnected"
-      : {
-          stopped: "Your camera is paused",
-          starting: "Connecting your camera…",
-          stopping: "Stopping the feed…",
-          error: "Camera unavailable",
-          running: "Waiting for your first frame…",
-        }[camera.state];
+      : released
+        ? "Camera released while away"
+        : {
+            stopped: "Your camera is paused",
+            starting: "Connecting your camera…",
+            stopping: "Stopping the feed…",
+            error: "Camera unavailable",
+            running: "Waiting for your first frame…",
+          }[camera.state];
     $(".video-placeholder p", element).textContent = !connected
       ? "Start the application to bring your workspace back online."
-      : camera.state === "error"
-        ? "Check the device, stream address or camera permissions. Then retry."
-        : camera.state === "stopped"
-          ? "Press Start to bring this view online."
-          : "Each camera connects independently.";
+      : released
+        ? "Return to this view to reconnect. Manually paused cameras stay paused."
+        : camera.state === "error"
+          ? "Check the device, stream address or camera permissions. Then retry."
+          : camera.state === "stopped"
+            ? "Press Start to bring this view online."
+            : "Each camera connects independently.";
     if (camera.state === "running" && connected) {
       if (!card.loading && !card.timer) loadFrame(card);
     } else {
@@ -568,6 +606,11 @@ function render() {
       ? "Browser workspace ready"
       : "Local server online"
     : "Server disconnected";
+  $(".connection-row").dataset.connected = String(connected);
+  $(".connection-row").dataset.idle = String(
+    cameras.some((c) => c.idle_suspended) &&
+      !cameras.some((c) => ["running", "starting"].includes(c.state)),
+  );
   reflow();
 }
 async function refresh() {

@@ -12,6 +12,7 @@ function runtime(
   encode = (callback) => callback(new Blob(["jpeg"], { type: "image/jpeg" })),
 ) {
   const elements = new Map();
+  const idleCallbacks = new Set();
   function element() {
     return {
       value: "demo",
@@ -83,6 +84,11 @@ function runtime(
     DOMException,
     crypto: require("node:crypto").webcrypto,
     performance,
+    setTimeout: (callback) => {
+      idleCallbacks.add(callback);
+      return callback;
+    },
+    clearTimeout: (callback) => idleCallbacks.delete(callback),
     Uint8ClampedArray,
     fetch: () => {
       throw new Error("Network access forbidden");
@@ -95,6 +101,11 @@ function runtime(
     ),
     context,
   );
+  window.spyderShowcase.flushIdle = async () => {
+    for (const callback of idleCallbacks) callback();
+    idleCallbacks.clear();
+    await Promise.resolve();
+  };
   return window.spyderShowcase;
 }
 const list = async (app) => (await app.fetch("/api/cameras")).json();
@@ -220,4 +231,62 @@ test("pausing during JPEG encoding discards the late frame", async () => {
   finish(new Blob(["late jpeg"], { type: "image/jpeg" }));
   await assert.rejects(frame, /stopped while encoding/);
   assert.equal((await list(app))[0].state, "stopped");
+});
+
+test("idle presence releases owned tracks and restores only policy-paused cameras", async () => {
+  const devices = [];
+  const app = runtime(async () => {
+    const device = track();
+    devices.push(device);
+    return { getTracks: () => [device], getVideoTracks: () => [device] };
+  });
+  const camera = await app.request("/api/cameras", cameraData);
+  const manuallyPaused = (await list(app))[0];
+  await app.request(`/api/cameras/${manuallyPaused.id}/stop`);
+  await app.request("/api/presence", {
+    active: false,
+    release_when_idle: true,
+  });
+  await app.flushIdle();
+  assert.equal(devices[0].stopped, true);
+  assert.equal(
+    (await list(app)).find((c) => c.id === camera.id).idle_suspended,
+    true,
+  );
+  await app.request("/api/presence", { active: true, release_when_idle: true });
+  assert.equal(
+    (await list(app)).find((c) => c.id === camera.id).state,
+    "running",
+  );
+  assert.equal(
+    (await list(app)).find((c) => c.id === manuallyPaused.id).state,
+    "stopped",
+  );
+  await app.request(`/api/cameras/${camera.id}/remove`);
+});
+
+test("recording retention exempts only its camera and disabling release keeps feeds", async () => {
+  const app = runtime();
+  const [first, second] = await list(app);
+  await app.setRecording(first.id, true);
+  await app.request("/api/presence", {
+    active: false,
+    release_when_idle: true,
+  });
+  await app.flushIdle();
+  assert.equal(
+    (await list(app)).find((c) => c.id === first.id).state,
+    "running",
+  );
+  assert.equal(
+    (await list(app)).find((c) => c.id === second.id).idle_suspended,
+    true,
+  );
+  await app.setRecording(first.id, false);
+  assert.ok((await list(app)).every((c) => c.state === "stopped"));
+  await app.request("/api/presence", {
+    active: false,
+    release_when_idle: false,
+  });
+  assert.ok((await list(app)).every((c) => c.state === "running"));
 });

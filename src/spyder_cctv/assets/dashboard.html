@@ -5,17 +5,24 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>SpyDER · Control room</title>
-    <link rel="icon" href="data:," />
+    <meta name="theme-color" content="#f7f5ef" />
+    <link rel="icon" type="image/png" href="/spyder-emblem.png" />
     <link rel="stylesheet" href="/dashboard.css" />
     <link rel="stylesheet" href="/settings.css" />
     <script src="/dashboard.js" defer></script>
     <script src="/settings.js" defer></script>
+    <script src="/activity.js" defer></script>
   </head>
   <body>
     <header class="topbar">
       <a class="brand" href="/" aria-label="SpyDER home"
-        ><span class="brand-mark" aria-hidden="true">S<span>+</span></span
-        ><span>SpyDER<small>VISION SYSTEMS</small></span></a
+        ><img
+          class="brand-mark"
+          src="/spyder-emblem.png"
+          alt=""
+          width="56"
+          height="56"
+        /><span>SpyDER<small>VISION SYSTEMS</small></span></a
       >
       <div class="room-label">
         <span class="status-dot"></span> LOCAL CONTROL ROOM
@@ -28,7 +35,9 @@
           aria-label="Switch to dark mode"
           title="Switch theme"
         >
-          ◐
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="/icons.svg#moon" />
+          </svg>
         </button>
       </div>
     </header>
@@ -36,18 +45,25 @@
       <aside class="rail" aria-label="Workspace">
         <div class="rail-heading">WORKSPACE</div>
         <div class="rail-current">
-          <span aria-hidden="true">▦</span> Camera wall
+          <span aria-hidden="true"
+            ><svg class="icon" aria-hidden="true" focusable="false">
+              <use href="/icons.svg#grid" /></svg
+          ></span>
+          Camera wall
           <span id="rail-count" class="rail-count">0</span>
         </div>
         <div class="rail-note">
-          <span class="scope-icon" aria-hidden="true"></span
+          <svg class="scope-icon" aria-hidden="true" focusable="false">
+            <use href="/icons.svg#lens" /></svg
           ><strong>Every angle.<br />One clear view.</strong>
           <p>Your cameras, together.<br />Control each one independently.</p>
         </div>
         <div class="rail-footer">
-          <span class="status-dot"></span
-          ><span id="connection">Connecting…</span
-          ><small>Runs on this computer</small>
+          <div class="connection-row">
+            <span class="status-dot"></span
+            ><span id="connection">Connecting…</span>
+          </div>
+          <small>Runs on this computer</small>
         </div>
       </aside>
       <main>
@@ -60,9 +76,16 @@
             </p>
           </div>
           <div class="heading-actions">
-            <button id="open-profiles" class="button secondary">Profiles</button
+            <button id="open-profiles" class="button secondary">
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#profiles" /></svg
+              ><span class="action-label">Profiles</span></button
             ><button id="add-camera" class="button primary">
-              <span aria-hidden="true">＋</span> Add camera
+              <span aria-hidden="true"
+                ><svg class="icon" aria-hidden="true" focusable="false">
+                  <use href="/icons.svg#plus" /></svg
+              ></span>
+              Add camera
             </button>
           </div>
         </section>
@@ -87,7 +110,9 @@
             >
           </div>
           <div class="overview-note">
-            <span class="scope-icon" aria-hidden="true"></span>
+            <svg class="scope-icon" aria-hidden="true" focusable="false">
+              <use href="/icons.svg#lens" />
+            </svg>
             <div>
               <strong>Built for the bigger picture.</strong>
               <p>The wall adapts as your camera setup grows.</p>
@@ -110,9 +135,29 @@
                   <option value="compact">Compact</option>
                   <option value="large">Large</option>
                 </select></label
-              ><button id="start-all" class="button secondary">Start all</button
-              ><button id="stop-all" class="button secondary">Pause all</button>
+              ><button id="start-all" class="button secondary">
+                <svg class="icon" aria-hidden="true" focusable="false">
+                  <use href="/icons.svg#play" /></svg
+                ><span class="action-label">Start all</span></button
+              ><button id="stop-all" class="button secondary">
+                <svg class="icon" aria-hidden="true" focusable="false">
+                  <use href="/icons.svg#pause" /></svg
+                ><span class="action-label">Pause all</span>
+              </button>
             </div>
+          </div>
+          <div class="activity-policy">
+            <label class="release-toggle"
+              ><input id="release-idle" type="checkbox" checked /><svg
+                class="icon"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <use href="/icons.svg#leaf" /></svg
+              ><span>Release cameras when away</span></label
+            ><span id="activity-note" role="status" aria-live="polite"
+              >Cameras release when this view is away</span
+            >
           </div>
           <div
             id="message"
@@ -122,18 +167,24 @@
             hidden
           ></div>
           <div id="empty" class="empty-state" hidden>
-            <span class="scope-icon" aria-hidden="true"></span>
+            <svg class="scope-icon" aria-hidden="true" focusable="false">
+              <use href="/icons.svg#lens" />
+            </svg>
             <h3>Your first angle starts here.</h3>
             <p>
               Add a webcam, a network stream, or a video file.<br />Your camera
               wall will take care of the layout.
             </p>
             <button id="empty-add" class="button primary">
-              ＋ Add your first camera
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#plus" />
+              </svg>
+              Add your first camera
             </button>
           </div>
           <div
             id="cameras"
+            role="group"
             class="camera-grid"
             data-density="auto"
             aria-label="Camera feeds"
@@ -159,7 +210,9 @@
             class="icon-button close-dialog"
             aria-label="Close add camera"
           >
-            ×
+            <svg class="icon" aria-hidden="true" focusable="false">
+              <use href="/icons.svg#close" />
+            </svg>
           </button>
         </div>
         <p class="dialog-description">
@@ -225,7 +278,11 @@
           <button type="button" class="button secondary close-dialog">
             Cancel</button
           ><button id="connect-camera" class="button primary" type="submit">
-            Connect camera <span aria-hidden="true">↗</span>
+            Connect camera
+            <span aria-hidden="true"
+              ><svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#arrow" /></svg
+            ></span>
           </button>
         </div>
       </form>
@@ -240,7 +297,9 @@
           class="icon-button close-remove"
           aria-label="Close remove confirmation"
         >
-          ×
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="/icons.svg#close" />
+          </svg>
         </button>
       </div>
       <p id="remove-description" class="dialog-description"></p>
@@ -270,7 +329,9 @@
         <div class="video-stage">
           <img class="camera-image" alt="" hidden />
           <div class="video-placeholder">
-            <span class="scope-icon" aria-hidden="true"></span><strong></strong>
+            <svg class="scope-icon" aria-hidden="true" focusable="false">
+              <use href="/icons.svg#lens" /></svg
+            ><strong></strong>
             <p></p>
           </div>
           <div class="video-overlay">
@@ -280,7 +341,9 @@
               aria-label="Focus camera"
               title="Focus view"
             >
-              ⛶
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#focus" />
+              </svg>
             </button>
           </div>
         </div>
@@ -294,15 +357,22 @@
               class="fit-button"
               title="Switch between full frame and filled tile"
             >
-              Fit</button
-            ><button class="settings-camera">Settings</button
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#fit" /></svg
+              ><span class="action-label">Fit</span></button
+            ><button class="settings-camera">
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#settings" /></svg
+              ><span class="action-label">Settings</span></button
             ><button class="toggle-camera">Start</button
             ><button
               class="remove-camera"
               aria-label="Remove camera"
               title="Remove camera"
             >
-              ×
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="/icons.svg#close" />
+              </svg>
             </button>
           </div>
         </div>
@@ -319,7 +389,9 @@
           class="icon-button close-settings"
           aria-label="Close camera settings"
         >
-          ×
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="/icons.svg#close" />
+          </svg>
         </button>
       </div>
       <div class="settings-layout">
@@ -390,7 +462,9 @@
           <h2 id="profiles-title">Settings profiles</h2>
         </div>
         <button class="icon-button close-profiles" aria-label="Close profiles">
-          ×
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="/icons.svg#close" />
+          </svg>
         </button>
       </div>
       <p class="dialog-description">

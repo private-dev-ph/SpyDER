@@ -17,6 +17,9 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "settings.js",
         "settings.css",
         "showcase.js",
+        "activity.js",
+        "icons.svg",
+        "spyder-emblem.png",
         "_headers",
     }
     html = (output / "index.html").read_text(encoding="utf-8")

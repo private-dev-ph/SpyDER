@@ -2,8 +2,9 @@
 
 The main product remains the installed Python application (`spyder-cctv gui`).
 The showcase uses the same camera wall and settings UI with a browser-only
-runtime. Cloudflare serves seven small static files; it never receives camera
-frames, local files, profiles, or motion analysis. There is no Worker script,
+runtime. Cloudflare serves static interface assets, including the supplied emblem;
+it never receives camera frames, local files, profiles, or motion analysis.
+There is no Worker script,
 Pages Function, storage binding, inference service, stream proxy, or analytics
 SDK. Initial HTML/CSS/JavaScript downloads necessarily use the host; subsequent
 camera work uses the visitor's CPU, memory, camera devices, and browser storage.

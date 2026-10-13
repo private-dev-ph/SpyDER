@@ -6,7 +6,7 @@ from pathlib import Path
 HEADERS = (
     "/*\n"
     "  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; "
-    "img-src blob: data:; media-src blob:; connect-src 'none'; worker-src 'none'; "
+    "img-src 'self' blob: data:; media-src blob:; connect-src 'none'; worker-src 'none'; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'\n"
     """
   Permissions-Policy: camera=(self), microphone=(), geolocation=()
@@ -28,6 +28,15 @@ def export_showcase(output: Path) -> None:
         '    <script src="/dashboard.js" defer></script>',
     )
     (output / "index.html").write_text(html, encoding="utf-8")
-    for name in ("dashboard.js", "dashboard.css", "settings.js", "settings.css", "showcase.js"):
+    for name in (
+        "dashboard.js",
+        "dashboard.css",
+        "settings.js",
+        "settings.css",
+        "showcase.js",
+        "activity.js",
+        "icons.svg",
+        "spyder-emblem.png",
+    ):
         (output / name).write_bytes(assets.joinpath(name).read_bytes())
     (output / "_headers").write_text(HEADERS, encoding="utf-8")

@@ -2,6 +2,52 @@
 (() => {
   "use strict";
   const cameras = new Map();
+  const sleeping = new Set();
+  const recording = new Set();
+  let away = false;
+  let idleTimer;
+
+  async function reconcileActivity() {
+    if (away) {
+      for (const camera of cameras.values()) {
+        if (
+          recording.has(camera.id) ||
+          !["running", "starting"].includes(camera.state)
+        )
+          continue;
+        sleeping.add(camera.id);
+        camera.resumeTime = camera.video?.currentTime || 0;
+        stop(camera);
+      }
+    } else {
+      await Promise.allSettled(
+        [...sleeping].map(async (id) => {
+          sleeping.delete(id);
+          const camera = cameras.get(id);
+          if (camera) await start(camera);
+        }),
+      );
+    }
+  }
+
+  function presence(data) {
+    if (
+      typeof data.active !== "boolean" ||
+      typeof data.release_when_idle !== "boolean"
+    )
+      throw new Error("Invalid presence");
+    clearTimeout(idleTimer);
+    if (data.active || !data.release_when_idle) {
+      away = false;
+      return reconcileActivity();
+    }
+    if (away) return Promise.resolve();
+    idleTimer = setTimeout(() => {
+      away = true;
+      reconcileActivity();
+    }, 2000);
+    return Promise.resolve();
+  }
   const labels = {
     zoom: "Zoom",
     fov: "Field of view",
@@ -121,6 +167,7 @@
       desired: desired(camera),
       results: camera.results,
       settings_state: camera.settings_state,
+      idle_suspended: sleeping.has(camera.id),
     };
   }
   function status(camera) {
@@ -137,6 +184,7 @@
       profile_id: camera.profile_id,
       profile_name:
         profiles.find((p) => p.id === camera.profile_id)?.name || null,
+      idle_suspended: sleeping.has(camera.id),
       settings_state: camera.settings_state,
     };
   }
@@ -273,6 +321,12 @@
           if (camera.epoch === epoch) stop(camera);
         });
         await video.play();
+        if (
+          camera.kind === "file" &&
+          camera.resumeTime &&
+          camera.resumeTime < video.duration
+        )
+          video.currentTime = camera.resumeTime;
       }
       if (epoch !== camera.epoch) return;
       camera.state = "running";
@@ -352,7 +406,10 @@
     camera.sample.height = 45;
     cameras.set(camera.id, camera);
     camera.ptz = document.querySelector("#browser-ptz").checked;
-    if (data.autostart) await start(camera);
+    if (data.autostart) {
+      if (away) sleeping.add(camera.id);
+      else await start(camera);
+    }
     return status(camera);
   }
   async function frame(camera) {
@@ -436,6 +493,10 @@
     return blob;
   }
   async function request(path, data = {}) {
+    if (path === "/api/presence") {
+      await presence(data);
+      return { accepted: true };
+    }
     const parts = path.split("/").filter(Boolean);
     if (path === "/api/cameras") return add(data);
     if (path === "/api/profiles") {
@@ -458,8 +519,12 @@
     const camera = get(parts[2]);
     // Serialize mutations per camera; stop/remove remain immediate to cancel permission prompts.
     if (parts[3] === "stop" || parts[3] === "remove") {
+      sleeping.delete(camera.id);
       stop(camera);
-      if (parts[3] === "remove") cameras.delete(camera.id);
+      if (parts[3] === "remove") {
+        cameras.delete(camera.id);
+        recording.delete(camera.id);
+      }
       return status(camera);
     }
     const queuedEpoch = camera.epoch;
@@ -467,8 +532,13 @@
       if (!cameras.has(camera.id)) throw new Error("Camera removed.");
       if (camera.epoch !== queuedEpoch)
         throw new Error("Camera state changed. Retry this action.");
-      if (parts[3] === "start") await start(camera);
-      else if (parts[3] === "settings") {
+      if (parts[3] === "start") {
+        if (away && !recording.has(camera.id)) sleeping.add(camera.id);
+        else {
+          sleeping.delete(camera.id);
+          await start(camera);
+        }
+      } else if (parts[3] === "settings") {
         camera.settings = validate(data.settings);
         camera.profile_id = null;
         await apply(camera);
@@ -584,6 +654,19 @@
     enumerate().catch(() => {}),
   );
   window.spyderShowcase = {
+    setRecording: async (id, active) => {
+      const camera = get(id);
+      if (typeof active !== "boolean")
+        throw new Error("Recording state must be boolean");
+      if (active) {
+        recording.add(id);
+        sleeping.delete(id);
+        await start(camera);
+      } else {
+        recording.delete(id);
+        await reconcileActivity();
+      }
+    },
     request: async (...args) => {
       const result = await request(...args);
       enumerate().catch(() => {});
@@ -608,7 +691,11 @@
   document.querySelector("#remove-dialog .field-help").textContent =
     "This tab’s feed will stop and leave the wall. Saved browser profiles remain on this device.";
   window.addEventListener("pagehide", () => {
-    for (const c of cameras.values()) stop(c);
+    clearTimeout(idleTimer);
+    for (const c of cameras.values()) {
+      if (["running", "starting"].includes(c.state)) sleeping.add(c.id);
+      stop(c);
+    }
   });
   add({
     name: "Demo / North",

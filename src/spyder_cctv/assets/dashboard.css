@@ -82,6 +82,9 @@ select:focus-visible {
   outline-offset: 3px;
 }
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   height: 82px;
   padding: 0 34px;
   border-bottom: 1px solid var(--border);
@@ -109,23 +112,11 @@ select:focus-visible {
   color: var(--muted);
 }
 .brand-mark {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 39px;
-  height: 43px;
-  background: var(--accent);
-  color: white;
-  border-radius: 9px 2px 9px 2px;
-  font-size: 29px;
-  font-weight: 800;
-}
-.brand-mark span {
-  position: absolute;
-  font-size: 16px;
-  right: 2px;
-  bottom: 0;
-  color: var(--gold);
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 .room-label {
   display: flex;
@@ -171,6 +162,11 @@ select:focus-visible {
   min-height: calc(100vh - 82px);
 }
 .rail {
+  position: sticky;
+  top: 82px;
+  height: calc(100dvh - 82px);
+  align-self: start;
+  overflow: auto;
   background: var(--rail);
   border-right: 1px solid var(--border);
   padding: 34px 18px;
@@ -237,7 +233,29 @@ select:focus-visible {
   display: block;
   color: var(--muted);
   font-size: 10px;
-  margin: 7px 0 0 13px;
+  margin: 7px 0 0 14px;
+}
+.connection-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+}
+.connection-row .status-dot {
+  margin: 0;
+}
+.icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex-shrink: 0;
+}
+.icon-button {
+  flex-shrink: 0;
+}
+.icon-button .icon {
+  width: 20px;
+  height: 20px;
 }
 main {
   padding: 40px 38px 24px;
@@ -365,23 +383,7 @@ h1 span {
   height: 30px;
   width: 30px;
   flex-shrink: 0;
-  position: relative;
-  border: 1.5px solid var(--accent);
-  border-radius: 50%;
-}
-.scope-icon::before {
-  content: "";
-  position: absolute;
-  inset: 8px;
-  border: 1px solid var(--accent);
-  border-radius: 50%;
-}
-.scope-icon::after {
-  content: "";
-  position: absolute;
-  inset: -5px 13px;
-  background: var(--accent);
-  width: 1px;
+  color: var(--accent);
 }
 [data-theme="dark"] .scope-icon {
   --accent: var(--gold);
@@ -592,13 +594,15 @@ select,
   text-transform: uppercase;
 }
 .video-focus {
+  display: grid;
+  place-items: center;
   pointer-events: auto;
   color: white;
   background: #0007;
   border: 1px solid #ffffff40;
   border-radius: 5px;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   font-size: 18px;
 }
 .camera-footer {
@@ -637,6 +641,11 @@ select,
   gap: 6px;
 }
 .tile-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: 5px;
@@ -651,6 +660,7 @@ select,
   font-size: 17px;
   padding: 1px 7px;
   color: var(--muted);
+  min-width: 32px;
 }
 .tile-actions .remove-camera:hover {
   color: var(--danger);
@@ -925,6 +935,9 @@ kbd {
     font-size: 8px;
   }
   .metric-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 9px;
   }
 }
@@ -991,10 +1004,143 @@ kbd {
     transition: none !important;
   }
 }
+/* Controls stay usable in small tiles instead of clipping labels. */
+.camera-card {
+  container-type: inline-size;
+}
+.camera-heading {
+  min-width: 0;
+}
+.camera-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-actions {
+  flex-wrap: wrap;
+}
+.tile-actions .icon {
+  width: 14px;
+  height: 14px;
+}
+.activity-policy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 11px 14px;
+  margin: 0 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.release-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  cursor: pointer;
+  min-height: 24px;
+}
+.release-toggle input {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+.release-toggle .icon {
+  color: var(--accent);
+}
+#activity-note {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+#activity-note.error {
+  color: var(--danger);
+}
+.camera-card[data-state="released"] .camera-state {
+  color: var(--muted);
+  background: var(--gold-soft);
+}
+.camera-card[data-state="released"] .camera-state i {
+  background: var(--accent);
+}
+.connection-row[data-connected="false"] .status-dot {
+  background: var(--danger);
+}
+.connection-row[data-connected="true"][data-idle="true"] .status-dot {
+  background: var(--muted);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) var(--rail);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--rail);
+  border-radius: 12px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--control-border);
+  border: 2px solid var(--rail);
+  border-radius: 12px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+::-webkit-scrollbar-corner {
+  background: var(--rail);
+}
+dialog {
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+@container (max-width: 430px) {
+  .camera-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .camera-tuning {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .tile-actions {
+    justify-content: flex-end;
+  }
+}
+@media (pointer: coarse) {
+  .icon-button,
+  .video-focus {
+    width: 44px;
+    height: 44px;
+  }
+  .tile-actions button {
+    min-height: 40px;
+    padding: 7px 9px;
+  }
+  .release-toggle {
+    min-height: 36px;
+  }
+}
 /* Keep the camera wall visible on laptop displays and short app windows. */
 @media (max-height: 700px) and (min-width: 801px) {
   .topbar {
     height: 56px;
+  }
+  .rail {
+    top: 56px;
+    height: calc(100dvh - 56px);
   }
   .workspace {
     min-height: calc(100vh - 56px);

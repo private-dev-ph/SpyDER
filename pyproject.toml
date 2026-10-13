@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spyder-cctv"
-version = "0.5.0"
+version = "0.6.0"
 description = "Local multi-camera monitoring with pluggable computer vision"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,7 +22,7 @@ spyder-cctv = "spyder_cctv.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-spyder_cctv = ["assets/*.html", "assets/*.json", "assets/*.js", "assets/*.css"]
+spyder_cctv = ["assets/*.html", "assets/*.json", "assets/*.js", "assets/*.css", "assets/*.svg", "assets/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

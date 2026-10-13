@@ -48,6 +48,9 @@ def test_dashboard_assets_and_status(server):
         ("/", "text/html"),
         ("/dashboard.js", "text/javascript"),
         ("/dashboard.css", "text/css"),
+        ("/activity.js", "text/javascript"),
+        ("/icons.svg", "image/svg+xml"),
+        ("/spyder-emblem.png", "image/png"),
     ]:
         with urlopen(url + path, timeout=2) as response:
             assert response.status == 200
