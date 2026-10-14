@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import ctypes
 import math
 import os
@@ -20,10 +21,10 @@ INPUT_HEIGHT = 270
 INFERENCE_FPS = 5
 CPU_BUDGET = 0.60
 MAX_INSTANCES = 64
-_MEMORY_PER_INSTANCE = {"MOG2": 64 << 20, "Motion regions": 16 << 20, "MIL tracking": 32 << 20}
+_MEMORY_PER_INSTANCE = {"MOG2": 64 << 20, "Motion regions": 96 << 20, "MIL tracking": 256 << 20}
 
 
-def _memory_bytes() -> int | None:
+def _memory() -> tuple[int | None, int | None]:
     if sys.platform == "win32":
         class MemoryStatus(ctypes.Structure):
             _fields_ = [
@@ -41,34 +42,43 @@ def _memory_bytes() -> int | None:
         status = MemoryStatus()
         status.dwLength = ctypes.sizeof(status)
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-            return int(status.ullTotalPhys)
+            return int(status.ullTotalPhys), int(status.ullAvailPhys)
     if sys.platform.startswith("linux"):
         try:
-            return int(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            total = os.sysconf("SC_PHYS_PAGES") * page_size
+            available = os.sysconf("SC_AVPHYS_PAGES") * page_size
+            return int(total), int(available)
         except (OSError, ValueError, TypeError):
-            return None
-    return None
+            pass
+    return None, None
 
 
 def _hardware() -> dict[str, int | None]:
-    return {"logical_cpus": os.cpu_count(), "memory_bytes": _memory_bytes()}
+    total, available = _memory()
+    return {
+        "logical_cpus": os.cpu_count(),
+        "memory_bytes": total,
+        "available_memory_bytes": available,
+    }
 
 
 def _frame(index: int) -> np.ndarray:
     image = np.zeros((INPUT_HEIGHT, INPUT_WIDTH, 3), dtype=np.uint8)
     left = (index * 7) % (INPUT_WIDTH - 64)
     cv2.rectangle(image, (left, 80), (left + 48, 144), (220, 220, 220), -1)
+    cv2.rectangle(image, (220 - index * 2, 160), (260 - index * 2, 210), (180, 180, 180), -1)
     return image
 
 
 def _time_profile(
     operation: Callable[[], None], deadline: float, frames: int = 8
 ) -> float:
-    warmup = time.perf_counter()
-    operation()  # Warm up OpenCV and initialize lazy buffers.
-    warmup_ms = (time.perf_counter() - warmup) * 1000
     if time.monotonic() >= deadline:
-        return max(0.01, warmup_ms)
+        raise TimeoutError("Capacity benchmark deadline expired")
+    operation()  # Warm up OpenCV and initialize lazy buffers.
+    if time.monotonic() >= deadline:
+        raise TimeoutError("Capacity benchmark deadline expired")
     began = time.perf_counter()
     completed = 0
     for _ in range(frames):
@@ -94,37 +104,56 @@ def _benchmark() -> list[dict[str, Any]]:
         subtractor.apply(frames[index % len(frames)])
         index += 1
 
-    results.append({"name": "MOG2", "cost_ms": _time_profile(mog2, deadline)})
+    try:
+        results.append({"name": "MOG2", "cost_ms": _time_profile(mog2, deadline)})
+    except TimeoutError:
+        return results
 
-    previous = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY)
     index = 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
     def regions() -> None:
-        nonlocal previous, index
-        current = cv2.cvtColor(frames[index % len(frames)], cv2.COLOR_BGR2GRAY)
-        delta = cv2.absdiff(previous, current)
-        _, mask = cv2.threshold(delta, 20, 255, cv2.THRESH_BINARY)
-        mask = cv2.dilate(mask, None, iterations=2)
+        nonlocal index
+        frame = frames[index % len(frames)]
+        foreground = subtractor.apply(frame)
+        _, mask = cv2.threshold(foreground, 200, 255, cv2.THRESH_BINARY)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        cv2.connectedComponentsWithStats(mask, 8)
         cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        previous, index = current, index + 1
+        index += 1
 
-    if time.monotonic() < deadline:
-        results.append({"name": "Motion regions", "cost_ms": _time_profile(regions, deadline)})
+    def append_whole_stack(name: str, operation: Callable[[], None]) -> bool:
+        try:
+            measured = _time_profile(operation, deadline)
+        except TimeoutError:
+            return False
+        if results:
+            measured = max(measured, results[-1]["cost_ms"] + 0.01)
+        results.append({"name": name, "cost_ms": measured})
+        return True
+
+    if not append_whole_stack("Motion regions", regions):
+        return results
 
     tracker_factory = getattr(cv2, "TrackerMIL_create", None)
     if tracker_factory is None and hasattr(cv2, "legacy"):
         tracker_factory = getattr(cv2.legacy, "TrackerMIL_create", None)
     if tracker_factory is not None and time.monotonic() < deadline:
-        tracker = tracker_factory()
-        tracker.init(frames[0], (8, 80, 48, 64))
+        trackers = [tracker_factory(), tracker_factory()]
+        trackers[0].init(frames[0], (8, 80, 48, 64))
+        trackers[1].init(frames[0], (220, 160, 40, 50))
         index = 1
 
         def mil() -> None:
             nonlocal index
-            tracker.update(frames[index % len(frames)])
+            frame = frames[index % len(frames)]
+            regions()
+            for tracker in trackers:
+                tracker.update(frame)
             index += 1
 
-        results.append({"name": "MIL tracking", "cost_ms": _time_profile(mil, deadline)})
+        append_whole_stack("MIL tracking", mil)
     return results
 
 
@@ -137,6 +166,8 @@ def _active_work(statuses: object) -> tuple[int, float | None]:
     for status in statuses:
         if not isinstance(status, dict):
             continue
+        if status.get("state") not in ("running", "starting"):
+            continue
         metadata = status.get("metadata") or {}
         if not isinstance(metadata, dict):
             metadata = {}
@@ -146,22 +177,38 @@ def _active_work(statuses: object) -> tuple[int, float | None]:
         cv = metadata.get("cv") or {}
         if not isinstance(cv, dict):
             cv = {}
-        enabled = status.get("analysis_enabled", analysis.get("enabled", False))
+        analysis_settings = status.get("analysis_settings") or {}
+        if not isinstance(analysis_settings, dict):
+            analysis_settings = {}
+        enabled = status.get(
+            "analysis_enabled", analysis_settings.get("enabled", analysis.get("enabled", False))
+        )
         active += int(bool(enabled))
-        cost = analysis.get("processing_ms", cv.get("inference_ms"))
-        fps = analysis.get("inference_fps", status.get("inference_fps"))
-        if (
-            isinstance(cost, (int, float))
-            and not isinstance(cost, bool)
-            and math.isfinite(cost)
-            and cost >= 0
-            and isinstance(fps, (int, float))
-            and not isinstance(fps, bool)
-            and math.isfinite(fps)
-            and fps >= 0
+        for cost, fps in (
+            (
+                analysis.get("processing_ms"),
+                analysis_settings.get(
+                    "inference_fps",
+                    analysis.get("inference_fps", status.get("effective_fps")),
+                ),
+            ),
+            (
+                cv.get("inference_ms"),
+                status.get("vision_inference_fps", cv.get("inference_fps")),
+            ),
         ):
-            load += cost * fps / 1000
-            measured = True
+            if (
+                isinstance(cost, (int, float))
+                and not isinstance(cost, bool)
+                and math.isfinite(cost)
+                and cost >= 0
+                and isinstance(fps, (int, float))
+                and not isinstance(fps, bool)
+                and math.isfinite(fps)
+                and fps >= 0
+            ):
+                load += cost * fps / 1000
+                measured = True
     return active, round(load, 3) if measured else None
 
 
@@ -187,29 +234,42 @@ class CapacityAssessment:
 
     def start(self) -> dict[str, Any]:
         with self._lock:
-            if self._closed:
-                return self._snapshot_locked()
-            if self._thread is not None and self._thread.is_alive():
-                return self._snapshot_locked()
-            self._state, self._report, self._error = "running", None, None
-            self._thread = threading.Thread(
-                target=self._run, name="cv-capacity-assessment", daemon=True
-            )
-            self._thread.start()
-            return self._snapshot_locked()
+            if not self._closed and (self._thread is None or not self._thread.is_alive()):
+                self._state, self._report, self._error = "running", None, None
+                self._thread = threading.Thread(
+                    target=self._run, name="cv-capacity-assessment", daemon=True
+                )
+                self._thread.start()
+        return self.snapshot()
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            return self._snapshot_locked()
+            result = self._snapshot_locked()
+        if result["report"] is not None:
+            try:
+                active, load = _active_work(self._manager.statuses())
+            except Exception:
+                active, load = 0, None
+            result["report"]["active_analysis"] = active
+            result["report"]["observed_load"] = load
+        return result
 
     def _snapshot_locked(self) -> dict[str, Any]:
-        return {"state": self._state, "report": self._report, "error": self._error}
+        return {
+            "state": self._state,
+            "report": None if self._report is None else copy.deepcopy(self._report),
+            "error": self._error,
+        }
 
     def _run(self) -> None:
         try:
-            hardware = self._hardware_provider()
-            profiles = self._benchmark()
-            memory = hardware.get("memory_bytes")
+            hardware = copy.deepcopy(self._hardware_provider())
+            profiles = copy.deepcopy(self._benchmark())
+            if not profiles:
+                raise ValueError("No CV profiles completed")
+            memory = hardware.get("available_memory_bytes")
+            if not isinstance(memory, int) or memory <= 0:
+                memory = hardware.get("memory_bytes")
             for profile in profiles:
                 cost_ms = float(profile["cost_ms"])
                 if not math.isfinite(cost_ms) or cost_ms <= 0:
@@ -224,20 +284,21 @@ class CapacityAssessment:
                 profile["suggested_instances"] = min(MAX_INSTANCES, cpu_limit, memory_limit)
                 profile["inference_fps"] = INFERENCE_FPS
                 profile["input_width"] = INPUT_WIDTH
-            statuses = self._manager.statuses()
-            active, observed_load = _active_work(statuses)
             report = {
                 "hardware": hardware,
                 "profiles": profiles,
-                "active_analysis": active,
-                "observed_load": observed_load,
-                "message": (
-                    "Local synthetic CPU benchmark at 480×270 and 5 FPS. Estimates use 60% "
-                    "of one CPU lane and half of total RAM. Actual camera load depends on "
-                    "settings, scene, OpenCV threading and other work. Logical CPUs are "
-                    "informational."
-                ),
+                "active_analysis": 0,
+                "observed_load": None,
             }
+            report["message"] = (
+                "Synthetic CPU estimates use 480x270 input, 5 FPS, 60% of one CPU lane "
+                "and half of available RAM. Values are not CPU percentages or GPU "
+                "guarantees. Model inference cost depends on model and is not predicted; "
+                "observed_load estimates measured processing-seconds per second and may "
+                "exceed 1. Live camera timings update on each status read. Camera settings, "
+                "scene, OpenCV threading and other work affect capacity. Logical CPU count "
+                "is informational."
+            )
             with self._lock:
                 self._report, self._state = report, "ready"
         except Exception:
