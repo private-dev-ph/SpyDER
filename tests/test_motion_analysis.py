@@ -15,7 +15,7 @@ def image(rect=None, size=(120, 160)):
 
 def test_warmup_moving_regions_and_mask_are_binary():
     analyzer = MotionAnalyzer(
-        AnalysisConfig(warmup_frames=2, input_width=160, min_area_percent=0.2, overlay=False)
+        AnalysisConfig(warmup_frames=2, input_width=320, min_area_percent=0.2, overlay=False)
     )
     try:
         _, first = analyzer.process(image())
@@ -39,7 +39,7 @@ def test_threshold_region_switch_roi_and_shape_reset():
     analyzer = MotionAnalyzer(
         AnalysisConfig(
             warmup_frames=0,
-            input_width=160,
+            input_width=320,
             min_area_percent=0.1,
             components=False,
             contours=True,
@@ -87,6 +87,17 @@ def test_both_region_methods_disabled_and_validation():
         AnalysisConfig(tracking=True, contours=False, components=False)
     for kwargs in (
         {"threshold": True},
+        {"threshold": 3.99},
+        {"threshold": 128.01},
+        {"history": 19},
+        {"history": 2001},
+        {"learning_rate": -0.5},
+        {"min_area_percent": 0.009},
+        {"min_area_percent": 25.01},
+        {"inference_fps": 0.99},
+        {"inference_fps": 15.01},
+        {"input_width": 400},
+        {"warmup_frames": 121},
         {"history": 2.5},
         {"input_width": False},
         {"min_area_percent": float("nan")},
@@ -98,6 +109,23 @@ def test_both_region_methods_disabled_and_validation():
             AnalysisConfig.from_dict(kwargs)
     config = AnalysisConfig(roi=[0.1, 0.2, 0.3, 0.4])
     assert config.to_dict()["roi"] == [0.1, 0.2, 0.3, 0.4]
+
+
+def test_regions_cap_at_32_and_contours_can_be_disabled():
+    analyzer = MotionAnalyzer(
+        AnalysisConfig(components=True, contours=False, min_area_percent=0.01, input_width=320)
+    )
+    mask = np.zeros((320, 320), dtype=np.uint8)
+    for index in range(40):
+        x = 5 + (index % 8) * 38
+        y = 5 + (index // 8) * 38
+        mask[y : y + 8, x : x + 8] = 255
+    try:
+        regions = analyzer._regions(mask, 320, 320)
+        assert len(regions) == 32
+        assert all(region["contour"] == [] for region in regions)
+    finally:
+        analyzer.close()
 
 
 class FakeTracker:
@@ -118,7 +146,7 @@ def test_mil_tracker_persists_and_caps_tracks(monkeypatch):
             warmup_frames=0,
             tracking=True,
             max_tracks=1,
-            input_width=160,
+            input_width=320,
             min_area_percent=0.1,
             overlay=False,
         )
@@ -132,6 +160,34 @@ def test_mil_tracker_persists_and_caps_tracks(monkeypatch):
         _, second = analyzer.process(image((27, 30, 25, 25)))
         assert second["tracks"][0]["id"] == track_id
         assert second["tracks"][0]["bbox"][0] >= first["tracks"][0]["bbox"][0]
+        assert second["algorithm"] == "mog2"
+        assert second["inference_fps"] == 5.0
+    finally:
+        analyzer.close()
+
+
+def test_failed_mil_tracker_drops_track(monkeypatch):
+    class FailedTracker(FakeTracker):
+        def update(self, frame):
+            return False, self.box
+
+    monkeypatch.setattr(
+        MotionAnalyzer, "_find_tracker_factory", staticmethod(lambda: FailedTracker)
+    )
+    analyzer = MotionAnalyzer(
+        AnalysisConfig(warmup_frames=0, tracking=True, input_width=320, min_area_percent=0.1)
+    )
+    try:
+        analyzer.process(image())
+        analyzer.process(image((25, 30, 25, 25)))
+
+        class EmptySubtractor:
+            def apply(self, frame, learningRate=-1.0):
+                return np.zeros(frame.shape, dtype=np.uint8)
+
+        analyzer._subtractor = EmptySubtractor()
+        _, result = analyzer.process(image((25, 30, 25, 25)))
+        assert result["tracks"] == []
     finally:
         analyzer.close()
 

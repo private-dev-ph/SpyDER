@@ -120,10 +120,14 @@ class MotionAnalyzer:
                 int(round(w / scale_x)),
                 int(round(h / scale_y)),
             ]
-        output = frame.copy()
         if self.config.overlay:
+            output = frame.copy()
             self._draw(output, regions, tracks, width, height)
+        else:
+            output = frame
         metadata = {
+            "algorithm": "mog2",
+            "inference_fps": self.config.inference_fps,
             "state": "ready" if ready else "warming_up",
             "frame_size": [width, height],
             "motion_fraction": motion_fraction,
@@ -150,6 +154,13 @@ class MotionAnalyzer:
                 x, y, width, height, area = (int(value) for value in stats[index])
                 if area < min_area:
                     continue
+                candidates.append((x, y, width, height, area, index))
+            candidates = sorted(candidates, key=lambda item: item[4], reverse=True)[:32]
+            processed = []
+            for x, y, width, height, area, index in candidates:
+                if not self.config.contours:
+                    processed.append((x, y, width, height, area, []))
+                    continue
                 component = np.uint8(labels[y : y + height, x : x + width] == index) * 255
                 contours, _ = cv2.findContours(
                     component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -163,15 +174,22 @@ class MotionAnalyzer:
                     [int(round((px + x) * scale_x)), int(round((py + y) * scale_y))]
                     for px, py in contour.reshape(-1, 2)[:32]
                 ]
-                candidates.append((x, y, width, height, area, points))
+                processed.append((x, y, width, height, area, points))
+            candidates = processed
         elif self.config.contours:
             contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             candidates = []
+            contour_candidates = []
             for contour in contours:
                 area = int(cv2.contourArea(contour))
                 if area < min_area:
                     continue
                 x, y, width, height = cv2.boundingRect(contour)
+                contour_candidates.append((x, y, width, height, area, contour))
+            contour_candidates = sorted(contour_candidates, key=lambda item: item[4], reverse=True)[
+                :32
+            ]
+            for x, y, width, height, area, contour in contour_candidates:
                 points = [
                     [int(round(px * scale_x)), int(round(py * scale_y))]
                     for px, py in contour.reshape(-1, 2)[:32]
@@ -195,17 +213,28 @@ class MotionAnalyzer:
                     "contour": points,
                 }
             )
-        return output
+        return output[:32]
 
     def _update_tracks(self, frame: np.ndarray, regions: list[dict]) -> list[dict]:
         if not self.config.tracking or self._tracker_factory is None:
             self._tracks.clear()
             return []
+        frame_height, frame_width = frame.shape[:2]
         matched: set[int] = set()
         for track in list(self._tracks):
-            ok, box = track["tracker"].update(frame)
-            if ok:
-                track["bbox"] = [int(round(value)) for value in box]
+            try:
+                ok, box = track["tracker"].update(frame)
+            except cv2.error:
+                track["missed"] = 13
+                continue
+            if not ok:
+                track["missed"] = 13
+                continue
+            bounded = self._bounded_box(box, frame_width, frame_height)
+            if bounded is None:
+                track["missed"] = 13
+                continue
+            track["bbox"] = bounded
             choices = [index for index in range(len(regions)) if index not in matched]
             best = max(
                 choices,
@@ -223,7 +252,10 @@ class MotionAnalyzer:
         for index, region in enumerate(regions):
             if index in matched or len(self._tracks) >= self.config.max_tracks:
                 continue
-            x, y, width, height = region["bbox"]
+            bounded = self._bounded_box(region["bbox"], frame_width, frame_height)
+            if bounded is None:
+                continue
+            x, y, width, height = bounded
             tracker = self._tracker_factory()
             try:
                 initialized = tracker.init(frame, (x, y, width, height))
@@ -244,6 +276,26 @@ class MotionAnalyzer:
             {"id": track["id"], "bbox": list(track["bbox"]), "state": "tracking"}
             for track in self._tracks
         ]
+
+    @staticmethod
+    def _bounded_box(box, frame_width: int, frame_height: int) -> list[int] | None:
+        try:
+            x, y, width, height = (float(value) for value in box)
+        except (TypeError, ValueError):
+            return None
+        if (
+            not all(math.isfinite(value) for value in (x, y, width, height))
+            or width <= 0
+            or height <= 0
+        ):
+            return None
+        left = max(0, int(math.floor(x)))
+        top = max(0, int(math.floor(y)))
+        right = min(frame_width, int(math.ceil(x + width)))
+        bottom = min(frame_height, int(math.ceil(y + height)))
+        if right <= left or bottom <= top:
+            return None
+        return [left, top, right - left, bottom - top]
 
     @staticmethod
     def _draw(
