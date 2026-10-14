@@ -1080,7 +1080,7 @@ kbd {
 }
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--control-border) var(--rail);
+  scrollbar-color: var(--accent) var(--rail);
 }
 ::-webkit-scrollbar {
   width: 10px;
@@ -1091,12 +1091,12 @@ kbd {
   border-radius: 12px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--control-border);
+  background: var(--accent);
   border: 2px solid var(--rail);
   border-radius: 12px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: var(--accent-hover);
 }
 ::-webkit-scrollbar-corner {
   background: var(--rail);

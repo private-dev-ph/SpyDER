@@ -186,6 +186,11 @@
   left: 0;
   border-radius: 0 8px 8px 0;
 }
+/* Preserve the anchored hit area while pressed; the global button animation
+   otherwise replaces translateY(-50%) and moves the tab away from the pointer. */
+.wall-edge-tab:active:not(:disabled) {
+  transform: translateY(-50%);
+}
 .wall-edge-tab.right {
   right: 0;
   border-radius: 8px 0 0 8px;
