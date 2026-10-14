@@ -19,7 +19,7 @@
       let selected = "", cfg = { ...DEFAULTS }, runtime = {}, capacity = null;
       let pipeline = "none", capacityError = "", maskURL = "", maskState = "";
       let viewMode = "original", timer = 0, token = 0, controller = null;
-      let maskController = null, maskTimer = 0, drag = null;
+      let maskController = null, maskAbortTimer = 0, maskRefreshTimer = 0, drag = null;
       let dirty = false, busy = false, capacityBusy = false, mounted = true;
       let cameraSignature = "", loadedFor = null, polling = false, pollPending = false;
       let messageText = "", messageError = false;
@@ -96,7 +96,7 @@
               <label class="vl-view-picker"><span>Preview</span><select class="vl-view-mode" ${showcase ? "disabled" : ""}><option value="original" ${viewMode === "original" ? "selected" : ""}>Original</option><option value="mask" ${viewMode === "mask" ? "selected" : ""}>Foreground mask</option><option value="side-by-side" ${viewMode === "side-by-side" ? "selected" : ""}>Side by side</option></select><span class="vl-mask-note" role="status"></span></label>
               <div class="vl-stage" tabindex="0" aria-label="Camera preview. Drag to draw a region of interest."><div class="vl-image-pair"><img class="vl-image" alt="Selected camera live frame"><img class="vl-mask-image" alt="Native foreground mask"></div><div class="vl-roi-box" hidden></div></div>
               <div class="vl-metrics"><div><span>Processing</span><b data-metric="processing">—</b></div><div><span>Result age</span><b data-metric="age">—</b></div><div><span>Dropped frames</span><b data-metric="dropped">—</b></div><div><span>Regions</span><b data-metric="regions">0</b></div><div><span>Tracks</span><b data-metric="tracks">0</b></div></div>
-              <p class="vl-preview-note">ROI uses normalized source-image coordinates. Letterboxing is excluded. Analysis boxes come from native preview frames.</p><div class="vl-results"></div>
+              <p class="vl-preview-note">ROI uses normalized source-image coordinates. Letterboxing is excluded. Analysis boxes come from native preview frames.</p><p class="vl-runtime-note" role="status"></p><p class="vl-tracking-note" role="status"></p><div class="vl-results"></div>
             </section>
             <section class="workspace-panel vl-config">
               <div class="vl-section-head"><div><h2>Per-camera configuration</h2><span class="vl-sub">Changes take effect only after Apply</span></div><span class="vl-dirty" role="status">${dirty ? "Unsaved changes" : "Saved settings"}</span></div>
@@ -190,6 +190,10 @@
         }
         const results = root.querySelector(".vl-results");
         if (results) results.innerHTML = resultRows(r);
+        const runtimeNote = root.querySelector(".vl-runtime-note");
+        if (runtimeNote) runtimeNote.textContent = r.message || "";
+        const trackingNote = root.querySelector(".vl-tracking-note");
+        if (trackingNote) trackingNote.textContent = r.tracking_error || "";
         updateCapacity();
       }
       function updateCapacity() {
@@ -227,7 +231,7 @@
         const s = stage.getBoundingClientRect(), nw = img.naturalWidth || 16, nh = img.naturalHeight || 9;
         const availableWidth = viewMode === "side-by-side" ? s.width / 2 : s.width;
         const scale = Math.min(availableWidth / nw, s.height / nh), w = nw * scale, h = nh * scale;
-        return { x: (s.width - availableWidth) / 2, y: (s.height - h) / 2, w, h };
+        return { x: (availableWidth - w) / 2, y: (s.height - h) / 2, w, h };
       }
       function setROIFromPoint(a, b) {
         const img = imageRect(), stage = root.querySelector(".vl-stage").getBoundingClientRect();
@@ -253,8 +257,9 @@
         if (node) { node.textContent = text; node.classList.toggle("vl-error", error); }
       }
       function releaseMask() {
-        clearTimeout(maskTimer);
-        maskTimer = 0;
+        clearTimeout(maskAbortTimer);
+        clearTimeout(maskRefreshTimer);
+        maskAbortTimer = maskRefreshTimer = 0;
         maskController?.abort();
         maskController = null;
         if (maskURL) URL.revokeObjectURL(maskURL);
@@ -262,14 +267,13 @@
         maskState = "";
       }
       async function loadMask() {
-        releaseMask();
-        updatePreview();
         if (showcase || !selected || viewMode === "original") return;
+        if (maskController) return;
         const id = selected, t = token, requestController = new AbortController();
         maskController = requestController;
         const timeout = setTimeout(() => requestController.abort(), 4000);
-        maskTimer = timeout;
-        maskState = "Loading foreground mask…";
+        maskAbortTimer = timeout;
+        maskState = maskURL ? "Updating foreground mask…" : "Loading foreground mask…";
         updatePreview();
         try {
           const response = await fetch(`/api/cameras/${encodeURIComponent(id)}/analysis/mask`, { cache: "no-store", signal: requestController.signal });
@@ -278,16 +282,29 @@
           if (!response.ok) throw new Error("Foreground mask unavailable.");
           const blob = await response.blob();
           if (!mounted || t !== token || id !== selected) return;
-          maskURL = URL.createObjectURL(blob);
+          const nextURL = URL.createObjectURL(blob), previousURL = maskURL;
+          maskURL = nextURL;
+          if (previousURL) URL.revokeObjectURL(previousURL);
           maskState = "Native foreground mask";
         } catch (error) {
           if (mounted && t === token && error.name !== "AbortError") maskState = error.message;
         } finally {
           clearTimeout(timeout);
-          if (maskTimer === timeout) maskTimer = 0;
+          if (maskAbortTimer === timeout) maskAbortTimer = 0;
           if (maskController === requestController) maskController = null;
-          if (mounted && t === token) updatePreview();
+          if (mounted && t === token) {
+            updatePreview();
+            scheduleMaskRefresh(id, t);
+          }
         }
+      }
+      function scheduleMaskRefresh(id, t) {
+        clearTimeout(maskRefreshTimer);
+        if (showcase || !mounted || selected !== id || token !== t || viewMode === "original") return;
+        maskRefreshTimer = setTimeout(() => {
+          maskRefreshTimer = 0;
+          if (mounted && selected === id && token === t && viewMode !== "original") loadMask();
+        }, 1200);
       }
       function schedulePoll() {
         if (showcase || !mounted) return;
@@ -344,6 +361,7 @@
         controller?.abort();
         dirty = false;
         busy = false;
+        capacityBusy = false;
         runtime = {};
         capacityError = "";
         cfg = { ...DEFAULTS };
@@ -373,6 +391,7 @@
         if (event.target.id === "vl-camera") { switchCamera(event.target.value); return; }
         if (event.target.classList?.contains("vl-view-mode")) {
           viewMode = event.target.value;
+          if (viewMode === "original") releaseMask();
           updatePreview();
           loadMask();
           return;
@@ -407,6 +426,7 @@
         }
       };
       const onClick = async event => {
+        if (showcase || !mounted) return;
         const button = event.target.closest("button");
         if (!button) return;
         if (button.classList.contains("vl-clear-roi")) {
@@ -426,14 +446,23 @@
           dirty = true;
           root.querySelector(".vl-dirty").textContent = "Unsaved changes";
         } else if (button.classList.contains("vl-assess")) {
+          const t = token;
           capacityBusy = true;
           capacityError = "";
           updateCapacity();
           try {
-            capacity = await mutate("/api/analysis/assess", {});
+            const result = await mutate("/api/analysis/assess", {});
+            if (!mounted || t !== token) return;
+            capacity = result;
             setMessage("Capacity assessment started.");
-          } catch (error) { capacityError = error.message; }
-          finally { capacityBusy = false; updateCapacity(); if (selected && !polling) poll(); }
+          } catch (error) { if (mounted && t === token) capacityError = error.message; }
+          finally {
+            if (mounted && t === token) {
+              capacityBusy = false;
+              updateCapacity();
+              if (selected && !polling) poll();
+            }
+          }
         } else if (button.classList.contains("vl-recommend")) {
           root.querySelector('[name="inference_fps"]').value = button.dataset.fps;
           root.querySelector('[name="input_width"]').value = button.dataset.width;
@@ -445,6 +474,9 @@
       };
       const onPointerDown = event => {
         if (showcase || event.button !== 0 || !selected || !event.target.closest(".vl-stage")) return;
+        const rect = imageRect(), stage = root.querySelector(".vl-stage").getBoundingClientRect();
+        const x = event.clientX - stage.left, y = event.clientY - stage.top;
+        if (x < rect.x || x > rect.x + rect.w || y < rect.y || y > rect.y + rect.h) return;
         drag = { x: event.clientX, y: event.clientY };
         event.target.closest(".vl-stage").setPointerCapture(event.pointerId);
       };
@@ -465,6 +497,7 @@
           controller?.abort();
           dirty = false;
           busy = false;
+          capacityBusy = false;
           cfg = { ...DEFAULTS };
           runtime = {};
           clearTimeout(timer);

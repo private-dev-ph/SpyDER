@@ -31,6 +31,7 @@
 .vl-metrics span { color: var(--muted); font-size: 9px; }
 .vl-metrics b { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
 .vl-preview-note, .vl-help, .vl-disabled-note { color: var(--muted); font-size: 10px; line-height: 1.65; }
+.vl-runtime-note, .vl-tracking-note { margin: 5px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .vl-results { display: grid; gap: 7px; max-height: 180px; overflow: auto; }
 .vl-results > div { display: flex; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 10px; }
 .vl-results span { color: var(--muted); text-align: right; overflow-wrap: anywhere; }

@@ -10,7 +10,7 @@ const source = fs.readFileSync(
 );
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function setup({ showcase = false, fetcher, cameras } = {}) {
+function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
   const requests = [];
   const listeners = new Map();
   const timerMap = new Map();
@@ -74,7 +74,7 @@ function setup({ showcase = false, fetcher, cameras } = {}) {
     replaceChildren(...items) { this.children = items; }
     remove() { this.removed = true; }
     contains() { return false; }
-    getBoundingClientRect() { return { left: 0, top: 0, width: 640, height: 480 }; }
+    getBoundingClientRect() { return this.bounds || { left: 0, top: 0, width: 640, height: 480 }; }
     setPointerCapture() {}
     closest(selector) { return selector === ".vl-stage" ? this : selector === "form" ? this : null; }
     matches(selector) { return selector === "form" && this.selector === "form"; }
@@ -92,6 +92,8 @@ function setup({ showcase = false, fetcher, cameras } = {}) {
       if (selector === ".vl-preview-state") return this.previewState;
       if (selector === ".vl-pipeline-value") return this.pipelineValue;
       if (selector === ".vl-results") return this.results;
+      if (selector === ".vl-runtime-note") return this.runtimeNote;
+      if (selector === ".vl-tracking-note") return this.trackingNote;
       if (selector === ".vl-capacity-state") return this.capacityState;
       if (selector === ".vl-capacity-error") return this.capacityError;
       if (selector === ".vl-capacity-body") return this.capacityBody;
@@ -124,10 +126,13 @@ function setup({ showcase = false, fetcher, cameras } = {}) {
   root.previewState = new Element(".vl-preview-state");
   root.pipelineValue = new Element(".vl-pipeline-value");
   root.results = new Element(".vl-results");
+  root.runtimeNote = new Element(".vl-runtime-note");
+  root.trackingNote = new Element(".vl-tracking-note");
   root.capacityState = new Element(".vl-capacity-state");
   root.capacityError = new Element(".vl-capacity-error");
   root.capacityBody = new Element(".vl-capacity-body");
   root.assess = new Element(".vl-assess");
+  root.assess.className = "vl-assess";
   root.submitButton = new Element('button[type="submit"]');
   root.metrics = Object.fromEntries(["processing", "age", "dropped", "regions", "tracks"].map((key) => [key, new Element(key)]));
   const document = {
@@ -140,7 +145,7 @@ function setup({ showcase = false, fetcher, cameras } = {}) {
     spyder: {
       cameras: () => cameraList,
       frame: (id) => "blob:frame-" + id,
-      request: async (url, data) => { requests.push({ method: "POST", url, data }); return { state: "running" }; },
+      request: async (url, data) => { requests.push({ method: "POST", url, data }); return postRequest ? postRequest(url, data) : { state: "running" }; },
     },
     addEventListener(name, fn) { listeners.set("window:" + name, fn); },
     removeEventListener(name) { listeners.delete("window:" + name); },
@@ -173,6 +178,7 @@ test("showcase preview never calls native analysis or mask endpoints", async () 
   const h = setup({ showcase: true });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
+  h.root.dispatch("click", { target: { closest: () => h.root.assess } });
   await flush();
   assert.deepEqual(h.requests, []);
   h.window.spyderVisionLab.unmount();
@@ -220,6 +226,24 @@ test("ROI pointer coordinates exclude preview letterboxing", () => {
   });
 });
 
+test("ROI mapping handles 4:3 source letterboxing in original and side-by-side views", async () => {
+  const h = setup();
+  h.root.image.naturalWidth = 640;
+  h.root.image.naturalHeight = 480;
+  h.root.stage.bounds = { left: 0, top: 0, width: 640, height: 360 };
+  const draw = (a, b) => {
+    h.root.dispatch("pointerdown", { button: 0, clientX: a[0], clientY: a[1], pointerId: 1, target: h.root.stage });
+    h.root.dispatch("pointermove", { clientX: b[0], clientY: b[1], pointerId: 1, target: h.root.stage });
+  };
+  draw([128, 36], [512, 324]);
+  assert.deepEqual([+h.root.form.elements.roi_x.value, +h.root.form.elements.roi_y.value, +h.root.form.elements.roi_w.value, +h.root.form.elements.roi_h.value], [10, 10, 80, 80]);
+  h.root.viewSelect.value = "side-by-side";
+  h.root.dispatch("change", { target: h.root.viewSelect });
+  draw([32, 84], [288, 276]);
+  assert.deepEqual([+h.root.form.elements.roi_x.value, +h.root.form.elements.roi_y.value, +h.root.form.elements.roi_w.value, +h.root.form.elements.roi_h.value], [10, 10, 80, 80]);
+  h.window.spyderVisionLab.unmount();
+});
+
 test("mask image loads as binary blob and cleanup revokes it on unmount", async () => {
   const h = setup();
   h.root.viewSelect.value = "mask";
@@ -227,8 +251,35 @@ test("mask image loads as binary blob and cleanup revokes it on unmount", async 
   await flush();
   assert.ok(h.requests.some((r) => r.url === "/api/cameras/cam-a/analysis/mask"));
   assert.equal(h.root.maskImage.src, "blob:mask-0");
+  assert.ok([...h.timerMap.values()].some((timer) => timer.ms === 1200), "mask refresh is scheduled while mask view stays open");
   h.window.spyderVisionLab.unmount();
   assert.deepEqual(h.revoked, ["blob:mask-0"]);
+});
+
+test("mask refresh keeps prior image visible until replacement arrives", async () => {
+  let resolveReplacement;
+  let maskCalls = 0;
+  const h = setup({ fetcher: async (url) => {
+    if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
+    if (url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
+    maskCalls++;
+    if (maskCalls === 1) return { ok: true, blob: async () => new Blob(["first"]) };
+    return new Promise((resolve) => { resolveReplacement = resolve; });
+  } });
+  h.root.viewSelect.value = "mask";
+  h.root.dispatch("change", { target: h.root.viewSelect });
+  await flush();
+  assert.equal(h.root.maskImage.src, "blob:mask-0");
+  h.root.viewSelect.value = "side-by-side";
+  h.root.dispatch("change", { target: h.root.viewSelect });
+  await flush();
+  assert.equal(h.root.maskImage.src, "blob:mask-0");
+  assert.deepEqual(h.revoked, []);
+  resolveReplacement({ ok: true, blob: async () => new Blob(["second"]) });
+  await flush();
+  assert.equal(h.root.maskImage.src, "blob:mask-1");
+  assert.deepEqual(h.revoked, ["blob:mask-0"]);
+  h.window.spyderVisionLab.unmount();
 });
 
 test("removing selected camera revokes its mask and moves selection", async () => {
@@ -292,4 +343,40 @@ test("mask warming status is shown without reporting a request error", async () 
   assert.match(h.root.maskNote.textContent, /Foreground mask warming up/);
   assert.equal(h.root.message.classList.contains("vl-error"), false);
   h.window.spyderVisionLab.unmount();
+});
+
+test("runtime and tracking diagnostics stay visible after polling", async () => {
+  const h = setup({ fetcher: async (url) => {
+    if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
+    return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: { state: "warming_up", message: "Model warmup", tracking_error: "MIL tracker unavailable" } }) };
+  } });
+  await flush();
+  assert.equal(h.root.runtimeNote.textContent, "Model warmup");
+  assert.equal(h.root.trackingNote.textContent, "MIL tracker unavailable");
+  h.window.spyderVisionLab.unmount();
+});
+
+test("capacity result from prior camera cannot overwrite current workspace", async () => {
+  let resolveAssessment;
+  const h = setup({ postRequest: () => new Promise((resolve) => { resolveAssessment = resolve; }) });
+  const assess = h.root.assess;
+  h.root.dispatch("click", { target: { closest: () => assess } });
+  const before = h.root.capacityBody.innerHTML;
+  h.root.cameraSelect.value = "cam-b";
+  h.root.dispatch("change", { target: h.root.cameraSelect });
+  resolveAssessment({ state: "ready", report: { active_analysis: 99, profiles: [{ name: "stale" }] } });
+  await flush();
+  assert.equal(h.root.capacityBody.innerHTML, before);
+  h.window.spyderVisionLab.unmount();
+});
+
+test("capacity completion after unmount cannot update removed workspace", async () => {
+  let resolveAssessment;
+  const h = setup({ postRequest: () => new Promise((resolve) => { resolveAssessment = resolve; }) });
+  h.root.dispatch("click", { target: { closest: () => h.root.assess } });
+  const before = h.root.capacityBody.innerHTML;
+  h.window.spyderVisionLab.unmount();
+  resolveAssessment({ state: "ready", report: { active_analysis: 42 } });
+  await flush();
+  assert.equal(h.root.capacityBody.innerHTML, before);
 });
