@@ -560,6 +560,19 @@ function render() {
             ? "Released while away"
             : "Not streaming";
     $(".motion-reading", element).title = camera.metadata.cv?.message || "";
+    if (camera.analysis_enabled && camera.state === "running") {
+      const analysis = camera.metadata.analysis || {};
+      $(".motion-reading span", element).textContent =
+        analysis.state === "ready"
+          ? "MOG2 · " +
+            (analysis.region_count || 0) +
+            " regions · " +
+            (analysis.track_count || 0) +
+            " tracks"
+          : "Analysis · " + (analysis.state || "scheduled");
+      $(".motion-reading", element).title =
+        analysis.message || "Local motion analysis";
+    }
     $(".video-placeholder strong", element).textContent = !connected
       ? "Server disconnected"
       : released

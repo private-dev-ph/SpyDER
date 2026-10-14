@@ -5,6 +5,12 @@ from spyder_cctv.motion import MotionAnalyzer
 from spyder_cctv.motion_config import AnalysisConfig
 
 
+@pytest.mark.parametrize("value", [True, "auto", None, float("nan"), float("inf"), -0.1])
+def test_learning_rate_rejects_invalid_values(value):
+    with pytest.raises(ValueError):
+        AnalysisConfig(learning_rate=value)
+
+
 def image(rect=None, size=(120, 160)):
     frame = np.zeros((*size, 3), dtype=np.uint8)
     if rect:

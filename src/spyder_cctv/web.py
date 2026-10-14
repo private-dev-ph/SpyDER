@@ -9,19 +9,24 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from spyder_cctv.cameras import CameraManager
+from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.config import CameraConfig, SettingsProfile
 from spyder_cctv.recording import RecordingService
 
 
 def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServer:
     recorder = RecordingService(manager, manager.media_dir)
+    capacity = CapacityAssessment(manager)
 
     class LocalServer(ThreadingHTTPServer):
         def server_close(self) -> None:
             try:
                 recorder.close()
             finally:
-                super().server_close()
+                try:
+                    capacity.close()
+                finally:
+                    super().server_close()
 
     class Handler(BaseHTTPRequestHandler):
         # Reuse preview/status connections instead of exhausting local ephemeral ports.
@@ -115,6 +120,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/workspaces.css",
                 "/fullscreen.js",
                 "/fullscreen.css",
+                "/vision-lab.js",
+                "/vision-lab.css",
             ):
                 asset = path.removeprefix("/")
                 content_type = {
@@ -134,6 +141,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(200, manager.profiles())
             elif path == "/api/recordings":
                 self.json(200, recorder.status())
+            elif path == "/api/analysis/capacity":
+                self.json(200, capacity.snapshot())
             elif path == "/api/system":
                 disk = shutil.disk_usage(
                     manager.media_dir if manager.media_dir.exists() else manager.media_dir.parent
@@ -160,6 +169,27 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     self.json(404, {"error": "Unknown media"})
             else:
                 parts = path.strip("/").split("/")
+                if (
+                    len(parts) in (4, 5)
+                    and parts[:2] == ["api", "cameras"]
+                    and parts[3] == "analysis"
+                ):
+                    try:
+                        worker = manager.get_worker(parts[2])
+                    except KeyError:
+                        self.json(404, {"error": "Unknown camera"})
+                        return
+                    if len(parts) == 4:
+                        self.json(200, worker.analysis_snapshot())
+                    elif parts[4] == "mask":
+                        jpeg = worker.analysis_mask()
+                        if jpeg is None:
+                            self.json(503, {"error": "No fresh foreground mask available"})
+                        else:
+                            self.send(200, jpeg, "image/jpeg")
+                    else:
+                        self.json(404, {"error": "Unknown analysis route"})
+                    return
                 if (
                     len(parts) == 4
                     and parts[:2] == ["api", "cameras"]
@@ -192,7 +222,16 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
             try:
-                if parts in (
+                if parts == ["api", "analysis", "assess"]:
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(202, capacity.start())
+                elif len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "analysis":
+                    data = self.body()
+                    if set(data) != {"settings"}:
+                        raise ValueError("Send a settings object")
+                    self.json(202, manager.set_analysis(parts[2], data["settings"]))
+                elif parts in (
                     ["api", "recordings", "start"],
                     ["api", "recordings", "cameras"],
                     ["api", "captures"],

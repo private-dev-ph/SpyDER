@@ -123,6 +123,7 @@
     );
   }
   function route() {
+    window.spyderVisionLab?.unmount();
     const key = location.hash.slice(1);
     current = pages[key] ? key : "control-room";
     if (current !== "control-room") window.spyderWall?.exit();
@@ -177,7 +178,9 @@
       find("#capture-tiled").addEventListener("click", () =>
         act("/api/captures", [...selected]),
       );
-    } else if (["vision-lab", "camera-setup"].includes(current)) {
+    } else if (current === "vision-lab") {
+      window.spyderVisionLab?.mount(content);
+    } else if (current === "camera-setup") {
       content.innerHTML =
         '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section>';
       find("h2", content).textContent =
@@ -286,7 +289,7 @@
       : "Record / capture";
     indicator.dataset.recording = String(active());
     addCardActions();
-    if (["camera-setup", "vision-lab"].includes(current)) {
+    if (current === "camera-setup") {
       const list = find("#device-list");
       const signature = JSON.stringify(
         app
@@ -442,6 +445,10 @@
     }
   }
   window.addEventListener("hashchange", route);
+  window.addEventListener("spyder:vision-lab-ready", () => {
+    if (current === "vision-lab")
+      window.spyderVisionLab.mount(find("#workspace-content"));
+  });
   window.addEventListener("spyder:cameras", update);
   async function poll() {
     try {
