@@ -1,0 +1,293 @@
+/* Tile actions belong to the image; keyboard focus reveals the same controls. */
+.video-stage {
+  isolation: isolate;
+}
+.camera-footer {
+  position: absolute;
+  z-index: 3;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  color: #fff;
+  background: linear-gradient(transparent, #000e);
+  padding: 35px 12px 10px;
+  max-height: 100%;
+  overflow-y: auto;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(5px);
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+}
+.camera-card:hover .camera-footer,
+.camera-card:focus-within .camera-footer {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.camera-footer .motion-reading,
+.camera-footer .camera-profile {
+  color: #eee3d4;
+}
+.camera-footer .tile-actions button {
+  color: #fff;
+  background: #191716dc;
+  border-color: #b0a69b;
+}
+.camera-footer .tile-actions button:hover {
+  background: #830000;
+}
+.camera-footer .tile-actions button:focus-visible {
+  outline-color: #f7d87f;
+  outline-offset: -3px;
+}
+.camera-footer .record-camera[aria-pressed="true"] {
+  background: #be1a1a;
+}
+.camera-footer .video-focus {
+  width: auto;
+  min-width: 32px;
+  height: auto;
+}
+.video-overlay {
+  bottom: auto;
+  top: 0;
+  background: linear-gradient(#0009, transparent);
+  padding: 12px 14px 25px;
+}
+.camera-card[data-recording="true"] .camera-state::before {
+  content: "REC · ";
+  color: var(--danger);
+}
+.wall-fullscreen {
+  overflow: hidden;
+  background: #080808;
+}
+.wall-fullscreen .topbar,
+.wall-fullscreen .rail,
+.wall-fullscreen #control-room > :not(.wall-section),
+.wall-fullscreen .wall-section > :not(#cameras),
+.wall-fullscreen .workspace-message {
+  display: none;
+}
+.wall-fullscreen .workspace {
+  display: block;
+  min-height: 0;
+}
+.wall-fullscreen main {
+  padding: 0;
+  max-width: none;
+}
+.wall-fullscreen #cameras {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100dvh;
+  z-index: 11;
+  padding: 6px 38px;
+  gap: 6px;
+  grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+}
+.wall-fullscreen .camera-card {
+  position: relative;
+  min-height: 0;
+  border-radius: 5px;
+  background: #111313;
+}
+.wall-fullscreen .camera-heading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  pointer-events: none;
+  padding: 10px 12px 30px;
+  background: linear-gradient(#000c, transparent);
+  color: #fff;
+}
+.wall-fullscreen .camera-source,
+.wall-fullscreen .camera-number,
+.wall-fullscreen .video-caption {
+  display: none;
+}
+.wall-fullscreen .camera-state {
+  background: #0009;
+  color: #eee3d4;
+}
+.wall-fullscreen .camera-name {
+  font-size: 12px;
+}
+.wall-fullscreen .video-stage {
+  height: 100%;
+  aspect-ratio: auto;
+  max-height: none;
+  min-height: 0;
+}
+.wall-fullscreen .video-overlay {
+  display: none;
+}
+.wall-fullscreen .camera-footer {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  padding: 35px 9px 9px;
+}
+.wall-fullscreen .camera-tuning {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wall-fullscreen .tile-actions {
+  justify-content: flex-end;
+  gap: 4px;
+}
+.wall-fullscreen .tile-actions button {
+  font-size: 0;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 7px;
+}
+.wall-fullscreen .tile-actions .action-label {
+  font-size: 0;
+}
+.wall-fullscreen .tile-actions .icon {
+  width: 18px;
+  height: 18px;
+}
+.wall-fullscreen .camera-card.is-focused {
+  position: fixed;
+  inset: 12px 38px 75px;
+  z-index: 20;
+}
+.wall-fullscreen.has-focus #wall-chrome {
+  display: none;
+}
+#wall-chrome {
+  position: relative;
+  z-index: 30;
+}
+.wall-edge-tab {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 32;
+  width: 32px;
+  padding: 18px 7px;
+  writing-mode: vertical-rl;
+  border: 1px solid var(--control-border);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 1px;
+}
+.wall-edge-tab.left {
+  left: 0;
+  border-radius: 0 8px 8px 0;
+}
+.wall-edge-tab.right {
+  right: 0;
+  border-radius: 8px 0 0 8px;
+}
+.wall-edge-tab[aria-expanded="true"] {
+  background: var(--gold-soft);
+  border-color: var(--accent);
+}
+.wall-drawer {
+  position: fixed;
+  top: 8px;
+  bottom: 8px;
+  z-index: 31;
+  width: min(320px, calc(100vw - 52px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 45px #0008;
+}
+.wall-drawer.left {
+  left: 36px;
+}
+.wall-drawer.right {
+  right: 36px;
+}
+.wall-drawer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.wall-drawer h2 {
+  font-size: 18px;
+}
+.wall-drawer h3 {
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+.wall-drawer section {
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+}
+.wall-drawer section > .button {
+  margin-top: 10px;
+}
+.wall-tool-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wall-tool-buttons .button,
+.wall-drawer .button {
+  font-size: 11px;
+  padding: 9px 12px;
+}
+.wall-drawer label {
+  font-size: 11px;
+}
+.wall-idle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  line-height: 1.5;
+}
+.wall-idle input {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+#wall-workspaces {
+  margin-bottom: 24px;
+}
+#wall-workspaces .workspace-link {
+  padding-left: 0;
+}
+#wall-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 90px);
+  width: max-content;
+  z-index: 33;
+}
+@media (hover: none), (pointer: coarse) {
+  .camera-footer {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+  .wall-fullscreen .tile-actions button {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .camera-footer {
+    transition: none;
+  }
+}

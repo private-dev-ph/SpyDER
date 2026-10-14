@@ -67,6 +67,17 @@ $("#density").value = readPreference("spyder-density", "auto");
 if (!$("#density").value) $("#density").value = "auto";
 function reflow() {
   const count = Math.max(1, cards.size);
+  if (window.spyderWall?.active()) {
+    const layout = window.spyderWall.layout(
+      count,
+      wall.clientWidth,
+      wall.clientHeight,
+    );
+    wall.style.setProperty("--columns", layout.columns);
+    wall.style.setProperty("--rows", layout.rows);
+    return;
+  }
+  wall.style.removeProperty("--rows");
   const minimum = { auto: 330, compact: 260, large: 520 }[$("#density").value];
   const available = Math.max(
     1,
@@ -86,6 +97,7 @@ function notify(text) {
   const message = $("#message");
   message.textContent = text;
   message.hidden = !text;
+  window.dispatchEvent(new CustomEvent("spyder:notice", { detail: text }));
 }
 async function api(path, data) {
   if (window.spyderShowcase)
@@ -344,6 +356,7 @@ function createCard(camera) {
   $(".video-focus", element).addEventListener("click", (event) =>
     focusCamera(camera.id, event.currentTarget),
   );
+  $(".tile-actions", element).append($(".video-focus", element));
   $(".fit-button", element).addEventListener("click", (event) => {
     const fill = element.dataset.fit !== "fill";
     element.dataset.fit = fill ? "fill" : "fit";
@@ -687,5 +700,6 @@ window.spyder = {
   cameras: () => cameras,
   frame: (id) => cards.get(id)?.url,
   leaveFocus,
+  reflow,
 };
 poll();

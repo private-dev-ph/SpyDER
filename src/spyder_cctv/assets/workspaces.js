@@ -58,6 +58,7 @@
   function tell(text) {
     message.textContent = text;
     message.hidden = !text;
+    window.dispatchEvent(new CustomEvent("spyder:notice", { detail: text }));
   }
   function settings(id) {
     document.dispatchEvent(
@@ -124,6 +125,7 @@
   function route() {
     const key = location.hash.slice(1);
     current = pages[key] ? key : "control-room";
+    if (current !== "control-room") window.spyderWall?.exit();
     document.title = "SpyDER · " + pages[current][0];
     app.leaveFocus();
     chooser.value = current;
@@ -278,6 +280,7 @@
     }
   }
   function update() {
+    window.dispatchEvent(new CustomEvent("spyder:media", { detail: media }));
     indicator.textContent = active()
       ? "● REC · " + Math.floor(media.elapsed_seconds || 0) + "s"
       : "Record / capture";
@@ -449,6 +452,27 @@
     }
     setTimeout(poll, document.hidden ? 3000 : 1000);
   }
+  app.media = {
+    status: () => media,
+    recordLive: () =>
+      act(
+        "/api/recordings/start",
+        app
+          .cameras()
+          .filter((c) => c.state === "running")
+          .map((c) => c.id),
+      ),
+    stop: () => act("/api/recordings/stop"),
+    captureLive: () =>
+      act(
+        "/api/captures",
+        app
+          .cameras()
+          .filter((c) => c.state === "running")
+          .map((c) => c.id),
+      ),
+    busy: () => busy,
+  };
   route();
   poll();
 })();

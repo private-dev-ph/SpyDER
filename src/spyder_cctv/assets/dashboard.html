@@ -10,10 +10,12 @@
     <link rel="stylesheet" href="/dashboard.css" />
     <link rel="stylesheet" href="/settings.css" />
     <link rel="stylesheet" href="/workspaces.css" />
+    <link rel="stylesheet" href="/fullscreen.css" />
     <script src="/dashboard.js" defer></script>
     <script src="/settings.js" defer></script>
     <script src="/activity.js" defer></script>
     <script src="/workspaces.js" defer></script>
+    <script src="/fullscreen.js" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -144,6 +146,15 @@
                 >
               </div>
               <div class="wall-controls">
+                <button
+                  id="fullscreen-wall"
+                  class="button secondary"
+                  aria-pressed="false"
+                >
+                  <svg class="icon" aria-hidden="true">
+                    <use href="/icons.svg#focus" /></svg
+                  >Fullscreen wall
+                </button>
                 <label class="density-label"
                   >Tile size
                   <select id="density">
@@ -368,34 +379,34 @@
               </svg>
             </button>
           </div>
-        </div>
-        <div class="camera-footer">
-          <div class="camera-tuning">
-            <span class="motion-reading"><i></i><span></span></span
-            ><span class="camera-profile"></span>
-          </div>
-          <div class="tile-actions">
-            <button
-              class="fit-button"
-              title="Switch between full frame and filled tile"
-            >
-              <svg class="icon" aria-hidden="true" focusable="false">
-                <use href="/icons.svg#fit" /></svg
-              ><span class="action-label">Fit</span></button
-            ><button class="settings-camera">
-              <svg class="icon" aria-hidden="true" focusable="false">
-                <use href="/icons.svg#settings" /></svg
-              ><span class="action-label">Settings</span></button
-            ><button class="toggle-camera">Start</button
-            ><button
-              class="remove-camera"
-              aria-label="Remove camera"
-              title="Remove camera"
-            >
-              <svg class="icon" aria-hidden="true" focusable="false">
-                <use href="/icons.svg#close" />
-              </svg>
-            </button>
+          <div class="camera-footer">
+            <div class="camera-tuning">
+              <span class="motion-reading"><i></i><span></span></span
+              ><span class="camera-profile"></span>
+            </div>
+            <div class="tile-actions">
+              <button
+                class="fit-button"
+                title="Switch between full frame and filled tile"
+              >
+                <svg class="icon" aria-hidden="true" focusable="false">
+                  <use href="/icons.svg#fit" /></svg
+                ><span class="action-label">Fit</span></button
+              ><button class="settings-camera">
+                <svg class="icon" aria-hidden="true" focusable="false">
+                  <use href="/icons.svg#settings" /></svg
+                ><span class="action-label">Settings</span></button
+              ><button class="toggle-camera">Start</button
+              ><button
+                class="remove-camera"
+                aria-label="Remove camera"
+                title="Remove camera"
+              >
+                <svg class="icon" aria-hidden="true" focusable="false">
+                  <use href="/icons.svg#close" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       </article>

@@ -113,6 +113,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/activity.js",
                 "/workspaces.js",
                 "/workspaces.css",
+                "/fullscreen.js",
+                "/fullscreen.css",
             ):
                 asset = path.removeprefix("/")
                 content_type = {

@@ -41,6 +41,8 @@ def export_showcase(output: Path) -> None:
         "workspaces.js",
         "workspaces.css",
         "browser-recording.js",
+        "fullscreen.js",
+        "fullscreen.css",
     ):
         (output / name).write_bytes(assets.joinpath(name).read_bytes())
     (output / "_headers").write_text(HEADERS, encoding="utf-8")

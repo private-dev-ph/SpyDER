@@ -76,3 +76,25 @@ checkbox changes apply to the current video. Pause controls protect recorded
 cameras. Capture uses a separate browser canvas so it cannot alter a recording.
 Library links download finalized files only. Planned workspaces describe their
 scope without offering controls that pretend unfinished features already work.
+
+## Fullscreen Control Room
+
+**Fullscreen wall** enters browser fullscreen with all camera feeds tiled to fit
+the viewport. The left edge ribbon opens workspace navigation; the right ribbon
+opens live tools for camera settings/profiles, adding devices, starting/pausing
+unrecorded views, fit/fill, recording, capture, theme, and idle release. Drawers
+scroll independently in short windows and collapse when clicking outside them.
+Workspace navigation exits fullscreen. Browser fullscreen exit restores the wall.
+Unsupported fullscreen requests retain the camera-only window view with a notice.
+
+Tile actions live inside the feed and appear on hover or keyboard focus. Touch
+devices keep them visible. Camera names, state, and recording indicators remain
+visible. Existing preview nodes and recording owners are reused. Settings and
+confirmation dialogs remain available because the document root is fullscreen.
+Single-camera focus returns to the tiled fullscreen wall before leaving the wall.
+
+Chromium checks covered real Fullscreen API entry, settings dialog open/close,
+two and eight tiled feeds, mobile touch visibility, keyboard control revelation,
+quick capture, workspace navigation, and browser/API exit. Layout tests cover up
+to 24 cameras in landscape, portrait, and short windows. Other browser engines
+remain unverified. See [Fullscreen API behavior](https://developer.mozilla.org/en-US/docs/Web/API/Element/requestFullscreen).
