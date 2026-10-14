@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   const DEFAULTS = {
-    enabled: false, contours: true, components: false, tracking: false,
+    enabled: false, contours: true, components: true, tracking: false,
     threshold: 16, history: 300, learning_rate: -1, detect_shadows: true,
     min_area_percent: 0.5, inference_fps: 5, input_width: 480,
     warmup_frames: 15, max_tracks: 2, overlay: true, roi: null,
@@ -489,7 +489,7 @@
         const signature = JSON.stringify(cams().map(c => [c.id, c.name, c.state]));
         if (signature === cameraSignature) return;
         cameraSignature = signature;
-        if (selected && !cams().some(c => c.id === selected)) {
+        if ((!selected && cams().length > 0) || (selected && !cams().some(c => c.id === selected))) {
           releaseMask();
           selected = cams()[0]?.id || "";
           token++;
