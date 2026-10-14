@@ -37,10 +37,9 @@ class AnalysisConfig:
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
         numeric_ranges = {
-            "threshold": (0.0, 255.0, False),
-            "learning_rate": (-1.0, 1.0, False),
-            "min_area_percent": (0.0, 100.0, True),
-            "inference_fps": (0.1, 60.0, False),
+            "threshold": (4.0, 128.0, False),
+            "min_area_percent": (0.01, 25.0, False),
+            "inference_fps": (1.0, 15.0, False),
         }
         for name, (minimum, maximum, exclusive_minimum) in numeric_ranges.items():
             value = getattr(self, name)
@@ -52,16 +51,19 @@ class AnalysisConfig:
                 raise ValueError(f"{name} must be a finite number")
             if value > maximum or (value <= minimum if exclusive_minimum else value < minimum):
                 raise ValueError(f"{name} is outside its valid range")
+        if self.learning_rate != -1.0 and not 0.0 <= self.learning_rate <= 1.0:
+            raise ValueError("learning_rate must be -1 or from 0 to 1")
         integer_ranges = {
-            "history": (1, 10000),
-            "input_width": (1, 8192),
-            "warmup_frames": (0, 10000),
+            "history": (20, 2000),
+            "warmup_frames": (0, 120),
             "max_tracks": (1, 4),
         }
         for name, (minimum, maximum) in integer_ranges.items():
             value = getattr(self, name)
             if type(value) is not int or not minimum <= value <= maximum:
                 raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+        if type(self.input_width) is not int or self.input_width not in (320, 480, 640, 960):
+            raise ValueError("input_width must be 320, 480, 640 or 960")
         if not self.contours and not self.components and self.tracking:
             raise ValueError("tracking requires contours or components")
         if self.roi is not None:
