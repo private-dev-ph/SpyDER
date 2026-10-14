@@ -46,7 +46,7 @@ function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
       if (this.elements.threshold) {
         this.elements.enabled.checked = false;
         this.elements.contours.checked = true;
-        this.elements.components.checked = false;
+        this.elements.components.checked = true;
         this.elements.tracking.checked = false;
         this.elements.threshold.value = "16";
         this.elements.history.value = "300";
@@ -181,6 +181,19 @@ test("showcase preview never calls native analysis or mask endpoints", async () 
   h.root.dispatch("click", { target: { closest: () => h.root.assess } });
   await flush();
   assert.deepEqual(h.requests, []);
+  h.window.spyderVisionLab.unmount();
+});
+
+test("camera arriving after mount becomes selected and starts analysis polling", async () => {
+  const h = setup({ cameras: [] });
+  await flush();
+  assert.equal(h.requests.some((r) => r.url?.endsWith("/analysis")), false);
+  h.cameraList.push({ id: "cam-late", name: "Late camera", state: "running", pipeline: "vision", metadata: {} });
+  h.listeners.get("window:spyder:cameras")();
+  await flush();
+  assert.equal(h.root.cameraSelect.value, "cam-late");
+  assert.equal(h.root.image.src, "blob:frame-cam-late");
+  assert.ok(h.requests.some((r) => r.url === "/api/cameras/cam-late/analysis"));
   h.window.spyderVisionLab.unmount();
 });
 
