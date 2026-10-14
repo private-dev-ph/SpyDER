@@ -22,42 +22,68 @@ def wait_for(assessment, state, timeout=2):
     raise AssertionError(f"Assessment did not reach {state}")
 
 
-def test_capacity_report_uses_measured_cost_and_memory_cap():
+def test_capacity_estimates_measured_whole_stack_and_available_memory():
     manager = Manager(
         [
             {
-                "analysis_enabled": True,
-                "metadata": {"analysis": {"processing_ms": 20, "inference_fps": 5}},
+                "state": "running",
+                "analysis_settings": {"enabled": True, "inference_fps": 5},
+                "vision_inference_fps": 4,
+                "metadata": {
+                    "analysis": {"processing_ms": 20},
+                    "cv": {"inference_ms": 10},
+                },
             },
-            {"metadata": {"cv": {"inference_ms": 10}}, "inference_fps": 2},
-            {"metadata": {"cv": {"inference_ms": 5}}, "inference_fps": 4},
+            {
+                "state": "stopped",
+                "analysis_settings": {"enabled": True, "inference_fps": 30},
+                "metadata": {"analysis": {"processing_ms": 1000}},
+            },
         ]
     )
     assessment = CapacityAssessment(
         manager,
-        hardware_provider=lambda: {"logical_cpus": 32, "memory_bytes": 128 << 20},
+        hardware_provider=lambda: {
+            "logical_cpus": 32,
+            "memory_bytes": 8 << 30,
+            "available_memory_bytes": 256 << 20,
+        },
         benchmark=lambda: [
             {"name": "MOG2", "cost_ms": 20},
-            {"name": "Motion regions", "cost_ms": 0.1},
-            {"name": "MIL tracking", "cost_ms": 100},
+            {"name": "Motion regions", "cost_ms": 100},
+            {"name": "MIL tracking", "cost_ms": 400},
         ],
     )
     assessment.start()
     result = wait_for(assessment, "ready")
     report = result["report"]
+    profiles = report["profiles"]
 
-    assert report["hardware"] == {"logical_cpus": 32, "memory_bytes": 128 << 20}
-    assert [p["name"] for p in report["profiles"]] == [
+    assert [profile["name"] for profile in profiles] == [
         "MOG2",
         "Motion regions",
         "MIL tracking",
     ]
-    assert report["profiles"][0]["suggested_instances"] == 1
-    assert report["profiles"][1]["suggested_instances"] == 4
-    assert report["profiles"][2]["suggested_instances"] == 1
-    assert all(p["inference_fps"] == 5 and p["input_width"] == 480 for p in report["profiles"])
+    assert [profile["cost_ms"] for profile in profiles] == [20, 100, 400]
+    assert [profile["suggested_instances"] for profile in profiles] == [2, 1, 0]
+    assert all(profile["inference_fps"] == 5 for profile in profiles)
+    assert all(profile["input_width"] == 480 for profile in profiles)
+    assert report["hardware"] == {
+        "logical_cpus": 32,
+        "memory_bytes": 8 << 30,
+        "available_memory_bytes": 256 << 20,
+    }
     assert report["active_analysis"] == 1
     assert report["observed_load"] == 0.14
+    assert "not CPU percentages" in report["message"]
+    assert "not predicted" in report["message"]
+
+    profiles[0]["suggested_instances"] = 999
+    manager._statuses[0]["state"] = "stopped"
+    updated = assessment.snapshot()["report"]
+    assert updated["active_analysis"] == 0
+    assert updated["observed_load"] is None
+    assert updated["profiles"][0]["suggested_instances"] == 2
     assessment.close()
 
 
@@ -70,7 +96,8 @@ def test_capacity_assessment_does_not_start_duplicate_worker():
         return [{"name": "MOG2", "cost_ms": 1}]
 
     assessment = CapacityAssessment(
-        Manager(), hardware_provider=lambda: {"logical_cpus": 4, "memory_bytes": 8 << 30},
+        Manager(),
+        hardware_provider=lambda: {"logical_cpus": 4, "memory_bytes": 8 << 30},
         benchmark=benchmark,
     )
     assessment.start()
