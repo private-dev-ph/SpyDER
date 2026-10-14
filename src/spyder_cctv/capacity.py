@@ -26,6 +26,7 @@ _MEMORY_PER_INSTANCE = {"MOG2": 64 << 20, "Motion regions": 96 << 20, "MIL track
 
 def _memory() -> tuple[int | None, int | None]:
     if sys.platform == "win32":
+
         class MemoryStatus(ctypes.Structure):
             _fields_ = [
                 ("dwLength", ctypes.c_ulong),
@@ -71,9 +72,7 @@ def _frame(index: int) -> np.ndarray:
     return image
 
 
-def _time_profile(
-    operation: Callable[[], None], deadline: float, frames: int = 8
-) -> float:
+def _time_profile(operation: Callable[[], None], deadline: float, frames: int = 8) -> float:
     if time.monotonic() >= deadline:
         raise TimeoutError("Capacity benchmark deadline expired")
     operation()  # Warm up OpenCV and initialize lazy buffers.
@@ -187,9 +186,9 @@ def _active_work(statuses: object) -> tuple[int, float | None]:
         for cost, fps in (
             (
                 analysis.get("processing_ms"),
-                analysis_settings.get(
-                    "inference_fps",
-                    analysis.get("inference_fps", status.get("effective_fps")),
+                analysis.get(
+                    "effective_fps",
+                    analysis_settings.get("inference_fps", analysis.get("inference_fps")),
                 ),
             ),
             (

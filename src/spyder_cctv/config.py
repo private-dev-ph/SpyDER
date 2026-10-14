@@ -12,6 +12,7 @@ from platformdirs import user_config_path
 
 from spyder_cctv.controls import validate_settings
 from spyder_cctv.cv.contracts import VisionConfig
+from spyder_cctv.motion_config import AnalysisConfig
 
 
 def default_config_path() -> Path:
@@ -29,8 +30,18 @@ class CameraConfig:
     settings: dict[str, float] = field(default_factory=dict)
     profile_id: str | None = None
     vision: VisionConfig | dict | None = None
+    analysis: AnalysisConfig | dict = field(default_factory=AnalysisConfig)
 
     def __post_init__(self) -> None:
+        analysis = self.analysis
+        if isinstance(analysis, dict):
+            try:
+                analysis = AnalysisConfig(**analysis)
+            except TypeError as error:
+                raise ValueError("Unknown motion analysis options") from error
+        if not isinstance(analysis, AnalysisConfig):
+            raise ValueError("Invalid motion analysis options")
+        object.__setattr__(self, "analysis", analysis)
         if not isinstance(self.id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", self.id):
             raise ValueError("Camera id must contain 1-64 letters, digits, underscores or hyphens")
         if isinstance(self.source, bool) or not isinstance(self.source, (int, str)):

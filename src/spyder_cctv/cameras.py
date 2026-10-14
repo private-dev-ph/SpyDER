@@ -5,15 +5,17 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
 from platformdirs import user_data_path
 
+from spyder_cctv.analysis_runtime import AnalysisRuntime
 from spyder_cctv.capture import Capture, OpenCVCapture, encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile, save_config
 from spyder_cctv.controls import unavailable_controls, validate_settings
+from spyder_cctv.motion_config import AnalysisConfig
 from spyder_cctv.presence import PresenceLeases
 from spyder_cctv.vision import Pipeline, create_pipeline
 
@@ -41,6 +43,10 @@ class CameraWorker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._retiring_pipeline: Any = None
+        self._retiring_analysis: Any = None
+        self._analysis_runtime: Any = None
+        self._analysis_revision = 0
+        self._analysis_applied = -1
         self._state = "stopped"
         self._error: str | None = None
         self._jpeg: bytes | None = None
@@ -61,6 +67,38 @@ class CameraWorker:
             self.config = config
             self._desired_settings = copy.deepcopy(desired)
             self._settings_revision += 1
+
+    def update_analysis(self, config: CameraConfig) -> None:
+        with self._lock:
+            self.config = config
+            self._analysis_revision += 1
+            self._metadata["analysis"] = {"state": "scheduled", "regions": [], "tracks": []}
+
+    def analysis_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            result = copy.deepcopy(self._metadata.get("analysis", {}))
+            if not self.config.analysis.enabled:
+                result = {"state": "disabled"}
+            elif self._state not in ("running", "starting"):
+                result = {"state": "paused", "message": "Start this camera to run analysis"}
+            elif not result:
+                result = {"state": "scheduled"}
+            return {
+                "id": self.config.id,
+                "settings": asdict(self.config.analysis),
+                "runtime": result,
+                "pipeline": self.config.pipeline,
+                "state": self._state,
+            }
+
+    def analysis_mask(self) -> bytes | None:
+        with self._lock:
+            runtime = (
+                self._analysis_runtime
+                if self._analysis_revision == self._analysis_applied
+                else None
+            )
+        return runtime.mask() if runtime is not None else None
 
     def settings_snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -127,6 +165,10 @@ class CameraWorker:
         with self._lifecycle, self._lock:
             if self._closed:
                 raise RuntimeError("Camera manager is closed")
+            if self._retiring_analysis is not None:
+                if self._retiring_analysis.is_alive:
+                    raise RuntimeError("Motion analysis is still stopping")
+                self._retiring_analysis = None
             if self._retiring_pipeline is not None:
                 if self._retiring_pipeline.is_alive:
                     raise RuntimeError("CV engine is still stopping")
@@ -173,6 +215,8 @@ class CameraWorker:
                     raise RuntimeError("Camera backend did not stop within timeout")
             if self._retiring_pipeline is not None and self._retiring_pipeline.is_alive:
                 raise RuntimeError("CV engine is still stopping")
+            if self._retiring_analysis is not None and self._retiring_analysis.is_alive:
+                raise RuntimeError("Motion analysis is still stopping")
         finally:
             self._lifecycle.release()
 
@@ -198,6 +242,11 @@ class CameraWorker:
                 "frames": self._frames,
                 "frame_age_seconds": age,
                 "metadata": copy.deepcopy(self._metadata),
+                "analysis_enabled": self.config.analysis.enabled,
+                "analysis_settings": asdict(self.config.analysis),
+                "vision_inference_fps": self.config.vision.inference_fps
+                if self.config.vision is not None
+                else None,
             }
 
     def jpeg(self) -> bytes | None:
@@ -211,6 +260,9 @@ class CameraWorker:
     def _run(self) -> None:
         capture = None
         pipeline = None
+        analysis = None
+        analysis_error = False
+        analysis_revision = -1
         try:
             capture = self._capture_factory(self.config.source)
             pipeline = self._pipeline_factory(self.config.pipeline)
@@ -220,7 +272,44 @@ class CameraWorker:
                 ok, frame = capture.read()
                 if not ok:
                     raise RuntimeError("Camera read failed or video ended")
+                with self._lock:
+                    revision, analysis_config = self._analysis_revision, self.config.analysis
+                if self._retiring_analysis is not None and not self._retiring_analysis.is_alive:
+                    self._retiring_analysis = None
+                    analysis_revision = -1
+                if revision != analysis_revision and self._retiring_analysis is None:
+                    analysis_error = False
+                    if analysis is not None:
+                        try:
+                            analysis.close()
+                        except RuntimeError:
+                            self._retiring_analysis = analysis
+                        analysis = None
+                    if self._retiring_analysis is None and analysis_config.enabled:
+                        try:
+                            analysis = AnalysisRuntime(analysis_config)
+                        except Exception:
+                            analysis_error = True
+                    analysis_revision = revision
+                    with self._lock:
+                        self._analysis_runtime = analysis
+                        self._analysis_applied = revision
+                analysis_result = (
+                    analysis.process(frame)
+                    if analysis is not None
+                    else {
+                        "state": "error"
+                        if analysis_error
+                        else ("stopping" if self._retiring_analysis is not None else "disabled"),
+                        "message": "Motion analysis could not start" if analysis_error else "",
+                    }
+                )
                 frame, metadata = pipeline.process(frame)
+                if analysis is not None:
+                    frame = analysis.annotate(frame, analysis_result)
+                    metadata["motion_fraction"] = analysis_result.get("motion_fraction", 0)
+                if analysis_config.enabled or self._retiring_analysis is not None:
+                    metadata["analysis"] = analysis_result
                 jpeg = self._encoder(frame)
                 with self._lock:
                     if self._stop.is_set():
@@ -236,6 +325,13 @@ class CameraWorker:
             with self._lock:
                 self._state, self._error = "error", "Capture or processing failed"
         finally:
+            if analysis is not None:
+                try:
+                    analysis.close()
+                except RuntimeError:
+                    self._retiring_analysis = analysis
+            with self._lock:
+                self._analysis_runtime = None
             if pipeline is not None and hasattr(pipeline, "close"):
                 try:
                     pipeline.close()
@@ -399,6 +495,22 @@ class CameraManager:
             self._persist(self.workers, overrides={camera_id: config})
             worker.update_settings(config, desired)
             return worker.settings_snapshot()
+
+    def set_analysis(self, camera_id: str, settings: object) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ValueError("Send a motion analysis settings object")
+        try:
+            options = AnalysisConfig(**settings)
+        except TypeError as error:
+            raise ValueError("Unknown motion analysis options") from error
+        with self._mutations, self._registry:
+            if self._closed:
+                raise RuntimeError("Camera manager is closed")
+            worker = self.get_worker(camera_id)
+            config = replace(worker.config, analysis=options)
+            self._persist(self.workers, overrides={camera_id: config})
+            worker.update_analysis(config)
+            return worker.analysis_snapshot()
 
     def assign_profile(self, camera_id: str, profile_id: str | None) -> dict[str, Any]:
         if profile_id is not None and not isinstance(profile_id, str):

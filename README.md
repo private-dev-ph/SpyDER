@@ -134,6 +134,8 @@ and credentials are excluded from API status. Treat your configuration file as p
 ## Current scope
 
 - One capture thread and independent CV pipeline per camera.
+- Per-camera MOG2, contours, connected components, MIL tracking, ROI and live masks in Vision Lab.
+- Local hardware benchmarks and conservative CV capacity estimates.
 - Responsive light/dark GUI, live counts, focus view, fit/fill, and independent or bulk controls.
 - Add/remove camera controls with persistent settings and duplicate-source prevention.
 - Driver-supported native Windows camera tuning with confirmed readbacks.
@@ -153,14 +155,17 @@ The local media folder is beside the configuration, under `media`; override it w
 `spyder-cctv --media-dir "D:\SpyDER Media" gui`. Recording cameras remain active while the browser
 is away. See [recording behavior and formats](docs/recording.md).
 
-The additional workspaces provide foundations for model tuning, event history, named layouts,
+Vision Lab provides persistent native motion settings and measured capacity guidance. See
+[motion analysis controls and limits](docs/motion-analysis.md). The additional workspaces
+provide foundations for model tuning, event history, named layouts,
 and resource graphs. Camera Setup opens existing hardware controls and profiles; System shows
 actual local storage details. These foundations do not imply those planned features are active.
 
 This is a local application, not a production surveillance service. Camera discovery,
 network-camera ONVIF/PTZ protocols, vendor-specific FOV controls, object detection models,
 automatic reconnect, and remote access remain future work.
-Motion is a simple changed-pixel fraction, not an alarm or object classifier. Preview polling adapts
+The legacy motion pipeline reports changed-pixel fraction. Vision Lab adds MOG2 regions and
+session tracking IDs; neither identifies people or classifies objects. Preview polling adapts
 to camera count (up to roughly 8 FPS for a small wall), avoids overlapping requests, and pauses in
 hidden tabs. Status updates approximately every 750 milliseconds. The
 configured `fps` caps capture/processing attempts and does not reconfigure physical device FPS.

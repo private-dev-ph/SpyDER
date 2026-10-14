@@ -25,6 +25,8 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "browser-recording.js",
         "fullscreen.js",
         "fullscreen.css",
+        "vision-lab.js",
+        "vision-lab.css",
         "_headers",
     }
     html = (output / "index.html").read_text(encoding="utf-8")

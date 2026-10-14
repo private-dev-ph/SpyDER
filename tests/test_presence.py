@@ -207,7 +207,8 @@ def test_stop_failure_does_not_prevent_other_camera_release_and_retries():
         assert manager.statuses()[0]["idle_suspended"]
         assert manager.statuses()[1]["idle_suspended"]
         assert manager.statuses()[0]["state"] == "stopping"
-        assert calls[0] > 0
+        # Stop requests publish "stopping" before the monitor calls the backend.
+        wait_for(lambda: calls[0] > 0)
         fail_stop[0] = False
         release_blocked_read.set()
         wait_for(lambda: manager.statuses()[0]["state"] == "stopped")

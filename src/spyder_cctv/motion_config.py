@@ -51,7 +51,12 @@ class AnalysisConfig:
                 raise ValueError(f"{name} must be a finite number")
             if value > maximum or (value <= minimum if exclusive_minimum else value < minimum):
                 raise ValueError(f"{name} is outside its valid range")
-        if self.learning_rate != -1.0 and not 0.0 <= self.learning_rate <= 1.0:
+        if (
+            isinstance(self.learning_rate, bool)
+            or not isinstance(self.learning_rate, (int, float))
+            or not math.isfinite(self.learning_rate)
+            or (self.learning_rate != -1.0 and not 0.0 <= self.learning_rate <= 1.0)
+        ):
             raise ValueError("learning_rate must be -1 or from 0 to 1")
         integer_ranges = {
             "history": (20, 2000),

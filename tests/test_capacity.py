@@ -30,7 +30,7 @@ def test_capacity_estimates_measured_whole_stack_and_available_memory():
                 "analysis_settings": {"enabled": True, "inference_fps": 5},
                 "vision_inference_fps": 4,
                 "metadata": {
-                    "analysis": {"processing_ms": 20},
+                    "analysis": {"processing_ms": 20, "effective_fps": 2},
                     "cv": {"inference_ms": 10},
                 },
             },
@@ -74,7 +74,7 @@ def test_capacity_estimates_measured_whole_stack_and_available_memory():
         "available_memory_bytes": 256 << 20,
     }
     assert report["active_analysis"] == 1
-    assert report["observed_load"] == 0.14
+    assert report["observed_load"] == 0.08
     assert "not CPU percentages" in report["message"]
     assert "not predicted" in report["message"]
 

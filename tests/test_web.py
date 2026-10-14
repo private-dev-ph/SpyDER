@@ -56,6 +56,8 @@ def test_dashboard_assets_and_status(server):
         ("/workspaces.css", "text/css"),
         ("/fullscreen.js", "text/javascript"),
         ("/fullscreen.css", "text/css"),
+        ("/vision-lab.js", "text/javascript"),
+        ("/vision-lab.css", "text/css"),
     ]:
         with urlopen(url + path, timeout=2) as response:
             assert response.status == 200
@@ -221,6 +223,93 @@ def test_media_rejects_arbitrary_paths_and_cross_origin(server):
     assert error.value.code == 403
     with urlopen(url + "/api/system", timeout=2) as response:
         assert json.load(response)["free_bytes"] > 0
+
+
+def test_analysis_routes_persist_without_replacing_base_pipeline(server):
+    url, manager = server
+
+    def post(path, data):
+        return urlopen(
+            Request(
+                url + path,
+                method="POST",
+                data=json.dumps(data).encode(),
+                headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+            ),
+            timeout=4,
+        )
+
+    with urlopen(url + "/api/cameras/front/analysis", timeout=2) as response:
+        assert json.load(response)["settings"]["enabled"] is False
+    with post(
+        "/api/cameras/front/analysis", {"settings": {"enabled": True, "warmup_frames": 0}}
+    ) as response:
+        assert response.status == 202
+        assert json.load(response)["pipeline"] == "motion"
+    manager.control("front", "start")
+    deadline = time.monotonic() + 4
+    while manager.get_worker("front").analysis_mask() is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+    with urlopen(url + "/api/cameras/front/analysis/mask", timeout=2) as response:
+        assert response.read().startswith(b"\xff\xd8")
+    for data in [
+        {"settings": {"enabled": "yes"}},
+        {"settings": {"pipeline": "vision"}},
+        {"settings": {"input_width": 8000}},
+        {"settings": {}, "extra": True},
+    ]:
+        with pytest.raises(HTTPError) as error:
+            post("/api/cameras/front/analysis", data)
+        assert error.value.code == 400
+    assert manager.get_worker("front").config.analysis.enabled
+    with pytest.raises(HTTPError) as error:
+        urlopen(
+            Request(
+                url + "/api/cameras/front/analysis",
+                method="POST",
+                data=b"{}",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Spyder-Control": "1",
+                    "Origin": "https://evil.example",
+                },
+            ),
+            timeout=2,
+        )
+    assert error.value.code == 403
+    with post("/api/cameras/front/analysis", {"settings": {"enabled": False}}):
+        pass
+    with pytest.raises(HTTPError) as error:
+        urlopen(url + "/api/cameras/missing/analysis", timeout=2)
+    assert error.value.code == 404
+
+
+def test_capacity_assessment_uses_guarded_background_job(server):
+    url, _ = server
+    with urlopen(url + "/api/analysis/capacity", timeout=2) as response:
+        assert json.load(response)["state"] == "idle"
+    with pytest.raises(HTTPError) as error:
+        urlopen(
+            Request(
+                url + "/api/analysis/assess",
+                method="POST",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+            ),
+            timeout=2,
+        )
+    assert error.value.code == 403
+    with urlopen(
+        Request(
+            url + "/api/analysis/assess",
+            method="POST",
+            data=b"{}",
+            headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+        ),
+        timeout=2,
+    ) as response:
+        assert response.status == 202
+        assert json.load(response)["state"] in ("running", "ready")
 
 
 @pytest.mark.parametrize(
