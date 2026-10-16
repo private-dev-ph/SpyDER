@@ -6,6 +6,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+import cv2
+
 from spyder_cctv.cv.contracts import Engine, VisionConfig, VisionUnavailable
 from spyder_cctv.cv.engines import create_engine
 
@@ -44,7 +46,31 @@ class VisionPipeline:
             result["result_age_seconds"] = (
                 None if self._result_time is None else round(now - self._result_time, 3)
             )
-        return frame, {"cv": result}
+        if result["result_age_seconds"] is not None and result["result_age_seconds"] > 2:
+            result.update(state="stale", detections=[])
+        output = frame
+        if result.get("state") == "ready" and result.get("frame_size") == [
+            frame.shape[1],
+            frame.shape[0],
+        ]:
+            output = frame.copy()
+            for detection in result.get("detections", [])[:32]:
+                x1, y1, x2, y2 = [
+                    int(max(0, min(v, frame.shape[1 if index % 2 == 0 else 0] - 1)))
+                    for index, v in enumerate(detection["bbox"])
+                ]
+                cv2.rectangle(output, (x1, y1), (x2, y2), (30, 49, 208), 2)
+                label = detection.get("identity") or detection["label"]
+                cv2.putText(
+                    output,
+                    label[:64],
+                    (x1, max(15, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (127, 216, 247),
+                    1,
+                )
+        return output, {"cv": result}
 
     def _run(self) -> None:
         engine = None
@@ -59,7 +85,15 @@ class VisionPipeline:
                     self._pending = None
                 began = time.monotonic()
                 detections = engine.infer(frame)
+                classes = getattr(engine, "class_names", [])
+                classes = classes if isinstance(classes, list) else []
+                classes = [
+                    name
+                    for name in classes[:1000]
+                    if isinstance(name, str) and 0 < len(name) <= 128
+                ]
                 result = {
+                    "classes": classes,
                     "engine": self.config.engine,
                     "state": "ready",
                     "sequence": sequence,

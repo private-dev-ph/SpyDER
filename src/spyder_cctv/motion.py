@@ -59,6 +59,26 @@ class MotionAnalyzer:
             return factory
         return getattr(getattr(cv2, "legacy", None), "TrackerMIL_create", None)
 
+    def reconfigure(self, config: AnalysisConfig) -> None:
+        """Tune a draft without relearning its background on every ROI movement."""
+        if self._closed or not isinstance(config, AnalysisConfig):
+            raise ValueError("Cannot reconfigure this analyzer")
+        if config.input_width != self.config.input_width:
+            self._source_size = None
+        if config.tracking != self.config.tracking:
+            self._tracks.clear()
+            self._tracker_factory = self._find_tracker_factory() if config.tracking else None
+        self._tracks = self._tracks[: config.max_tracks]
+        self.config = config
+        self.tracking_error = (
+            "OpenCV MIL tracker unavailable; install OpenCV with tracking support"
+            if config.tracking and self._tracker_factory is None
+            else None
+        )
+        self._subtractor.setHistory(config.history)
+        self._subtractor.setVarThreshold(config.threshold)
+        self._subtractor.setDetectShadows(config.detect_shadows)
+
     def process(self, frame: np.ndarray) -> tuple[np.ndarray, dict]:
         if self._closed:
             raise RuntimeError("MotionAnalyzer is closed")

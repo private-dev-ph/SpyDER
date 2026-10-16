@@ -27,12 +27,23 @@ class AnalysisRuntime:
         self._average_ms = 0.0
         self._dropped = 0
         self._result: dict[str, Any] = {"state": "loading", "regions": [], "tracks": []}
+        self._config_revision = 0
         self._thread = threading.Thread(target=self._run, name="motion-analysis", daemon=True)
         self._thread.start()
 
     @property
     def is_alive(self) -> bool:
         return self._thread.is_alive()
+
+    def reconfigure(self, config: AnalysisConfig) -> None:
+        """Publish draft settings to the existing analysis owner."""
+        with self._condition:
+            self.config = config
+            self._config_revision += 1
+            self._next = 0.0
+            self._result = {"state": "loading", "regions": [], "tracks": []}
+            self._mask = None
+            self._updated = None
 
     def process(self, frame: Any) -> dict[str, Any]:
         now = time.monotonic()
@@ -91,7 +102,9 @@ class AnalysisRuntime:
     def _run(self) -> None:
         analyzer = None
         try:
-            analyzer = self._factory(replace(self.config, overlay=False))
+            with self._condition:
+                config, applied_revision = self.config, self._config_revision
+            analyzer = self._factory(replace(config, overlay=False))
             while True:
                 with self._condition:
                     self._condition.wait_for(lambda: self._stop or self._pending is not None)
@@ -99,7 +112,11 @@ class AnalysisRuntime:
                         break
                     frame, captured = self._pending
                     self._pending = None
+                    config, revision = self.config, self._config_revision
                 began = time.monotonic()
+                if revision != applied_revision:
+                    analyzer.reconfigure(replace(config, overlay=False))
+                    applied_revision = revision
                 _, result = analyzer.process(frame)
                 mask = getattr(analyzer, "mask", None)
                 encoded = None
@@ -115,6 +132,8 @@ class AnalysisRuntime:
                 with self._condition:
                     if self._stop:
                         break
+                    if applied_revision != self._config_revision:
+                        continue
                     self._average_ms = (
                         duration
                         if not self._average_ms
