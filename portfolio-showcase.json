@@ -1,0 +1,138 @@
+{
+  "title": "SpyDER",
+  "summary": "A local-first Python camera control room that combines concurrent monitoring, computer vision, visual workflows, event history and tiled recording without a cloud video-processing backend.",
+  "status": "Active prototype",
+  "logo": {
+    "src": "src/spyder_cctv/assets/spyder-emblem.png",
+    "alt": "SpyDER spider and camera emblem"
+  },
+  "internalDemoAvailable": false,
+  "githubUrl": "https://github.com/private-dev-ph/SpyDER",
+  "images": [
+    {
+      "src": "doc-public/assets/control-room.png",
+      "alt": "SpyDER Control Room showing generated camera feeds in the browser showcase",
+      "caption": "Static browser showcase with generated test patterns; no surveillance footage."
+    },
+    {
+      "src": "doc-public/assets/vision-lab.png",
+      "alt": "SpyDER visual workflow editor with camera, detection, preview, cooldown and event nodes",
+      "caption": "Native workflow editor with a synthetic camera and demonstration detection results."
+    }
+  ],
+  "sections": [
+    {
+      "type": "problemPurpose"
+    },
+    {
+      "type": "image",
+      "title": "Control Room",
+      "summary": "A responsive camera wall with independent controls and recording actions. The showcase feeds are generated locally.",
+      "image": {
+        "src": "doc-public/assets/control-room.png",
+        "alt": "SpyDER Control Room showing generated camera feeds in the browser showcase",
+        "caption": "Static browser showcase with generated test patterns; no surveillance footage."
+      }
+    },
+    {
+      "type": "keyFeatures"
+    },
+    {
+      "type": "techStack"
+    },
+    {
+      "type": "role"
+    },
+    {
+      "type": "technicalHighlights"
+    },
+    {
+      "type": "image",
+      "title": "Visual detection workflows",
+      "summary": "Camera and model inputs lead to filters, previews and local actions. This view uses synthetic input rather than a production model result.",
+      "image": {
+        "src": "doc-public/assets/vision-lab.png",
+        "alt": "SpyDER visual workflow editor with camera, detection, preview, cooldown and event nodes",
+        "caption": "Native workflow editor with a synthetic camera and demonstration detection results."
+      }
+    },
+    {
+      "type": "challenges"
+    },
+    {
+      "type": "results"
+    },
+    {
+      "type": "lessons"
+    }
+  ],
+  "problem": "Monitoring multiple cameras becomes fragmented when capture, device tuning, model inference, recording and alerts live in separate tools. Opening duplicate captures can create contention, while cloud inference introduces a remote dependency for private video.",
+  "purpose": "I set out to build an installable local application where camera feeds, computer vision and user-defined detection actions share one runtime, with a browser interface and a separate static showcase that processes supported demo features on the visitor's device.",
+  "keyFeatures": [
+    "Responsive multi-camera Control Room and fullscreen tiled viewing, with per-camera controls and capture/recording actions.",
+    "MOG2 motion analysis, contours, connected components, tracking, ROI selection and preview-before-apply controls.",
+    "Visual workflows with camera/model inputs, detection and classification, multi-connection branches, filters, zones, cooldowns and restricted Python/JavaScript code nodes.",
+    "Inline workflow previews that preserve the live canvas through cosmetic graph changes and zooming.",
+    "Local model upload/registration, metadata and class inspection, reusable model nodes and reference-aware removal.",
+    "Persistent motion/workflow events with naming patterns, capture or timed-clip attachments, search/filter/group controls, rename and bulk export/deletion.",
+    "One dynamically tiled local recording, frame captures and inline media viewing with a compatibility preview for unsupported browser codecs.",
+    "Camera tuning profiles, persisted focus policy, local diagnostics and configurable output folders with access to previous media."
+  ],
+  "techStack": [
+    "Python 3.11+",
+    "OpenCV",
+    "NumPy",
+    "Vanilla JavaScript, CSS and SVG",
+    "Canvas and browser media APIs",
+    "Ultralytics YOLO adapter (optional)",
+    "InsightFace and ONNX Runtime adapters (optional)",
+    "QuickJS JavaScript transformations",
+    "Local JSON catalogs",
+    "Static Cloudflare Pages export"
+  ],
+  "role": "I led the product design and implementation of the local camera/CV architecture, browser interface, workflow interactions, model integration, recording and event storage, packaging, and the static showcase boundary.",
+  "technicalHighlights": [
+    "Per-camera workers and bounded latest-frame scheduling avoid an unbounded queue when inference is slower than capture.",
+    "Live views, workflow previews and recordings reuse the camera worker rather than opening a separate device capture for every view.",
+    "Graph validation and explicit activation separate editable workflows from active camera pipelines; preview invalidation follows only its upstream processing branch.",
+    "Optional face classification uses confidence margins and consecutive confirmations to reduce switching, while exposing the limitations of closed-set identity decisions.",
+    "Timed event clips track recording-session ownership so manual or other workflow control is not stopped by an old attachment timer.",
+    "Package-resource asset loading and stable data paths support installed execution outside the checkout; media output changes retain earlier catalogs.",
+    "The exported static showcase keeps native Python workflow controls unavailable and uses browser-local generated feeds, cameras, files and recording."
+  ],
+  "challengesAndSolutions": [
+    {
+      "challenge": "Multiple views and expensive inference can contend for a camera or display stale queued results.",
+      "solution": "Use one capture owner per configured source, bounded latest-frame buffers and independent processing schedules."
+    },
+    {
+      "challenge": "Dragging graph nodes and changing unrelated settings used to interrupt live workflow previews.",
+      "solution": "Base preview invalidation on upstream processing dependencies and preserve the existing preview canvas during cosmetic edits and zoom."
+    },
+    {
+      "challenge": "Face classifications can flicker between classes on consecutive results.",
+      "solution": "Add confidence-margin checks and consecutive-result confirmation, with separate confirmation thresholds for identity switches."
+    },
+    {
+      "challenge": "A timed event recording can outlive the action that started it and accidentally stop another recording.",
+      "solution": "Track the recorder session and ownership transfers, and stop only an unchanged event-owned session."
+    },
+    {
+      "challenge": "A static cloud demo cannot run the local Python inference stack.",
+      "solution": "Export a browser-only interface with local media processing and explicit native-only boundaries instead of proxying video to a cloud backend."
+    }
+  ],
+  "resultsImpact": [
+    "Brings camera monitoring, CV-driven actions and local evidence review into one installable prototype without requiring cloud video processing.",
+    "Supports a complete event-to-capture/clip workflow, with persistent metadata, local playback and exportable evidence references.",
+    "Demonstrates a static-hostable camera wall while keeping native inference and persistent local-server features clearly separated.",
+    "Provides synthetic regression coverage for camera lifecycle, model adapters, workflow behavior, event storage and installed-package resources; target hardware and real models still need separate validation."
+  ],
+  "lessonsLearned": [
+    "Local-first design changes the architecture: the browser, Python runtime and static showcase need explicit capability boundaries.",
+    "Freshness, backpressure and capture ownership matter as much as model integration in a concurrent camera application.",
+    "Stable classification output is not proof of correct identification or reliable unknown-person rejection.",
+    "Package installation, resource paths and server lifecycle are part of the product experience, including safe transitions between editable and wheel installations.",
+    "Synthetic fixtures make regressions reproducible, but camera drivers, codecs, models and hardware capacity require real-device checks."
+  ]
+}
