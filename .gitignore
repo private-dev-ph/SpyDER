@@ -184,3 +184,6 @@ cython_debug/
 *.pt
 *.onnx
 *.safetensors
+
+# Local engineering notes and drafts; public guides belong in doc-public/.
+/docs/

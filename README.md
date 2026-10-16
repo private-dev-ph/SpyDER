@@ -4,36 +4,44 @@ An installable Python foundation for concurrent webcam/CCTV monitoring and compu
 Requires Python 3.11 or newer. The main GUI is a local browser control room with a responsive
 camera wall, persistent camera management, independent controls, and motion awareness.
 
-A separate [Cloudflare showcase](docs/cloudflare.md) exports the same GUI as static assets.
+A separate Cloudflare showcase exports the same GUI as static assets.
 Its generated feeds, optional webcams, local video files, motion analysis, and profiles run
 entirely in the visitor's browser. Build with `.venv/Scripts/python.exe tools/build_showcase.py`;
 no deployment or cloud camera backend is required. The installed Python app remains the
 primary product, including RTSP and native driver controls.
 
-The [computer-vision foundation](docs/computer-vision.md) includes an asynchronous
+The computer-vision foundation includes an asynchronous
 engine contract, built-in OpenCV person detection, and optional YOLO/InsightFace
 adapters. Models load from local files; inference failures leave preview running.
 Use `spyder-cctv vision-info` to inspect installed CV dependencies.
 
-The [UI audit and release guide](docs/ui-audit.md) covers the emblem, SVG controls,
-themed scrollbars/sliders, and focus-based camera lifecycle. The GUI releases idle
+The GUI includes a camera emblem, SVG controls, themed scrollbars/sliders
+and a focus-based camera lifecycle. The GUI releases idle
 cameras when all views are away, while retaining cameras used by active recordings.
 Use `serve` for continuous headless monitoring.
 
 ## Development environment
 
+Stop existing SpyDER instances before installing or switching installation modes.
+Reuse the existing `.venv`; only create it when missing.
+
 ```powershell
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]"
-.venv/Scripts/python.exe -m pytest
-.venv/Scripts/python.exe -m ruff check .
-.venv/Scripts/python.exe -m build
+if (-not (Test-Path .\.venv\Scripts\python.exe)) {
+    python -m venv .venv
+}
+.\.venv\Scripts\python.exe -m pip install "setuptools>=77,<81" wheel
+.\.venv\Scripts\python.exe -m pip install --no-build-isolation -e ".[dev]"
+.\.venv\Scripts\python.exe -m spyder_cctv gui
 ```
 
-On Linux/macOS use `.venv/bin/python` instead. Activation is optional. Reuse an existing `.venv`
-when available. Runtime dependencies are declared in `pyproject.toml`; the `dev` extra adds
-testing, linting, and build tools. Version ranges support compatible updates; no exact dependency
-lock is supplied yet. CI verifies Windows and Linux on Python 3.11 and 3.13.
+In editable mode, save HTML/CSS/JavaScript changes and refresh the browser. Python changes
+need a server restart. There is no frontend build step or automatic Python reload.
+Keep one server per port, and stop it with Ctrl+C before starting another.
+
+The examples target Windows PowerShell. On Linux/macOS use `.venv/bin/python` and the
+corresponding shell commands. Activation is optional. Runtime dependencies are declared
+in `pyproject.toml`; the `dev` extra adds testing, linting and build tools. No exact
+dependency lock is supplied yet. CI verifies Windows and Linux on Python 3.11 and 3.13.
 
 ## Run the installed application
 
@@ -71,14 +79,18 @@ Open **Settings** on a camera tile. The app queries the driver's supported contr
 current values, limits, and steps. Windows webcams can expose **zoom, pan, tilt, brightness,
 contrast, and saturation** through the native DirectShow interface. Unsupported controls are
 disabled with an explanation. **FOV** is included in the settings model but is unavailable when
-the driver has no standard FOV interface; it is not simulated with a software crop.
+the driver has no standard FOV interface. Unavailable hardware controls stay disabled.
 Native controls are currently implemented for Windows USB/built-in webcams. Other platforms,
 network streams, and video files continue to capture video but report native tuning unavailable.
 
 Select the controls you want to include, move their sliders, and choose **Apply to this camera**.
 Changes are saved first, then applied asynchronously by that camera's capture worker. Readbacks
 show actual driver values, including quantization, adjustments, or rejected settings. The live
-preview shares the camera's existing feed. **Driver defaults** stages the selected controls'
+preview shares the camera's existing feed. Slider edits immediately show an approximate
+software simulation in that preview; they do not change the device or Control Room.
+Brightness, contrast and saturation use image filters; zoom and framing use a bounded
+digital crop. The simulation cannot reveal pixels outside the current camera frame and
+does not predict exact driver behavior. **Driver defaults** stages the selected controls'
 defaults; it does not change the device until you apply. Controls are applied in manual mode
 where the driver supports it. Settings not included in a request are left unchanged on the device.
 
@@ -88,7 +100,8 @@ camera ranges. Native device values are displayed below the sliders. A shared pe
 not guarantee identical images or framing across different camera models.
 
 To reuse a setup, enter a **New profile name** and click **Save as profile**. It saves the checked
-controls and assigns the new profile to the current camera. Open **Profiles** above the camera
+controls without changing the camera. Choose **Assign & apply** to activate that profile.
+Open **Profiles** above the camera
 wall, select that profile, check target cameras, and choose **Assign to selected**. Unchecked
 cameras keep their current assignments. You can also select and assign a profile in any camera's
 Settings. Assignments made while paused apply on the next camera start.
@@ -136,6 +149,10 @@ and credentials are excluded from API status. Treat your configuration file as p
 - One capture thread and independent CV pipeline per camera.
 - Per-camera MOG2, contours, connected components, MIL tracking, ROI and live masks in Vision Lab.
 - Local hardware benchmarks and conservative CV capacity estimates.
+- Per-camera local OpenCV, YOLO and InsightFace model configuration.
+- Visual workflow graphs with draggable connections, node settings and bounded local Python code nodes.
+- Detection filters, zones, counts, cooldowns, events, captures and recording actions.
+- Optional local ONNX face recognition with a validated identity gallery.
 - Responsive light/dark GUI, live counts, focus view, fit/fill, and independent or bulk controls.
 - Add/remove camera controls with persistent settings and duplicate-source prevention.
 - Driver-supported native Windows camera tuning with confirmed readbacks.
@@ -153,16 +170,18 @@ or select cameras in **Recordings**. **Capture** saves a frame; **Capture select
 a tiled image. Stop recording to finalize and download the file. Footage contains no audio.
 The local media folder is beside the configuration, under `media`; override it with
 `spyder-cctv --media-dir "D:\SpyDER Media" gui`. Recording cameras remain active while the browser
-is away. See [recording behavior and formats](docs/recording.md).
+is away.
 
-Vision Lab provides persistent native motion settings and measured capacity guidance. See
-[motion analysis controls and limits](docs/motion-analysis.md). The additional workspaces
+Vision Lab provides persistent native motion settings and measured capacity guidance.
+Open **Vision Lab > Models & Workflows** to configure a local model and connect detection rules.
+Workflow graphs start disabled; assign cameras, configure their model, then explicitly enable and save.
+The additional workspaces
 provide foundations for model tuning, event history, named layouts,
 and resource graphs. Camera Setup opens existing hardware controls and profiles; System shows
 actual local storage details. These foundations do not imply those planned features are active.
 
 This is a local application, not a production surveillance service. Camera discovery,
-network-camera ONVIF/PTZ protocols, vendor-specific FOV controls, object detection models,
+network-camera ONVIF/PTZ protocols, vendor-specific FOV controls, face enrollment,
 automatic reconnect, and remote access remain future work.
 The legacy motion pipeline reports changed-pixel fraction. Vision Lab adds MOG2 regions and
 session tracking IDs; neither identifies people or classifies objects. Preview polling adapts
@@ -176,4 +195,10 @@ wheel, OS, driver, and stream. A blocking native camera read/open cannot safely 
 Python thread; shutdown reports a timeout and prevents reopening that worker while it is stopping.
 For hard isolation and automatic recovery, add a process-based capture adapter.
 
-See [architecture](docs/architecture.md) and [contributing](CONTRIBUTING.md).
+See [public documentation](doc-public/README.md) and [contributing](CONTRIBUTING.md).
+
+## Public documentation
+
+Publishable guides belong in [doc-public/](doc-public/README.md). The local `docs/`
+directory holds engineering notes and drafts; it is ignored by Git and excluded from
+source distributions.

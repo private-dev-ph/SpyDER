@@ -1,15 +1,19 @@
 # Contributing
 
-Use the development setup in README.md. Keep the package under `src/` and tests under `tests/`.
+Use the [README quick start](README.md#development-environment) for setup.
+Public documentation belongs in [doc-public/](doc-public/README.md). Keep engineering
+notes and drafts in the local `docs/` directory; it is ignored by Git and excluded
+from source distributions. Public pages must not link to local-only documentation.
+Keep the package under `src/` and tests under `tests/`.
+
 Use type annotations for public interfaces and descriptive names. Inject device and pipeline
 dependencies into the manager instead of requiring physical hardware in unit tests.
 
-Before committing, run `python -m ruff check .`, `python -m ruff format --check .`,
-`python -m pytest`, and `python -m build` using the development environment. Install the wheel
-in the same `.venv` and run the CLI and tests outside the repository. This catches missing
-package data and accidental checkout-relative paths. Uninstall the editable package before wheel
-installation, then reinstall `-e ".[dev]"` to resume development. CI performs the installed check
-on Windows and Linux.
+Before committing, run Ruff lint/format checks, the Python suite and `node --test`
+using the existing development environment. Build and check the installed wheel outside the checkout
+for packaging changes. Use the same `.venv` when switching installation modes, stop
+SpyDER first, and restore editable mode afterward. CI also checks the installed wheel
+on Windows and Linux. Report exact checks and outcomes; preserve unrelated changes.
 
 For fullscreen ribbon hit testing, export a fresh showcase with
 `python -m spyder_cctv export-showcase --output dist/ribbon-check`, then run
