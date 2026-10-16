@@ -719,6 +719,66 @@ function clock() {
 }
 clock();
 setInterval(clock, 10000);
+const introWord = $(".intro-rotator");
+if (introWord) {
+  const words = [
+    "Real-Time",
+    "Remote",
+    "Relay",
+    "Records",
+    "Responsive",
+    "Reimagined",
+    "Reinforced",
+    "Recognition",
+    "Reinvented",
+    "Recognition Reinvented",
+  ];
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let wordIndex = 0;
+  let letterIndex = words[0].length;
+  let deleting = false;
+  let introTimer = null;
+  function stopIntro() {
+    clearTimeout(introTimer);
+    introTimer = null;
+  }
+  function scheduleIntro(delay) {
+    stopIntro();
+    if (document.hidden || reduceMotion.matches) return;
+    introTimer = setTimeout(stepIntro, delay);
+  }
+  function stepIntro() {
+    introTimer = null;
+    if (document.hidden || reduceMotion.matches) return;
+    const word = words[wordIndex];
+    if (!deleting && letterIndex < word.length) {
+      letterIndex += 1;
+      introWord.textContent = word.slice(0, letterIndex);
+      scheduleIntro(85);
+    } else if (!deleting) {
+      deleting = true;
+      scheduleIntro(1300);
+    } else if (letterIndex > 0) {
+      letterIndex -= 1;
+      introWord.textContent = word.slice(0, letterIndex);
+      scheduleIntro(42);
+    } else {
+      deleting = false;
+      wordIndex = (wordIndex + 1) % words.length;
+      scheduleIntro(220);
+    }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopIntro();
+    else scheduleIntro(350);
+  });
+  reduceMotion.addEventListener("change", () => {
+    stopIntro();
+    introWord.textContent = words[wordIndex];
+    if (!reduceMotion.matches) scheduleIntro(350);
+  });
+  scheduleIntro(1300);
+}
 window.spyder = {
   request: api,
   refresh,

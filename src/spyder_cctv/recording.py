@@ -29,7 +29,9 @@ _MANIFEST = "manifest.json"
 class RecordingService:
     """Write composite sessions from camera workers' latest JPEG samples."""
 
-    def __init__(self, manager: Any, output_dir: Path) -> None:
+    def __init__(
+        self, manager: Any, output_dir: Path, *, archive_dirs: list[Path] | None = None
+    ) -> None:
         self.manager = manager
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -49,6 +51,15 @@ class RecordingService:
         self._session_id: str | None = None
         self._session_filename: str | None = None
         self._items = self._load_catalog()
+        self._archive_items: dict[str, dict[str, Any]] = {}
+        self._archive_paths: dict[str, Path] = {}
+        for directory in list(dict.fromkeys(Path(p).resolve() for p in (archive_dirs or [])))[:33]:
+            if directory == self.output_dir.resolve() or not directory.is_dir():
+                continue
+            for item_id, item in self._load_catalog(directory).items():
+                self._archive_items[item_id] = item
+                self._archive_paths[item_id] = directory
+
         self._closed = False
 
     def start(self, camera_ids: list[str]) -> dict[str, Any]:
@@ -161,6 +172,7 @@ class RecordingService:
             elapsed = time.monotonic() - self._started if self._started else self._last_elapsed
             return {
                 "state": self._state,
+                "session_id": self._session_id,
                 "camera_ids": list(self._camera_ids),
                 "elapsed_seconds": round(elapsed, 3),
                 "frames": self._frames,
@@ -168,16 +180,20 @@ class RecordingService:
                 "height": HEIGHT,
                 "fps": FPS,
                 "error": self._error,
-                "items": [dict(item) for item in self._items.values()],
+                "items": [dict(item) for item in {**self._archive_items, **self._items}.values()],
             }
 
     def media_path(self, item_id: str) -> Path:
         with self._lock:
             item = self._items.get(item_id)
+            directory = self.output_dir
+            if item is None:
+                item = self._archive_items.get(item_id)
+                directory = self._archive_paths.get(item_id, self.output_dir)
             if item is None:
                 raise KeyError(item_id)
-            path = (self.output_dir / item["filename"]).resolve()
-            if path.parent != self.output_dir.resolve() or not path.is_file():
+            path = (directory / item["filename"]).resolve()
+            if path.parent != directory.resolve() or not path.is_file():
                 raise KeyError(item_id)
             return path
 
@@ -438,21 +454,27 @@ class RecordingService:
             **extra,
         }
 
-    def _load_catalog(self) -> dict[str, dict[str, Any]]:
+    def _load_catalog(self, directory: Path | None = None) -> dict[str, dict[str, Any]]:
         try:
-            data = json.loads(self._manifest.read_text(encoding="utf-8"))
+            data = json.loads(
+                ((directory / _MANIFEST) if directory else self._manifest).read_text(
+                    encoding="utf-8"
+                )
+            )
             if not isinstance(data, dict) or not isinstance(data.get("items"), list):
                 return {}
             items: dict[str, dict[str, Any]] = {}
             for raw in data["items"]:
-                item = self._validated_catalog_item(raw)
+                item = self._validated_catalog_item(raw, directory)
                 if item is not None:
                     items[item["id"]] = item
             return items
         except (OSError, ValueError, TypeError, AttributeError):
             return {}
 
-    def _validated_catalog_item(self, raw: Any) -> dict[str, Any] | None:
+    def _validated_catalog_item(
+        self, raw: Any, directory: Path | None = None
+    ) -> dict[str, Any] | None:
         if not isinstance(raw, dict):
             return None
         item_id, kind = raw.get("id"), raw.get("kind")
@@ -501,9 +523,10 @@ class RecordingService:
                 return None
         else:
             duration = None
-        path = self.output_dir / filename
+        directory = directory or self.output_dir
+        path = directory / filename
         try:
-            if path.resolve().parent != self.output_dir.resolve() or not path.is_file():
+            if path.resolve().parent != directory.resolve() or not path.is_file():
                 return None
             actual_size = path.stat().st_size
         except OSError:

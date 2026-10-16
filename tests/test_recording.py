@@ -9,6 +9,7 @@ import pytest
 import spyder_cctv.recording as recording_module
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import CameraConfig
+from spyder_cctv.events import EventService
 from spyder_cctv.recording import HEIGHT, WIDTH, RecordingService
 
 
@@ -31,6 +32,40 @@ def wait_for(predicate, timeout=5):
             return
         time.sleep(0.02)
     raise AssertionError("Condition did not become true")
+
+
+def test_previous_output_folders_remain_readable_without_rewriting_catalogs(rig):
+    manager, original, folder = rig
+    for camera_id in ("red", "green"):
+        manager.set_recording(camera_id, True)
+        wait_for(lambda camera_id=camera_id: manager.get_worker(camera_id).jpeg() is not None)
+    capture = original.capture(["red"])
+    store = EventService(folder / "event-data", original)
+    event = store.create(
+        name="Archived capture",
+        kind="workflow",
+        camera_id="red",
+        camera_name="Red",
+        media=[capture],
+    )
+    manifest_before = (folder / "manifest.json").read_bytes()
+    replacement = RecordingService(manager, folder / "new-output", archive_dirs=[folder])
+    try:
+        assert capture["id"] in {item["id"] for item in replacement.status()["items"]}
+        restored = EventService(folder / "event-data", replacement)
+        assert restored.list()["events"][0]["id"] == event["id"]
+        assert restored.list()["events"][0]["media"][0]["id"] == capture["id"]
+        assert restored.media_path(capture["id"]) == original.media_path(capture["id"])
+        assert replacement.media_path(capture["id"]) == folder / capture["filename"]
+        fresh = replacement.capture(["green"])
+        assert replacement.media_path(fresh["id"]).parent == folder / "new-output"
+        assert (folder / "manifest.json").read_bytes() == manifest_before
+        active_catalog = json.loads((folder / "new-output" / "manifest.json").read_text())
+        assert [item["id"] for item in active_catalog["items"]] == [fresh["id"]]
+        with pytest.raises(KeyError):
+            replacement.media_path("../manifest.json")
+    finally:
+        replacement.close()
 
 
 @pytest.fixture

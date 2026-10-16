@@ -33,7 +33,15 @@
     zone: { label: "Zone", params: { roi: [0, 0, 1, 1] } },
     count: { label: "Count", params: { minimum: 1 } },
     cooldown: { label: "Cooldown", params: { seconds: 10 } },
-    event: { label: "Event", params: { message: "Detection matched" } },
+    event: {
+      label: "Event",
+      params: {
+        message: "Detection matched",
+        name_pattern: "{workflow} · {camera} · {date} {time} · {node}",
+        attachment: "none",
+        duration_seconds: 10,
+      },
+    },
     notification: {
       label: "Notification",
       params: { title: "SpyDER detection", message: "Matching face detected" },
@@ -246,7 +254,7 @@
           : "strings";
     }
     if (
-      (n?.type === "event" && field === "message") ||
+      (n?.type === "event" && ["message", "name_pattern"].includes(field)) ||
       (n?.type === "notification" && ["title", "message"].includes(field))
     )
       return "text";
@@ -292,6 +300,11 @@
   }
   const clamp = (v) =>
     Math.max(0, Math.min(5000, Number.isFinite(+v) ? +v : 0));
+  const VIEW_MIN = 0.25,
+    VIEW_MAX = 2,
+    clampViewScale = (value) => Math.max(VIEW_MIN, Math.min(VIEW_MAX, +value || 1)),
+    canvasDelta = (delta, scale = 1) => delta / clampViewScale(scale),
+    canvasPoint = (client, origin, scale = 1) => canvasDelta(client - origin, scale);
   const node = (type, x = 40, y = 40) => ({
     id: `node-${Math.random().toString(36).slice(2, 10)}`,
     type,
@@ -432,6 +445,9 @@
         typeof e.to !== "string"
       )
         throw Error("Invalid workflow connection.");
+    for (const n of graph.nodes)
+      if (n.type === "event")
+        n.params = { ...clone(TYPES.event.params), ...n.params };
     const errors = validate(graph);
     if (errors.length) throw Error(errors.join(" "));
     graph.id = `workflow-${Math.random().toString(36).slice(2, 10)}`;
@@ -559,6 +575,16 @@
           "Classifier threshold, stability settings, output mode, or preprocessing is invalid.",
         );
       if (
+        n.type === "event" &&
+        (typeof n.params?.name_pattern !== "string" ||
+          n.params.name_pattern.length > 200 ||
+          !["none", "capture", "recording"].includes(n.params?.attachment) ||
+          !Number.isInteger(n.params?.duration_seconds) ||
+          n.params.duration_seconds < 1 ||
+          n.params.duration_seconds > 300)
+      )
+        errors.push("Event name, attachment, or duration is invalid.");
+      if (
         n.bindings !== undefined &&
         (!n.bindings ||
           typeof n.bindings !== "object" ||
@@ -670,6 +696,9 @@
       modelPage,
       nodeSize,
       clamp,
+      clampViewScale,
+      canvasDelta,
+      canvasPoint,
       node,
       validate,
       faceTemplate,
@@ -726,6 +755,7 @@
         wireDrag = null,
         panDrag = null,
         viewGraphId = null,
+        viewScale = 1,
         settingsNode = "",
         codeError = "",
         testPane = false,
@@ -1327,12 +1357,27 @@
           : 98;
         wrap.scrollLeft = Math.max(
           0,
-          canvasPadding + x - (wrap.clientWidth || 800) / 2,
+          (canvasPadding + x) * viewScale - (wrap.clientWidth || 800) / 2,
         );
         wrap.scrollTop = Math.max(
           0,
-          canvasPadding + y - (wrap.clientHeight || 320) / 2,
+          (canvasPadding + y) * viewScale - (wrap.clientHeight || 320) / 2,
         );
+      }
+      function setViewScale(value) {
+        const previousScale = viewScale;
+        const wrap = root.querySelector(".we-canvas-wrap");
+        const centerX = wrap ? (wrap.scrollLeft + wrap.clientWidth / 2) / previousScale : 0;
+        const centerY = wrap ? (wrap.scrollTop + wrap.clientHeight / 2) / previousScale : 0;
+        viewScale = clampViewScale(value);
+        const canvas = root.querySelector("[data-canvas]");
+        if (canvas) canvas.style.zoom = String(viewScale);
+        if (wrap) {
+          wrap.scrollLeft = centerX * viewScale - wrap.clientWidth / 2;
+          wrap.scrollTop = centerY * viewScale - wrap.clientHeight / 2;
+        }
+        const status = root.querySelector("[data-zoom-level]");
+        if (status) status.textContent = `${Math.round(viewScale * 100)}%`;
       }
       const portOffset = (input, target) =>
         target?.type === "detections"
@@ -1375,7 +1420,7 @@
             portOffset(inputType(e, graph.nodes), b)) /
             2 -
           16;
-        return `<foreignObject data-wire-actions="${esc(e.from)}|${esc(e.to)}" class="we-wire-actions" x="${x}" y="${y}" width="32" height="32"><button xmlns="http://www.w3.org/1999/xhtml" class="we-wire-trash" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Delete connection from ${esc(TYPES[a.type]?.label)} to ${esc(TYPES[b.type]?.label)}" title="Delete connection"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"/></svg></button></foreignObject>`;
+        return `<foreignObject data-wire-actions="${esc(e.from)}|${esc(e.to)}" class="we-wire-actions" x="${x}" y="${y}" width="32" height="32"><button xmlns="http://www.w3.org/1999/xhtml" class="we-wire-trash" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Delete connection from ${esc(TYPES[a.type]?.label)} to ${esc(TYPES[b.type]?.label)}" title="Delete connection"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></foreignObject>`;
       }
       function removeConnection(key) {
         const [from, to] = key.split("|");
@@ -1528,6 +1573,12 @@
                 return `<label>Alert message<textarea data-param="message" maxlength="500">${esc(v)}</textarea></label><p>Shown as an in-app alert on any workspace. Desktop alerts use this node’s browser notification permission controls. Keep this page open and the camera running.</p>`;
               if (n.type === "notification" && k === "title")
                 return `<label>Alert title<input data-param="title" maxlength="128" value="${esc(v)}"></label>`;
+              if (n.type === "event" && k === "name_pattern")
+                return `<label>Event name pattern<input data-param="name_pattern" maxlength="200" value="${esc(v)}"></label><p>Tokens: {workflow}, {camera}, {date}, {time}, {node}, {kind}, {label}. Unknown tokens stay literal.</p>`;
+              if (n.type === "event" && k === "attachment")
+                return `<label>Attachment<select data-param="attachment"><option value="none" ${v === "none" ? "selected" : ""}>None</option><option value="capture" ${v === "capture" ? "selected" : ""}>Capture</option><option value="recording" ${v === "recording" ? "selected" : ""}>Recording</option></select></label><p>Clips need an idle recorder. Existing recordings are never interrupted. Duration controls appear below.</p>`;
+              if (n.type === "event" && k === "duration_seconds")
+                return `<label>Duration (seconds)<input data-param="duration_seconds" type="number" min="1" max="300" step="1" value="${esc(v)}"></label>`;
               if (n.type === "filter" && k === "identity")
                 return [
                   ...upstreamClasses(n.id),
@@ -1598,6 +1649,8 @@
         for (const n of graph.nodes) {
           if (n.type === "classifier")
             n.params = { ...clone(TYPES.classifier.params), ...n.params };
+          if (n.type === "event")
+            n.params = { ...clone(TYPES.event.params), ...n.params };
         }
         const options = graph.nodes
           .map(
@@ -1664,7 +1717,7 @@
                 `<p>${esc(e.message || "Detection event")}<small>${esc(e.camera_id || "")} · ${esc(e.created_at ? new Date(e.created_at * 1000).toLocaleTimeString() : "")}</small></p>`,
             )
             .join("") || "<p>No recent events.</p>"
-        }</div></section></aside><section class="we-workspace"><div class="we-canvas-tools"><span>Drag empty space to pan. Middle-drag anywhere on the canvas.</span><button class="button secondary" data-center>Center workflow</button></div>${
+        }</div></section></aside><section class="we-workspace"><div class="we-canvas-tools"><span>Drag empty space to pan. Middle-drag anywhere on the canvas.</span><div class="we-zoom-controls"><button class="button secondary" data-zoom-out aria-label="Zoom out">−</button><output data-zoom-level>${Math.round(viewScale * 100)}%</output><button class="button secondary" data-zoom-in aria-label="Zoom in">+</button><button class="button secondary" data-zoom-reset>Reset zoom</button><button class="button secondary" data-center>Center workflow</button></div></div>${
           reconnectChoice
             ? `<div class="we-reconnect-choice" role="status"><b>Drag the connection to move its IN end:</b>${graph.edges
                 .filter(
@@ -1680,7 +1733,7 @@
                   "",
                 )}<button class="button secondary" data-cancel-reconnect>Cancel</button></div>`
             : ""
-        }<div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div><div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3>${settingsNode ? "<p>Settings open in dialog.</p>" : params}<button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection">×</button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || errors.map(esc).join(" ")}</p><p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
+        }<div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div><div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3>${settingsNode ? "<p>Settings open in dialog.</p>" : params}<button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || errors.map(esc).join(" ")}</p><p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
         if (retainedCanvas) {
           const replacement = root.querySelector("[data-canvas]");
           replacement?.replaceWith?.(retainedCanvas);
@@ -1694,6 +1747,7 @@
         if (positionedCanvas) {
           positionedCanvas.style.width = `${canvasWidth}px`;
           positionedCanvas.style.height = `${canvasHeight}px`;
+          positionedCanvas.style.zoom = String(viewScale);
           for (const item of graph.nodes) {
             const card = positionedCanvas.querySelector(
               `[data-node="${item.id}"]`,
@@ -1730,8 +1784,8 @@
           if (rect) {
             const x = wireDrag.x,
               y = wireDrag.y,
-              ex = wireDrag.currentX - rect.left,
-              ey = wireDrag.currentY - rect.top;
+              ex = canvasPoint(wireDrag.currentX, rect.left, viewScale),
+              ey = canvasPoint(wireDrag.currentY, rect.top, viewScale);
             canvas
               .querySelector(".we-wires")
               ?.insertAdjacentHTML(
@@ -2632,6 +2686,11 @@
             selected,
             root.querySelector("[data-node-output]").value,
           );
+        else if (b.dataset.zoomIn !== undefined)
+          setViewScale(viewScale + 0.1);
+        else if (b.dataset.zoomOut !== undefined)
+          setViewScale(viewScale - 0.1);
+        else if (b.dataset.zoomReset !== undefined) setViewScale(1);
         else if (b.dataset.center !== undefined) centerCanvas();
         else if (b.dataset.undo !== undefined) restore(undoStack, redoStack);
         else if (b.dataset.redo !== undefined) restore(redoStack, undoStack);
@@ -2998,8 +3057,8 @@
             rect = canvas.getBoundingClientRect(),
             x = wireDrag.x,
             y = wireDrag.y,
-            ex = wireDrag.currentX - rect.left,
-            ey = wireDrag.currentY - rect.top;
+            ex = canvasPoint(wireDrag.currentX, rect.left, viewScale),
+            ey = canvasPoint(wireDrag.currentY, rect.top, viewScale);
           let path = svg.querySelector(".we-wire-live");
           if (!path) {
             svg.insertAdjacentHTML("beforeend", '<path class="we-wire-live"/>');
@@ -3146,8 +3205,8 @@
           if (pointerDrag.moved) e.preventDefault();
           const n = graph.nodes.find((x) => x.id === pointerDrag.id);
           if (n) {
-            n.x = clamp(pointerDrag.x + e.clientX - pointerDrag.sx);
-            n.y = clamp(pointerDrag.y + e.clientY - pointerDrag.sy);
+            n.x = clamp(pointerDrag.x + canvasDelta(e.clientX - pointerDrag.sx, viewScale));
+            n.y = clamp(pointerDrag.y + canvasDelta(e.clientY - pointerDrag.sy, viewScale));
           }
           if (pointerDrag.moved) updateCanvas();
         }
@@ -3267,14 +3326,14 @@
         if (drag?.type)
           add(
             drag.type,
-            clamp(e.clientX - r.left - canvasPadding),
-            clamp(e.clientY - r.top - canvasPadding),
+            clamp(canvasPoint(e.clientX, r.left, viewScale) - canvasPadding),
+            clamp(canvasPoint(e.clientY, r.top, viewScale) - canvasPadding),
           );
         else if (drag?.node) {
           const n = graph.nodes.find((x) => x.id === drag.node);
           if (n) {
-            n.x = clamp(n.x + e.clientX - drag.x);
-            n.y = clamp(n.y + e.clientY - drag.y);
+            n.x = clamp(n.x + canvasDelta(e.clientX - drag.x, viewScale));
+            n.y = clamp(n.y + canvasDelta(e.clientY - drag.y, viewScale));
             changed();
           }
         }

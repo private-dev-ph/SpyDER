@@ -1,8 +1,14 @@
 import json
 import threading
+import time
 
+import cv2
+import numpy as np
 import pytest
 
+from spyder_cctv.cameras import CameraManager
+from spyder_cctv.config import CameraConfig
+from spyder_cctv.motion_config import AnalysisConfig
 from spyder_cctv.workflow import WorkflowService
 
 
@@ -97,6 +103,173 @@ def test_validates_persists_and_loads_normalized_graph(service, tmp_path):
         assert reloaded.list()["workflows"] == [saved]
     finally:
         reloaded.close()
+
+
+def test_event_action_is_persistent_and_uses_workflow_name(service, tmp_path):
+    service._act("event", {"message": "Person seen"}, "people", "cam1", "People")
+    persisted = service.event_store.list()["events"]
+    assert len(persisted) == 1
+    assert persisted[0]["workflow_id"] == "people"
+    assert persisted[0]["message"] == "Person seen"
+    assert persisted[0]["name"].startswith("People · cam1 · ")
+    restored = WorkflowService(service.manager, service.recorder, tmp_path)
+    try:
+        assert restored.event_store.list()["events"] == persisted
+    finally:
+        restored.close()
+
+
+def test_event_name_pattern_uses_detection_label_and_preserves_unknown_tokens(service):
+    service._act(
+        "event",
+        {"message": "Detected", "name_pattern": "{workflow} · {label} · {custom}"},
+        "people",
+        "cam1",
+        "People",
+        detections=[{"label": "person"}],
+    )
+    assert service.event_store.list()["events"][0]["name"] == "People · person · {custom}"
+
+
+def test_event_clip_does_not_stop_manually_controlled_recording(service, tmp_path):
+    class ClipRecorder:
+        output_dir = tmp_path
+
+        def __init__(self):
+            self.current = {"state": "idle", "camera_ids": [], "session_id": None, "items": []}
+            self.stop_calls = 0
+
+        def status(self):
+            return dict(self.current)
+
+        def start(self, camera_ids):
+            self.current.update(
+                state="recording", camera_ids=list(camera_ids), session_id="owned-session"
+            )
+            return self.status()
+
+        def select(self, camera_ids):
+            self.current["camera_ids"] = list(camera_ids)
+            return self.status()
+
+        def stop(self):
+            self.stop_calls += 1
+            self.current.update(state="idle", camera_ids=[])
+            return self.status()
+
+        def media_path(self, media_id):
+            raise KeyError(media_id)
+
+    recorder = ClipRecorder()
+    service._stop.clear()
+    service.recorder = recorder
+    service.event_store.recorder = recorder
+    event = service.event_store.create(
+        name="Front", kind="workflow", camera_id="cam1", camera_name="Front"
+    )
+    service.event_store.set_attachment_status(event["id"], "pending")
+    clip = threading.Thread(target=service._record_event_clip, args=(event["id"], "cam1", 1))
+    clip.start()
+    deadline = time.monotonic() + 2
+    while recorder.status()["state"] != "recording" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    service.manual_recording("select", ["cam1"])
+    clip.join(3)
+    assert not clip.is_alive()
+    assert recorder.stop_calls == 0
+    updated = service.event_store.list()["events"][0]
+    assert updated["attachment_status"] == "error"
+    assert "handed" in updated["attachment_error"]
+    service._stop.set()
+
+
+def test_event_still_logs_when_requested_capture_fails(service, monkeypatch):
+    def unavailable(_ids):
+        raise RuntimeError("Camera frame unavailable")
+
+    monkeypatch.setattr(service.recorder, "capture", unavailable, raising=False)
+    service._act(
+        "event",
+        {"message": "Person seen", "attachment": "capture"},
+        "workflow1",
+        "cam1",
+        "Entrance",
+        node_id="event1",
+    )
+    events = service.event_store.list()["events"]
+    assert len(events) == 1
+    assert events[0]["message"] == "Person seen"
+    assert events[0]["attachment_status"] == "error"
+    assert events[0]["media"] == []
+
+
+def test_native_motion_transition_persists_without_workflow(service):
+    status = {
+        "id": "cam1",
+        "name": "Front Door",
+        "capture_session": "session-1",
+        "frames": 1,
+        "metadata": {
+            "analysis": {"state": "ready", "result_age_seconds": 0.1, "region_count": 1},
+        },
+    }
+    service._poll_motion_events({"cam1": status})
+    service._poll_motion_events({"cam1": {**status, "frames": 2}})
+    assert [item["kind"] for item in service.event_store.list()["events"]] == ["motion"]
+    quiet = {
+        **status,
+        "metadata": {
+            "analysis": {"state": "ready", "result_age_seconds": 0.1, "region_count": 0},
+        },
+    }
+    service._poll_motion_events({"cam1": {**quiet, "frames": 3}})
+    service._poll_motion_events({"cam1": {**status, "frames": 4}})
+    assert len(service.event_store.list()["events"]) == 2
+
+
+def test_motion_only_camera_emits_event_without_cv_pipeline(service, tmp_path):
+    class MovingCapture:
+        def __init__(self, _source):
+            self.frames = 0
+
+        def read(self):
+            self.frames += 1
+            frame = np.zeros((96, 128, 3), dtype=np.uint8)
+            if self.frames > 8:
+                cv2.rectangle(frame, (24, 20), (104, 76), (255, 255, 255), -1)
+            return True, frame
+
+        def close(self):
+            pass
+
+    camera = CameraConfig(
+        "cam1",
+        0,
+        fps=15,
+        analysis=AnalysisConfig(
+            enabled=True,
+            warmup_frames=0,
+            inference_fps=15,
+            min_area_percent=0.1,
+            detect_shadows=False,
+        ),
+    )
+    manager = CameraManager([camera], capture_factory=MovingCapture)
+    try:
+        manager.set_recording("cam1", True)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            status = manager.statuses()[0]
+            service._poll_motion_events({"cam1": status})
+            events = service.event_store.list()["events"]
+            if events:
+                break
+            time.sleep(0.05)
+        assert events and events[0]["kind"] == "motion"
+        assert "cv" not in status["metadata"] or status["metadata"]["cv"].get("state") != "ready"
+    finally:
+        manager.set_recording("cam1", False)
+        manager.close()
 
 
 def test_model_references_include_disabled_workflow_nodes(service):

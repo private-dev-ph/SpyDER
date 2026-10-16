@@ -1,13 +1,23 @@
 """Loopback-only monitoring server. No package-relative filesystem assumptions."""
 
 import json
+import math
 import mimetypes
+import platform
+import re
 import shutil
+import sys
+import tempfile
+import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import version
 from importlib.resources import files
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
+
+import cv2
 
 from spyder_cctv.analysis_preview import AnalysisPreviews
 from spyder_cctv.cameras import CameraManager
@@ -15,6 +25,7 @@ from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile, load_app_config
 from spyder_cctv.cv.detectors import DetectorCatalog
+from spyder_cctv.cv.diagnostics import engine_info
 from spyder_cctv.model_library import MAX_UPLOAD_BYTES, ModelLibrary
 from spyder_cctv.recording import RecordingService
 from spyder_cctv.workflow import WorkflowService
@@ -22,18 +33,43 @@ from spyder_cctv.workflow_code import run_code
 
 
 def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServer:
-    recorder = RecordingService(manager, manager.media_dir)
+    started_at = time.monotonic()
+    settings = manager.storage_settings
+    recorder = RecordingService(
+        manager, manager.media_dir, archive_dirs=settings.archives(manager.media_dir)
+    )
     capacity = CapacityAssessment(manager)
     previews = AnalysisPreviews(manager)
-    models = ModelLibrary(manager.media_dir)
+    app_data_dir = getattr(manager, "app_data_dir", None)
+    models = ModelLibrary(
+        Path(app_data_dir) / "media" if app_data_dir is not None else manager.media_dir
+    )
     detectors = DetectorCatalog()
     workflows = WorkflowService(
         manager,
         recorder,
-        manager.media_dir.parent,
+        manager.app_data_dir,
         model_library=models,
         detector_catalog=detectors,
     )
+
+    def system_snapshot() -> dict:
+        statuses = manager.statuses()
+        disk = shutil.disk_usage(manager.media_dir)
+        return {
+            **settings.snapshot(manager.media_dir, overridden=manager.media_dir_overridden),
+            "free_bytes": disk.free,
+            "version": version("spyder-cctv"),
+            "python_version": sys.version.split()[0],
+            "platform": platform.system(),
+            "uptime_seconds": round(time.monotonic() - started_at, 1),
+            "camera_count": len(statuses),
+            "running_cameras": sum(item.get("state") == "running" for item in statuses),
+            "recording_state": recorder.status()["state"],
+            "engines": engine_info()["engines"],
+            "event_count": len(workflows.event_store.list()["events"]),
+            "event_retention_limit": 10000,
+        }
 
     def camera_configurations() -> list[tuple[CameraConfig, Path | None]]:
         with manager._registry:
@@ -186,6 +222,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/workflow-preview.js",
                 "/workflow-notifications.js",
                 "/workflow-editor.css",
+                "/event-library.js",
+                "/event-library.css",
             ):
                 asset = path.removeprefix("/")
                 content_type = {
@@ -207,6 +245,46 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(200, manager.profiles())
             elif path == "/api/recordings":
                 self.json(200, recorder.status())
+            elif path == "/api/events":
+                self.json(200, workflows.event_store.list())
+            elif path == "/api/events/download":
+                try:
+                    query = parse_qs(urlsplit(self.path).query)
+                    ids = query.get("ids", [""])[0].split(",")
+                    selected = workflows.event_store.selected(ids)
+                    with tempfile.TemporaryFile() as archive:
+                        with zipfile.ZipFile(
+                            archive, "w", compression=zipfile.ZIP_DEFLATED
+                        ) as bundle:
+                            for event in selected:
+                                bundle.writestr(
+                                    f"events/{event['id']}/event.json",
+                                    json.dumps(event, ensure_ascii=False, indent=2),
+                                )
+                                for media_item in event.get("media", []):
+                                    try:
+                                        media_path = workflows.event_store.media_path(
+                                            media_item["id"]
+                                        )
+                                    except (KeyError, ValueError, OSError):
+                                        continue
+                                    bundle.write(
+                                        media_path,
+                                        f"events/{event['id']}/{media_path.name}",
+                                    )
+                        size = archive.tell()
+                        archive.seek(0)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/zip")
+                        self.send_header("Content-Length", str(size))
+                        self.send_header("Content-Disposition", 'attachment; filename="events.zip"')
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        shutil.copyfileobj(archive, self.wfile, length=256 * 1024)
+                except KeyError:
+                    self.json(404, {"error": "Unknown event"})
+                except ValueError as error:
+                    self.json(400, {"error": str(error)})
             elif path == "/api/analysis/capacity":
                 self.json(200, capacity.snapshot())
             elif path == "/api/workflows/notifications":
@@ -278,27 +356,155 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     },
                 )
             elif path == "/api/system":
-                disk = shutil.disk_usage(
-                    manager.media_dir if manager.media_dir.exists() else manager.media_dir.parent
-                )
-                self.json(200, {"media_directory": str(manager.media_dir), "free_bytes": disk.free})
-            elif path.startswith("/api/media/"):
+                self.json(200, system_snapshot())
+            elif re.fullmatch(r"/api/media/[0-9a-f]{32}/(info|frame)", path):
+                media_id, action = path.split("/")[-2:]
+                capture = None
                 try:
-                    media = recorder.media_path(path.removeprefix("/api/media/"))
+                    item = next(
+                        item
+                        for item in recorder.status().get("items", [])
+                        if item.get("id") == media_id and item.get("kind") == "recording"
+                    )
+                    media = recorder.media_path(media_id)
+                    capture = cv2.VideoCapture(str(media))
+                    if not capture.isOpened():
+                        capture.release()
+                        self.json(415, {"error": "Recording cannot be decoded"})
+                        return
+                    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+                    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                    duration = float(item.get("duration_seconds") or 0)
+                    if action == "info":
+                        capture.release()
+                        self.json(
+                            200,
+                            {
+                                "duration_seconds": duration,
+                                "fps": fps if fps > 0 else 0,
+                                "frame_count": max(0, frame_count),
+                            },
+                        )
+                        return
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    raw_time = query.get("time", ["0"])
+                    try:
+                        position = float(raw_time[0])
+                    except (TypeError, ValueError):
+                        capture.release()
+                        self.json(400, {"error": "Invalid video time"})
+                        return
+                    if (
+                        len(raw_time) != 1
+                        or not math.isfinite(position)
+                        or position < 0
+                        or position > duration
+                        or duration <= 0
+                    ):
+                        capture.release()
+                        self.json(400, {"error": "Video time is outside recording duration"})
+                        return
+                    capture.set(cv2.CAP_PROP_POS_MSEC, position * 1000)
+                    ok, frame = capture.read()
+                    capture.release()
+                    if not ok or frame is None:
+                        self.json(416, {"error": "No frame at requested time"})
+                        return
+                    height, width = frame.shape[:2]
+                    if width > 960:
+                        frame = cv2.resize(
+                            frame,
+                            (960, max(1, round(height * 960 / width))),
+                            interpolation=cv2.INTER_AREA,
+                        )
+                    self.send(200, encode_jpeg(frame), "image/jpeg")
+                except StopIteration:
+                    if capture is not None:
+                        capture.release()
+                    self.json(404, {"error": "Unknown recording"})
+                except (KeyError, FileNotFoundError, ValueError):
+                    if capture is not None:
+                        capture.release()
+                    self.json(404, {"error": "Unknown recording"})
+                except cv2.error:
+                    if capture is not None:
+                        capture.release()
+                    self.json(415, {"error": "Recording frame decode failed"})
+            elif path.startswith("/api/media/") or path.startswith("/api/events/media/"):
+                try:
+                    media_id = path.rsplit("/", 1)[-1]
+                    media = (
+                        workflows.event_store.media_path(media_id)
+                        if path.startswith("/api/events/media/")
+                        else recorder.media_path(media_id)
+                    )
+                    size = media.stat().st_size
+                    start, end, status_code = 0, size - 1, 200
+                    range_header = self.headers.get("Range")
+                    if range_header:
+                        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+                        if not match or (not match.group(1) and not match.group(2)):
+                            self.send_response(416)
+                            self.send_header("Content-Range", f"bytes */{size}")
+                            self.send_header("Content-Length", "0")
+                            self.end_headers()
+                            return
+                        if match.group(1):
+                            try:
+                                start = int(match.group(1))
+                                end = int(match.group(2)) if match.group(2) else size - 1
+                            except ValueError:
+                                self.send_response(416)
+                                self.send_header("Content-Range", f"bytes */{size}")
+                                self.send_header("Content-Length", "0")
+                                self.end_headers()
+                                return
+                        else:
+                            try:
+                                suffix = int(match.group(2))
+                            except ValueError:
+                                self.send_response(416)
+                                self.send_header("Content-Range", f"bytes */{size}")
+                                self.send_header("Content-Length", "0")
+                                self.end_headers()
+                                return
+                            start, end = max(0, size - suffix), size - 1
+                        if start >= size or end < start:
+                            self.send_response(416)
+                            self.send_header("Content-Range", f"bytes */{size}")
+                            self.send_header("Content-Length", "0")
+                            self.end_headers()
+                            return
+                        end = min(end, size - 1)
+                        status_code = 206
                     with media.open("rb") as source:
-                        self.send_response(200)
+                        self.send_response(status_code)
                         self.send_header(
                             "Content-Type",
                             mimetypes.guess_type(media.name)[0] or "application/octet-stream",
                         )
-                        self.send_header("Content-Length", str(media.stat().st_size))
+                        self.send_header("Content-Length", str(end - start + 1))
+                        self.send_header("Accept-Ranges", "bytes")
+                        if status_code == 206:
+                            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                            self.send_header("Accept-Ranges", "bytes")
+                        inline = bool(range_header) or "image/" in self.headers.get("Accept", "")
+                        disposition = "inline" if inline else "attachment"
                         self.send_header(
-                            "Content-Disposition", f'attachment; filename="{media.name}"'
+                            "Content-Disposition",
+                            f'{disposition}; filename="{media.name}"',
                         )
                         self.send_header("Cache-Control", "no-store")
                         self.send_header("X-Content-Type-Options", "nosniff")
                         self.end_headers()
-                        shutil.copyfileobj(source, self.wfile, length=256 * 1024)
+                        source.seek(start)
+                        remaining = end - start + 1
+                        while remaining:
+                            chunk = source.read(min(256 * 1024, remaining))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            remaining -= len(chunk)
                 except (KeyError, FileNotFoundError, ValueError):
                     self.json(404, {"error": "Unknown media"})
             else:
@@ -383,7 +589,17 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
             try:
-                if (
+                if len(parts) == 4 and parts[:2] == ["api", "events"] and parts[3] == "rename":
+                    data = self.body()
+                    if set(data) != {"name"}:
+                        raise ValueError("Send event name")
+                    self.json(200, workflows.event_store.rename(parts[2], data["name"]))
+                elif parts == ["api", "events", "delete"]:
+                    data = self.body()
+                    if set(data) != {"ids"}:
+                        raise ValueError("Send event ids")
+                    self.json(200, {"deleted": workflows.event_store.delete(data["ids"])})
+                elif (
                     len(parts) == 5
                     and parts[:3] == ["api", "vision", "detectors"]
                     and parts[4] == "install"
@@ -596,6 +812,17 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         client_id, data["active"], data["release_when_idle"]
                     )
                     self.json(200, {"accepted": True, "idle_policy": enabled})
+                elif parts == ["api", "system", "storage"]:
+                    data = self.body()
+                    if set(data) != {"media_directory"}:
+                        raise ValueError("Send media_directory")
+                    settings.save(data["media_directory"], manager.media_dir)
+                    self.json(
+                        200,
+                        settings.snapshot(
+                            manager.media_dir, overridden=manager.media_dir_overridden
+                        ),
+                    )
                 elif parts == ["api", "preferences"]:
                     data = self.body()
                     if (
@@ -643,7 +870,13 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     {
                         "error": str(error)
                         if parts[:2]
-                        in (["api", "workflows"], ["api", "models"], ["api", "preferences"])
+                        in (
+                            ["api", "workflows"],
+                            ["api", "models"],
+                            ["api", "preferences"],
+                            ["api", "events"],
+                            ["api", "system"],
+                        )
                         or parts[:3] == ["api", "vision", "detectors"]
                         else "Invalid details. Check camera selection, fields or settings (0-100%)."
                     },
