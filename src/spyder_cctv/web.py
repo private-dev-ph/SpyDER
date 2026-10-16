@@ -2,7 +2,6 @@
 
 import json
 import math
-import mimetypes
 import platform
 import re
 import shutil
@@ -490,7 +489,14 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         self.send_response(status_code)
                         self.send_header(
                             "Content-Type",
-                            mimetypes.guess_type(media.name)[0] or "application/octet-stream",
+                            {
+                                ".jpg": "image/jpeg",
+                                ".jpeg": "image/jpeg",
+                                ".png": "image/png",
+                                ".mp4": "video/mp4",
+                                ".webm": "video/webm",
+                                ".avi": "video/x-msvideo",
+                            }.get(media.suffix.lower(), "application/octet-stream"),
                         )
                         self.send_header("Content-Length", str(end - start + 1))
                         self.send_header("Accept-Ranges", "bytes")

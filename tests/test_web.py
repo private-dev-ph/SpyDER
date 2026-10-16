@@ -222,6 +222,33 @@ def test_add_remove_camera_routes(server):
     assert len(manager.statuses()) == 1
 
 
+def test_capture_download_does_not_depend_on_host_mime_registry(server, monkeypatch):
+    import mimetypes
+
+    def forbidden_lookup(*_args, **_kwargs):
+        pytest.fail("Known local media must not consult the host MIME registry")
+
+    monkeypatch.setattr(mimetypes, "guess_type", forbidden_lookup)
+    url, manager = server
+    manager.workers["front"].start()
+    deadline = time.monotonic() + 3
+    while manager.workers["front"].jpeg() is None and time.monotonic() < deadline:
+        time.sleep(0.005)
+    with urlopen(
+        Request(
+            url + "/api/captures",
+            method="POST",
+            data=b'{"camera_ids":["front"]}',
+            headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+        ),
+        timeout=4,
+    ) as response:
+        capture = json.load(response)
+    with urlopen(url + capture["url"], timeout=2) as response:
+        assert response.headers["Content-Type"] == "image/jpeg"
+        assert response.read().startswith(b"\xff\xd8")
+
+
 def test_record_capture_and_download_routes(server, tmp_path):
     url, manager = server
 
