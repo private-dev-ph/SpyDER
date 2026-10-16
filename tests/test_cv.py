@@ -122,8 +122,9 @@ def test_missing_optional_dependency_is_actionable(tmp_path, monkeypatch):
     assert "private" not in str(error.value)
 
 
-def test_yolo_adapter_uses_local_bgr_frames_and_normalizes_boxes(tmp_path, monkeypatch):
-    weights = tmp_path / "local.pt"
+@pytest.mark.parametrize("extension", [".pt", ".onnx"])
+def test_yolo_adapter_uses_local_bgr_frames_and_normalizes_boxes(tmp_path, monkeypatch, extension):
+    weights = tmp_path / f"local{extension}"
     weights.touch()
     calls = {}
 
@@ -312,3 +313,60 @@ def test_hung_cv_stop_reports_timeout_and_prevents_duplicate_engine():
         release.set()
         pipeline.close()
         worker.stop()
+
+
+def test_model_overlay_clips_boxes_and_never_displays_stale_detections():
+    class Engine:
+        def infer(self, frame):
+            return []
+
+        def close(self):
+            pass
+
+    pipeline = VisionPipeline(VisionConfig(), lambda config: Engine())
+    frame = np.zeros((64, 64, 3), np.uint8)
+    try:
+        with pipeline._condition:
+            pipeline._next_submission = float("inf")
+            pipeline._result_time = time.monotonic()
+            pipeline._result = {
+                "state": "ready",
+                "frame_size": [64, 64],
+                "detections": [
+                    Detection(
+                        "face", (-1e100, -1e100, 1e100, 1e100), 0.9, identity="Example"
+                    ).to_dict()
+                ],
+            }
+        output, metadata = pipeline.process(frame)
+        assert np.count_nonzero(output) > 0
+        assert not frame.any()
+        assert metadata["cv"]["detections"][0]["identity"] == "Example"
+        with pipeline._condition:
+            pipeline._result_time = time.monotonic() - 3
+        output, metadata = pipeline.process(frame)
+        assert output is frame
+        assert metadata["cv"]["state"] == "stale"
+        assert metadata["cv"]["detections"] == []
+    finally:
+        pipeline.close()
+
+
+def test_runtime_reports_bounded_model_classes_from_local_engine():
+    class Engine:
+        class_names = ["person", "car", 123, "x" * 129]
+
+        def infer(self, _frame):
+            return []
+
+        def close(self):
+            pass
+
+    pipeline = VisionPipeline(VisionConfig(), engine_factory=lambda _config: Engine())
+    frame = np.zeros((64, 64, 3), np.uint8)
+    try:
+        pipeline.process(frame)
+        wait_for(lambda: pipeline.process(frame)[1]["cv"]["state"] == "ready")
+        assert pipeline.process(frame)[1]["cv"]["classes"] == ["person", "car"]
+    finally:
+        pipeline.close()

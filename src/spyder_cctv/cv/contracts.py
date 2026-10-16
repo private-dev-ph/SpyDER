@@ -23,10 +23,87 @@ class VisionConfig:
     confidence: float = 0.5
     input_size: int = 640
     max_detections: int = 100
+    recognition_model: str | None = None
+    identity_gallery: str | None = None
+    recognition_threshold: float = 0.65
+    classifier_model: str | None = None
+    classifier_labels: tuple[str, ...] = ()
+    classifier_threshold: float = 0.5
+    classifier_output: str = "probabilities"
+    classifier_preprocessing: str = "arcface"
+    classifier_confirmation_frames: int = 3
+    classifier_switch_frames: int = 5
+    classifier_min_margin: float = 0.15
 
     def __post_init__(self) -> None:
+        if isinstance(self.classifier_labels, list):
+            object.__setattr__(self, "classifier_labels", tuple(self.classifier_labels))
         if self.engine not in ("opencv", "yolo", "insightface"):
             raise ValueError("Unknown vision engine")
+        if (
+            type(self.recognition_threshold) not in (int, float)
+            or not math.isfinite(self.recognition_threshold)
+            or not -1 <= self.recognition_threshold <= 1
+        ):
+            raise ValueError("Invalid recognition_threshold")
+        if self.engine != "insightface" and (
+            self.recognition_model is not None or self.identity_gallery is not None
+        ):
+            raise ValueError("Recognition model and gallery require InsightFace")
+        if self.classifier_model is not None and self.engine != "insightface":
+            raise ValueError("Face classifier requires InsightFace")
+        if self.classifier_model is not None and (
+            self.recognition_model is not None or self.identity_gallery is not None
+        ):
+            raise ValueError("Face classifier cannot be combined with gallery recognition")
+        if self.classifier_model is None and self.classifier_labels:
+            raise ValueError("classifier_labels require classifier_model")
+        if self.classifier_model is not None:
+            if (
+                not isinstance(self.classifier_model, str)
+                or not self.classifier_model.strip()
+                or "://" in self.classifier_model
+                or Path(self.classifier_model).suffix.lower() != ".onnx"
+            ):
+                raise ValueError("classifier_model must be a local .onnx file")
+            if (
+                not isinstance(self.classifier_labels, tuple)
+                or not 1 <= len(self.classifier_labels) <= 1000
+                or any(
+                    not isinstance(label, str) or not label.strip() or len(label) > 128
+                    for label in self.classifier_labels
+                )
+                or len(set(self.classifier_labels)) != len(self.classifier_labels)
+            ):
+                raise ValueError("classifier_labels must contain 1 to 1000 unique labels")
+        if (
+            type(self.classifier_threshold) not in (int, float)
+            or not math.isfinite(self.classifier_threshold)
+            or not 0 <= self.classifier_threshold <= 1
+        ):
+            raise ValueError("Invalid classifier_threshold")
+        for name, value, maximum in (
+            ("classifier_confirmation_frames", self.classifier_confirmation_frames, 15),
+            ("classifier_switch_frames", self.classifier_switch_frames, 30),
+        ):
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"Invalid {name}")
+        if self.classifier_switch_frames < self.classifier_confirmation_frames:
+            raise ValueError(
+                "Switch confirmation count must be at least initial confirmation count"
+            )
+        if (
+            type(self.classifier_min_margin) not in (int, float)
+            or not math.isfinite(self.classifier_min_margin)
+            or not 0 <= self.classifier_min_margin <= 1
+        ):
+            raise ValueError("Invalid classifier_min_margin")
+        if self.classifier_output not in ("probabilities", "logits"):
+            raise ValueError("classifier_output must be probabilities or logits")
+        if self.classifier_preprocessing not in ("arcface", "embedded"):
+            raise ValueError("classifier_preprocessing must be arcface or embedded")
+        if (self.recognition_model is None) != (self.identity_gallery is None):
+            raise ValueError("Provide both recognition_model and identity_gallery")
         if not isinstance(self.device, str) or not re.fullmatch(
             r"cpu|mps|cuda:[0-9]+", self.device
         ):
@@ -58,15 +135,34 @@ class VisionConfig:
             raise ValueError(
                 "Provide a local model file; URLs and automatic downloads are disabled"
             )
-        elif Path(self.model).suffix.lower() != (".pt" if self.engine == "yolo" else ".onnx"):
-            raise ValueError("YOLO expects .pt weights; InsightFace expects detection .onnx")
+        elif Path(self.model).suffix.lower() not in (
+            (".pt", ".onnx") if self.engine == "yolo" else (".onnx",)
+        ):
+            raise ValueError(
+                "YOLO expects .pt or .onnx weights; InsightFace expects detection .onnx"
+            )
+        if self.recognition_model is not None:
+            for name, value, suffix in (
+                ("recognition_model", self.recognition_model, ".onnx"),
+                ("identity_gallery", self.identity_gallery, ".json"),
+            ):
+                if (
+                    not isinstance(value, str)
+                    or not value.strip()
+                    or "://" in value
+                    or Path(value).suffix.lower() != suffix
+                ):
+                    raise ValueError(f"{name} must be a local {suffix} file")
 
     def resolve(self, base: Path | None = None) -> "VisionConfig":
-        if self.model is None:
-            return self
-        path = Path(self.model).expanduser()
-        path = path if path.is_absolute() else (base or default_model_dir()) / path
-        return replace(self, model=str(path.resolve()))
+        values: dict[str, str] = {}
+        for key in ("model", "recognition_model", "identity_gallery", "classifier_model"):
+            value = getattr(self, key)
+            if value is not None:
+                path = Path(value).expanduser()
+                path = path if path.is_absolute() else (base or default_model_dir()) / path
+                values[key] = str(path.resolve())
+        return replace(self, **values) if values else self
 
 
 @dataclass(frozen=True)
@@ -78,6 +174,9 @@ class Detection:
     confidence: float | None = None
     class_id: int | None = None
     score: float | None = None  # Uncalibrated classifier score, e.g. HOG margin.
+    identity: str | None = None
+    similarity: float | None = None
+    identity_confidence: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.label, str) or not self.label or len(self.label) > 128:
@@ -103,10 +202,32 @@ class Detection:
             or not math.isfinite(self.score)
         ):
             raise ValueError("Invalid classifier score")
+        if self.identity is not None and (
+            not isinstance(self.identity, str) or not self.identity or len(self.identity) > 128
+        ):
+            raise ValueError("Invalid detection identity")
+        if self.similarity is not None and (
+            isinstance(self.similarity, bool)
+            or not isinstance(self.similarity, Real)
+            or not math.isfinite(self.similarity)
+            or not -1 <= self.similarity <= 1
+        ):
+            raise ValueError("Invalid cosine similarity")
+        if self.identity_confidence is not None and (
+            isinstance(self.identity_confidence, bool)
+            or not isinstance(self.identity_confidence, Real)
+            or not math.isfinite(self.identity_confidence)
+            or not 0 <= self.identity_confidence <= 1
+        ):
+            raise ValueError("Invalid identity confidence")
         if self.confidence is not None:
             object.__setattr__(self, "confidence", float(self.confidence))
         if self.score is not None:
             object.__setattr__(self, "score", float(self.score))
+        if self.similarity is not None:
+            object.__setattr__(self, "similarity", float(self.similarity))
+        if self.identity_confidence is not None:
+            object.__setattr__(self, "identity_confidence", float(self.identity_confidence))
         if self.class_id is not None and type(self.class_id) is not int:
             raise ValueError("class_id must be an integer")
 

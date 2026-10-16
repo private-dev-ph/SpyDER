@@ -26,14 +26,14 @@ class PresenceLeases:
                 inactive_since = previous[3] if previous and not previous[1] else now
             self._leases[client_id] = (now + self.ttl, active, release_when_idle, inactive_since)
 
-    def keeps_cameras(self) -> bool:
+    def keeps_cameras(self, *, allow_opt_out: bool = True) -> bool:
         now = time.monotonic()
         with self._lock:
             self._expire(now)
             for _, active, release_when_idle, inactive_since in self._leases.values():
                 if active:
                     return True
-                if not release_when_idle:
+                if allow_opt_out and not release_when_idle:
                     return True
                 if inactive_since is not None and now - inactive_since < self.inactive_grace:
                     return True

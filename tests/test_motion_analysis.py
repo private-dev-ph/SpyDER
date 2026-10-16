@@ -19,6 +19,22 @@ def image(rect=None, size=(120, 160)):
     return frame
 
 
+def test_draft_roi_changes_keep_background_but_resolution_resets_it():
+    analyzer = MotionAnalyzer(AnalysisConfig(warmup_frames=2, overlay=False))
+    try:
+        analyzer.process(image())
+        analyzer.process(image())
+        analyzer.reconfigure(AnalysisConfig(warmup_frames=2, overlay=False, roi=(0.5, 0, 0.5, 1)))
+        _, result = analyzer.process(image((10, 20, 20, 20)))
+        assert result["state"] == "ready" and result["region_count"] == 0
+        assert analyzer._frame_count == 3
+        analyzer.reconfigure(AnalysisConfig(warmup_frames=2, overlay=False, input_width=640))
+        _, result = analyzer.process(image())
+        assert result["state"] == "warming_up"
+    finally:
+        analyzer.close()
+
+
 def test_warmup_moving_regions_and_mask_are_binary():
     analyzer = MotionAnalyzer(
         AnalysisConfig(warmup_frames=2, input_width=320, min_area_percent=0.2, overlay=False)
