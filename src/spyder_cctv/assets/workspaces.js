@@ -149,6 +149,7 @@
     );
   }
   function route() {
+    window.spyderLayouts?.unmount();
     window.spyderEventLibrary?.unmount();
     window.spyderVisionLab?.unmount();
     window.spyderWorkflows?.unmount();
@@ -249,21 +250,7 @@
     } else if (current === "events") {
       window.spyderEventLibrary?.mount(content);
     } else if (current === "layouts") {
-      content.innerHTML =
-        '<section class="workspace-panel"><h2>Your wall, your scale.</h2><p class="workspace-description">Choose a tile size for the Control Room. Named arrangements and rotating views will be added here.</p><div class="layout-options"></div></section>';
-      for (const [value, label] of [
-        ["auto", "Auto"],
-        ["compact", "Compact"],
-        ["large", "Large"],
-      ]) {
-        find(".layout-options", content).append(
-          button(label, () => {
-            find("#density").value = value;
-            find("#density").dispatchEvent(new Event("change"));
-            location.hash = "control-room";
-          }),
-        );
-      }
+      window.spyderLayouts?.mount(content);
     } else {
       content.innerHTML =
         '<section class="workspace-panel"><h2>Local system</h2><div id="system-details" class="system-details"></div><div id="system-metrics" class="system-metrics"></div><fieldset class="activity-policy"><legend>Camera focus preference</legend><label class="release-toggle"><input id="system-pause-unfocused" type="checkbox" checked /><span>Pause cameras when unfocused</span></label><p id="system-pause-status" class="field-help" role="status" aria-live="polite"></p><p class="field-help">When off, cameras keep running while the local server runs, even if you close this browser. Browser desktop notifications require this page to stay open.</p></fieldset><form id="system-storage" class="system-storage"><label for="system-output">Recordings and captures folder</label><input id="system-output" type="text" required maxlength="4096" placeholder="Absolute local folder path" /><div class="recording-actions"><button class="button primary" type="submit">Save output folder</button><button id="system-output-reset" class="button secondary" type="button">Use default folder</button></div><p class="field-help">A dedicated folder on a local drive is recommended. Keep enough free space for video. Changes apply after restarting SpyDER; files stay in their original folders, and previous folders remain available for playback. Models and configuration stay in their current locations.</p><p id="system-storage-status" class="field-help" role="status"></p></form></section>';
@@ -312,6 +299,7 @@
   }
   function addCardActions() {
     for (const card of document.querySelectorAll(".camera-card")) {
+      if (card.dataset.dummy === "true") continue;
       const id = card.dataset.id;
       if (!find(".record-camera", card)) {
         const record = button("Record", () => toggleCamera(id));

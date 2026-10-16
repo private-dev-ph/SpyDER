@@ -255,7 +255,11 @@
   for (const fit of ["fit", "fill"])
     find("#wall-" + fit).addEventListener("click", () => {
       for (const card of document.querySelectorAll(".camera-card"))
-        if (card.dataset.fit !== fit) card.querySelector(".fit-button").click();
+        if (card.dataset.fit !== fit) {
+          const button = card.querySelector(".fit-button");
+          if (button) button.click();
+          else if (card.dataset.dummy === "true") card.dataset.fit = fit;
+        }
     });
   find("#wall-record").addEventListener("click", () => app.media.recordLive());
   find("#wall-stop-record").addEventListener("click", () => app.media.stop());
@@ -316,4 +320,5 @@
   window.addEventListener("spyder:cameras", sync);
   window.addEventListener("spyder:media", sync);
   window.spyderWall = { active: () => active, layout, enter, exit };
+  window.dispatchEvent(new Event("spyder:wall-ready"));
 })();

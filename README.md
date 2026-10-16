@@ -34,6 +34,7 @@ not surveillance footage or evidence of model accuracy.*
 | Model library | Local upload/registration, class metadata inspection, search/filtering, reusable model nodes and reference checks before removal. |
 | Events | Persistent motion/workflow records, naming patterns, image/clip attachments, inline viewing, search, grouping, pagination, rename and bulk ZIP export/deletion. |
 | Recordings | One tiled video that adapts as camera membership changes, frame captures and a persistent media catalog. |
+| Layouts | Saved walls, drag/keyboard ordering, visibility, featured/rotating views, import/export and browser-only dummy cameras for simulation. |
 | Setup and System | Supported device controls, reusable tuning profiles, focus policy, dependency diagnostics and configurable media output. |
 
 ![SpyDER workflow editor using generated input](doc-public/assets/vision-lab.png)
@@ -172,8 +173,9 @@ surveillance service or a guarantee of security or identification accuracy.
 - Composite video currently uses a 1920 × 1080 canvas at 15 fps without audio. Unsupported
   browser codecs can use a local preview at up to 5 fps; downloads retain the original video.
 - The event catalog retains the latest 10,000 records. Event deletion retains its media.
-- Layouts currently offers tile-size choices. Named presets, manual arrangements and rotation
-  remain future work.
+- Layouts persist per browser and origin. Export arrangements for backup or transfer. Missing
+  camera IDs remain unavailable until the original cameras return. Dummy cameras are simulations
+  and stay outside CV, capture and recording.
 - Screenshots use generated inputs. Real cameras, models and environments need separate testing.
 
 ## Public documentation and portfolio
