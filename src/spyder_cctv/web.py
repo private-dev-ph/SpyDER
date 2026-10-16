@@ -13,7 +13,7 @@ from spyder_cctv.analysis_preview import AnalysisPreviews
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
-from spyder_cctv.config import CameraConfig, SettingsProfile
+from spyder_cctv.config import CameraConfig, SettingsProfile, load_app_config
 from spyder_cctv.cv.detectors import DetectorCatalog
 from spyder_cctv.model_library import MAX_UPLOAD_BYTES, ModelLibrary
 from spyder_cctv.recording import RecordingService
@@ -34,6 +34,43 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         model_library=models,
         detector_catalog=detectors,
     )
+
+    def camera_configurations() -> list[tuple[CameraConfig, Path | None]]:
+        with manager._registry:
+            configurations = [(worker.config, None) for worker in manager.workers.values()]
+        config_path = getattr(manager, "_config_path", None)
+        if config_path is not None and Path(config_path).exists():
+            try:
+                configurations.extend(
+                    (camera, Path(config_path).parent)
+                    for camera in load_app_config(Path(config_path)).cameras
+                )
+            except (OSError, ValueError) as error:
+                raise RuntimeError(
+                    "Camera configuration is unreadable; model use cannot be checked"
+                ) from error
+        return configurations
+
+    def camera_model_references(model_path: Path, configurations=None) -> list[str]:
+        """Resolve persisted relative paths against their config, not process cwd."""
+        expected = model_path.expanduser().resolve()
+        references = []
+        if configurations is None:
+            configurations = camera_configurations()
+        for camera, base in configurations:
+            vision = camera.vision
+            if vision is None:
+                continue
+            for value in (vision.model, vision.recognition_model, vision.classifier_model):
+                if not value:
+                    continue
+                candidate = Path(value).expanduser()
+                if base is not None and not candidate.is_absolute():
+                    candidate = base / candidate
+                if candidate.resolve() == expected:
+                    references.append(f"Camera {camera.name or camera.id} / {camera.id}")
+                    break
+        return list(dict.fromkeys(references))
 
     class LocalServer(ThreadingHTTPServer):
         def server_close(self) -> None:
@@ -180,7 +217,28 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(200, {"detectors": detectors.list(), "default": "scrfd-500mf"})
             elif path == "/api/models":
                 descriptors = models.list()
+                usage_errors = []
+                workflow_usage = {}
+                camera_configs = []
+                try:
+                    workflow_usage = workflows.model_usage()
+                except RuntimeError as error:
+                    usage_errors.append(str(error))
+                try:
+                    camera_configs = camera_configurations()
+                except RuntimeError as error:
+                    usage_errors.append(str(error))
                 for descriptor in descriptors:
+                    model_path = Path(descriptor["path"]).expanduser().resolve()
+                    references = [
+                        *usage_errors,
+                        *workflow_usage.get(descriptor["id"], []),
+                        *camera_model_references(model_path, camera_configs),
+                    ]
+                    descriptor["usage"] = {
+                        "in_use": bool(references),
+                        "references": list(dict.fromkeys(references)),
+                    }
                     if descriptor["classes"]:
                         continue
                     for camera in manager.statuses():
@@ -377,6 +435,21 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                             data["path"], data.get("name"), data["engine"], data.get("classes")
                         ),
                     )
+                elif len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] == "remove":
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    # Match workflow activation: workflow, manager mutation, registry.
+                    with workflows._lock, manager._mutations, manager._registry:
+                        descriptor = models.get(parts[2])
+                        model_path = Path(descriptor["path"]).expanduser().resolve()
+                        references = workflows.model_references(parts[2])
+                        references.extend(camera_model_references(model_path))
+                        references = list(dict.fromkeys(references))
+                        outcome = None if references else models.remove(parts[2])
+                    if references:
+                        self.json(409, {"error": "Model is in use", "references": references})
+                    else:
+                        self.json(200, outcome)
                 elif len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] == "inspect":
                     data = self.body()
                     if set(data) - {"label_source"}:

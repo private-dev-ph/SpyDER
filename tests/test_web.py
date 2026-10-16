@@ -482,6 +482,7 @@ def test_local_model_library_routes_are_guarded_and_bounded(server, tmp_path):
     with pytest.raises(HTTPError) as error:
         post_json("/api/models/register", {"path": str(local), "engine": "yolo"}, guarded=False)
     assert error.value.code == 403
+
     guarded = headers | {"Origin": url}
     with urlopen(
         Request(
@@ -520,6 +521,42 @@ def test_local_model_library_routes_are_guarded_and_bounded(server, tmp_path):
             timeout=3,
         )
     assert error.value.code == 403
+
+
+def test_model_removal_requires_control_and_preserves_registered_source(server, tmp_path):
+    url, _ = server
+    source = tmp_path / "keep.pt"
+    source.write_bytes(b"weights")
+
+    def post(path, data, *, guarded=True):
+        return urlopen(
+            Request(
+                url + path,
+                method="POST",
+                data=json.dumps(data).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    **({"X-Spyder-Control": "1"} if guarded else {}),
+                },
+            ),
+            timeout=3,
+        )
+
+    with post("/api/models/register", {"path": str(source), "engine": "yolo"}) as response:
+        model = json.load(response)
+    with urlopen(url + "/api/models", timeout=3) as response:
+        listed = next(item for item in json.load(response)["models"] if item["id"] == model["id"])
+    assert listed["usage"] == {"in_use": False, "references": []}
+    with pytest.raises(HTTPError) as error:
+        post(f"/api/models/{model['id']}/remove", {}, guarded=False)
+    assert error.value.code == 403
+    with post(f"/api/models/{model['id']}/remove", {}) as response:
+        assert json.load(response) == {
+            "removed": True,
+            "id": model["id"],
+            "deleted_file": False,
+        }
+    assert source.read_bytes() == b"weights"
 
 
 def test_models_use_classes_from_matching_active_camera_without_persisting_them(
@@ -980,6 +1017,7 @@ def test_builtin_detector_catalog_and_explicit_install(server, monkeypatch):
     with urlopen(request) as response:
         assert json.load(response)["available"]
     assert calls == ["scrfd-500mf"]
+
     request = Request(
         url + "/api/vision/detectors/scrfd-500mf/install",
         data=b"{}",
@@ -989,3 +1027,73 @@ def test_builtin_detector_catalog_and_explicit_install(server, monkeypatch):
         urlopen(request)
     assert error.value.code == 403
     assert calls == ["scrfd-500mf"]
+
+
+def test_workflow_configures_builtin_opencv_without_manual_pipeline_panel(server):
+    url, manager = server
+    workflow = {
+        "id": "opencv-workflow",
+        "name": "OpenCV person preview",
+        "enabled": True,
+        "camera_ids": ["front"],
+        "nodes": [
+            {"id": "detect", "type": "detections", "x": 0, "y": 0, "params": {"engine": "opencv"}},
+            {"id": "preview", "type": "preview", "x": 200, "y": 0, "params": {}},
+        ],
+        "edges": [{"from": "detect", "to": "preview"}],
+    }
+    request = Request(
+        url + "/api/workflows",
+        method="POST",
+        data=json.dumps({"workflow": workflow}).encode(),
+        headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+    )
+    with urlopen(request, timeout=4) as response:
+        assert json.load(response)["enabled"]
+    worker = manager.get_worker("front")
+    assert worker.config.pipeline == "vision"
+    assert worker.config.vision.engine == "opencv"
+    revision = worker._vision_revision
+    with urlopen(request, timeout=4):
+        pass
+    assert worker._vision_revision == revision
+
+
+def test_model_removal_checks_relative_model_paths_in_latest_saved_camera_config(server, tmp_path):
+    from spyder_cctv.config import save_config
+
+    url, manager = server
+    source = tmp_path / "relative-model.pt"
+    source.write_bytes(b"fixture")
+    register = Request(
+        url + "/api/models/register",
+        method="POST",
+        data=json.dumps({"path": str(source), "engine": "yolo"}).encode(),
+        headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+    )
+    with urlopen(register, timeout=4) as response:
+        descriptor = json.load(response)
+    save_config(
+        manager._config_path,
+        [
+            CameraConfig(
+                "saved-camera",
+                1,
+                pipeline="vision",
+                vision=VisionConfig(engine="yolo", model="relative-model.pt"),
+            )
+        ],
+    )
+    with urlopen(url + "/api/models", timeout=4) as response:
+        model = next(m for m in json.load(response)["models"] if m["id"] == descriptor["id"])
+    assert model["usage"]["in_use"]
+    remove = Request(
+        url + f"/api/models/{descriptor['id']}/remove",
+        method="POST",
+        data=b"{}",
+        headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+    )
+    with pytest.raises(HTTPError) as error:
+        urlopen(remove, timeout=4)
+    assert error.value.code == 409
+    assert source.exists()

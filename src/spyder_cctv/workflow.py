@@ -461,6 +461,32 @@ class WorkflowService:
                 "storage_error": self._storage_error,
             }
 
+    def model_usage(self) -> dict[str, list[str]]:
+        """Read one consistent usage snapshot for a whole model-library request."""
+        with self._lock:
+            if self._storage_error is not None:
+                raise RuntimeError("Workflow storage is unreadable; model use cannot be checked")
+            try:
+                persisted = self._load()
+            except (OSError, ValueError) as error:
+                raise RuntimeError(
+                    "Workflow storage is unreadable; model use cannot be checked"
+                ) from error
+            references: dict[str, list[str]] = {}
+            for graph in [*self._graphs.values(), *persisted.values()]:
+                for node in graph["nodes"]:
+                    if node["type"] in ("model", "classifier"):
+                        ident = node["params"].get("model_id")
+                        if ident:
+                            references.setdefault(ident, []).append(
+                                f"Workflow {graph['name']} / node {node['id']}"
+                            )
+            return {ident: list(dict.fromkeys(rows)) for ident, rows in references.items()}
+
+    def model_references(self, model_id: str) -> list[str]:
+        """Include live graphs and workflows saved by another local instance."""
+        return self.model_usage().get(model_id, [])
+
     def notifications(self) -> dict[str, Any]:
         """Return current-process notifications and session identity for client deduplication."""
         with self._lock:
@@ -881,12 +907,36 @@ class WorkflowService:
             options_by_camera[camera_id] = options
         nodes = {node["id"]: node for node in graph["nodes"]}
         for node in graph["nodes"]:
-            if node["type"] != "detections" or node["params"]["engine"] != "insightface":
+            if node["type"] != "detections":
                 continue
             incoming = [edge for edge in graph["edges"] if edge["to"] == node["id"]]
             model_edges = [edge for edge in incoming if edge.get("input") == "model"]
             classifier_edges = [edge for edge in incoming if edge.get("input") == "classifier"]
             camera_edges = [edge for edge in incoming if edge.get("input") == "camera"]
+            if node["params"]["engine"] == "opencv" and not model_edges:
+                # The built-in person detector needs no external weights or manual
+                # camera pipeline panel. Explicit OpenCV nodes configure it on enable.
+                camera_ids = (
+                    [nodes[edge["from"]]["params"]["camera_id"] for edge in camera_edges]
+                    if camera_edges
+                    else graph["camera_ids"]
+                )
+                for camera_id in camera_ids:
+                    worker = self._camera_worker(camera_id)
+                    current = getattr(getattr(worker, "config", None), "vision", None)
+                    if current is not None and not isinstance(current, dict):
+                        current = vars(current)
+                    options = (
+                        dict(current)
+                        if current and current.get("engine") == "opencv"
+                        else {"engine": "opencv"}
+                    )
+                    prior = options_by_camera.get(camera_id)
+                    if prior and VisionConfig(**prior) != VisionConfig(**options):
+                        raise ValueError(f"Conflicting models target camera {camera_id}")
+                    options_by_camera[camera_id] = options
+            if node["params"]["engine"] != "insightface":
+                continue
             if "detector" not in node["params"] and not model_edges and not classifier_edges:
                 # Legacy nodes observe the camera's existing model pipeline.
                 continue
@@ -971,11 +1021,23 @@ class WorkflowService:
                 if edge.get("input") == "classifier"
             ]
             if not models and (
-                node["params"]["engine"] != "insightface"
-                or ("detector" not in node["params"] and not classifiers)
+                node["params"]["engine"] not in ("opencv", "insightface")
+                or (
+                    node["params"]["engine"] == "insightface"
+                    and "detector" not in node["params"]
+                    and not classifiers
+                )
             ):
                 continue
-            builtin = node["params"].get("detector", "scrfd-500mf") if not models else None
+            builtin = (
+                (
+                    "opencv"
+                    if node["params"]["engine"] == "opencv"
+                    else node["params"].get("detector", "scrfd-500mf")
+                )
+                if not models
+                else None
+            )
             if len(models) == 1 and models[0].get("model_id") in _BUILTIN_MODELS:
                 builtin = _BUILTIN_MODELS[models[0]["model_id"]]
                 models = []

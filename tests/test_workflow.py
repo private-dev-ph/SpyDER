@@ -99,6 +99,60 @@ def test_validates_persists_and_loads_normalized_graph(service, tmp_path):
         reloaded.close()
 
 
+def test_model_references_include_disabled_workflow_nodes(service):
+    saved = graph(
+        enabled=False,
+        nodes=[
+            {
+                "id": "model-node",
+                "type": "model",
+                "x": 0,
+                "y": 0,
+                "params": {"model_id": "a" * 32},
+            },
+            {
+                "id": "classifier-node",
+                "type": "classifier",
+                "x": 1,
+                "y": 0,
+                "params": {"model_id": "b" * 32},
+            },
+        ],
+        edges=[],
+    )
+    service.save(saved)
+
+    assert service.model_references("a" * 32) == ["Workflow People / node model-node"]
+    assert service.model_references("b" * 32) == ["Workflow People / node classifier-node"]
+
+
+def test_model_references_include_latest_persisted_workflows_and_fail_closed(service, tmp_path):
+    graph_with_model = graph(
+        enabled=False,
+        nodes=[
+            {
+                "id": "model-node",
+                "type": "model",
+                "x": 0,
+                "y": 0,
+                "params": {"model_id": "c" * 32},
+            }
+        ],
+        edges=[],
+    )
+    other = WorkflowService(service.manager, service.recorder, tmp_path)
+    other._stop.set()
+    other._thread.join(timeout=2)
+    try:
+        service.save(graph_with_model)
+        assert other.model_references("c" * 32) == ["Workflow People / node model-node"]
+        (tmp_path / "workflows.json").write_text("{broken", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="unreadable"):
+            other.model_references("c" * 32)
+    finally:
+        other.close()
+
+
 def test_bindings_validate_upstream_type_and_round_trip(service, tmp_path):
     g = graph(
         nodes=[

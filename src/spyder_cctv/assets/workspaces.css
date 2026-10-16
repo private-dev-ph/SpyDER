@@ -66,6 +66,10 @@
   gap: 10px;
   margin-top: 18px;
 }
+.recording-actions > .button,
+.layout-options > .button {
+  min-height: 44px;
+}
 .recording-preview {
   background: #111313;
   color: var(--gold);
@@ -126,6 +130,10 @@
   accent-color: var(--accent);
   width: 17px;
   height: 17px;
+}
+#recording-cameras label {
+  min-height: 40px;
+  padding: 4px 2px;
 }
 .device-item,
 .media-item {
@@ -221,6 +229,17 @@
   .workspace-panel {
     padding: 18px;
   }
+  .recording-actions,
+  .layout-options {
+    gap: 8px;
+  }
+  .recording-actions > .button,
+  .layout-options > .button {
+    flex: 1 1 180px;
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+  }
   .recording-heading {
     flex-wrap: wrap;
   }
@@ -230,6 +249,27 @@
   }
 }
 @media (max-width: 500px) {
+  .workspace-panel {
+    padding: 14px;
+  }
+  .recording-actions,
+  .layout-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  }
+  .recording-actions > .button,
+  .layout-options > .button {
+    width: 100%;
+    min-width: 0;
+    padding: 11px 10px;
+    overflow-wrap: anywhere;
+  }
+  #recording-cameras {
+    gap: 8px 16px;
+  }
+  #recording-cameras label {
+    min-height: 44px;
+  }
   .top-actions {
     width: 100%;
     justify-content: space-between;
@@ -240,4 +280,14 @@
   .recording-preview {
     min-height: 140px;
   }
+}
+
+/* Keep Vision Lab mode tabs separated from the workspace below. */
+.recording-actions:has(#vision-motion-tab) {
+  margin: 0 0 18px;
+  padding: 6px;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
 }
