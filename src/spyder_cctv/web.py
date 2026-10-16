@@ -6,6 +6,7 @@ import mimetypes
 import platform
 import re
 import shutil
+import socket
 import sys
 import tempfile
 import time
@@ -109,6 +110,14 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         return list(dict.fromkeys(references))
 
     class LocalServer(ThreadingHTTPServer):
+        # Windows SO_REUSEADDR can let two live servers share the same port.
+        allow_reuse_address = sys.platform != "win32"
+
+        def server_bind(self) -> None:
+            if sys.platform == "win32":
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
         def server_close(self) -> None:
             try:
                 workflows.close()

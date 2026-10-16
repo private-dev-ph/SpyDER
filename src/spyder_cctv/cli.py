@@ -1,6 +1,7 @@
 """Installed console entry point."""
 
 import argparse
+import errno
 import json
 import logging
 import webbrowser
@@ -68,8 +69,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         try:
             server = create_server(manager, args.port)
-        except OSError:
+        except OSError as error:
             manager.close()
+            if error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) in (
+                10048,
+                10013,
+            ):
+                raise RuntimeError(
+                    f"Cannot bind local port {args.port}. Another SpyDER instance may already "
+                    "be running. Stop it before restarting, or choose a different --port."
+                ) from error
             raise
         try:
             manager.start_configured()

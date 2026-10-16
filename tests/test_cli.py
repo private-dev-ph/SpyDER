@@ -1,3 +1,5 @@
+import errno
+
 from spyder_cctv.cli import main
 
 
@@ -14,6 +16,16 @@ def test_init_check_and_no_overwrite(tmp_path, monkeypatch):
 
 def test_missing_config_has_useful_exit(tmp_path):
     assert main(["--config", str(tmp_path / "missing.json"), "check"]) == 1
+
+
+def test_occupied_port_explains_existing_instance(tmp_path, monkeypatch, caplog):
+    def occupied(_manager, _port):
+        raise OSError(errno.EADDRINUSE, "Address already in use")
+
+    monkeypatch.setattr("spyder_cctv.cli.create_server", occupied)
+    assert main(["--config", str(tmp_path / "config.json"), "gui", "--no-browser"]) == 1
+    assert "Another SpyDER instance may already be running" in caplog.text
+    assert "different --port" in caplog.text
 
 
 def test_gui_first_launch_and_default_command(tmp_path, monkeypatch):
