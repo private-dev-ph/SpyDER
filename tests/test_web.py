@@ -235,6 +235,38 @@ def test_record_capture_and_download_routes(server, tmp_path):
     assert result["state"] == "idle"
     assert manager.statuses()[0]["recording"] is False
     video = next(item for item in result["items"] if item["kind"] == "recording")
+    with urlopen(url + f"/api/media/{video['id']}/info", timeout=4) as response:
+        info = json.load(response)
+    assert info["duration_seconds"] > 0
+    assert info["fps"] > 0 and info["frame_count"] > 0
+    with urlopen(url + f"/api/media/{video['id']}/frame?time=0", timeout=4) as response:
+        assert response.headers["Content-Type"] == "image/jpeg"
+        preview = cv2.imdecode(np.frombuffer(response.read(), np.uint8), cv2.IMREAD_COLOR)
+        assert preview.shape[1] <= 960
+    with pytest.raises(HTTPError) as error:
+        urlopen(url + f"/api/media/{video['id']}/frame?time=999999", timeout=4)
+    assert error.value.code == 400
+    with pytest.raises(HTTPError) as error:
+        urlopen(url + "/api/media/not-an-id/info", timeout=4)
+    assert error.value.code == 404
+    with urlopen(
+        Request(url + f"/api/media/{video['id']}", headers={"Range": "bytes=0-15"}), timeout=4
+    ) as response:
+        assert response.status == 206
+        assert response.headers["Content-Range"].startswith("bytes 0-15/")
+        assert len(response.read()) == 16
+    huge_range = "bytes=" + "9" * 5000 + "-"
+    with pytest.raises(HTTPError) as error:
+        urlopen(
+            Request(url + f"/api/media/{video['id']}", headers={"Range": huge_range}), timeout=4
+        )
+    assert error.value.code == 416
+    with urlopen(url + "/api/events", timeout=4) as response:
+        events = json.load(response)
+    assert events["events"] == [] and events["retention_limit"] >= 10000
+    with pytest.raises(HTTPError) as error:
+        urlopen(url + "/api/events/download?ids=invalid", timeout=4)
+    assert error.value.code == 400
     with urlopen(url + video["url"], timeout=2) as response:
         video_path = tmp_path / video["filename"]
         video_path.write_bytes(response.read())
@@ -284,6 +316,46 @@ def test_media_rejects_arbitrary_paths_and_cross_origin(server):
     assert error.value.code == 403
     with urlopen(url + "/api/system", timeout=2) as response:
         assert json.load(response)["free_bytes"] > 0
+
+
+def test_storage_preference_is_guarded_deferred_and_keeps_application_data(server, tmp_path):
+    url, manager = server
+    before = manager.media_dir
+    data_root = manager.app_data_dir
+    target = tmp_path / "new-video-output"
+
+    def save(value, guarded=True):
+        return urlopen(
+            Request(
+                url + "/api/system/storage",
+                method="POST",
+                data=json.dumps({"media_directory": value}).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    **({"X-Spyder-Control": "1"} if guarded else {}),
+                },
+            ),
+            timeout=4,
+        )
+
+    with pytest.raises(HTTPError) as error:
+        save(str(target), guarded=False)
+    assert error.value.code == 403
+    with pytest.raises(HTTPError) as error:
+        save("relative/folder")
+    assert error.value.code == 400
+    with save(str(target)) as response:
+        result = json.load(response)
+    assert result["restart_required"]
+    assert manager.media_dir == before
+    assert manager.app_data_dir == data_root
+    with urlopen(url + "/api/system", timeout=4) as response:
+        result = json.load(response)
+    assert result["configured_media_directory"] == str(target)
+    assert result["media_directory"] == str(before)
+    assert result["camera_count"] == 1
+    assert "opencv" in result["engines"]
+    assert result["event_retention_limit"] == 10000
 
 
 def test_model_and_workflow_routes(server):

@@ -12,11 +12,13 @@ import threading
 import time
 import uuid
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .cv.contracts import VisionConfig
 from .cv.detectors import DetectorCatalog
+from .events import EventService
 from .workflow_code import run_code, validate_code
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -83,7 +85,7 @@ _NODE_PARAMS = {
     "zone": {"roi"},
     "count": {"minimum"},
     "cooldown": {"seconds"},
-    "event": {"message"},
+    "event": {"message", "name_pattern", "attachment", "duration_seconds"},
     "notification": {"title", "message"},
     "capture": set(),
     "record": {"action"},
@@ -261,6 +263,19 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
         elif kind == "event":
             if not isinstance(p.get("message"), str) or len(p["message"]) > 500:
                 raise ValueError("message must be a string of at most 500 characters")
+            p.setdefault("name_pattern", "{workflow} · {camera} · {date} {time}")
+            p.setdefault("attachment", "none")
+            p.setdefault("duration_seconds", 10)
+            if (
+                not isinstance(p["name_pattern"], str)
+                or not p["name_pattern"].strip()
+                or len(p["name_pattern"]) > 200
+            ):
+                raise ValueError("name_pattern must be nonempty and at most 200 characters")
+            if p["attachment"] not in ("none", "capture", "recording"):
+                raise ValueError("attachment must be none, capture or recording")
+            if type(p["duration_seconds"]) is not int or not 1 <= p["duration_seconds"] <= 300:
+                raise ValueError("duration_seconds must be between 1 and 300")
         elif kind == "notification":
             p.setdefault("title", "SpyDER detection")
             p.setdefault("message", "Matching face detected")
@@ -429,6 +444,9 @@ class WorkflowService:
         self.detector_catalog = detector_catalog or DetectorCatalog()
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.event_store = EventService(
+            getattr(manager, "app_data_dir", self.storage_dir), recorder
+        )
         self._path = self.storage_dir / "workflows.json"
         self._lock = threading.RLock()
         self._storage_error: str | None = None
@@ -446,6 +464,11 @@ class WorkflowService:
         self._global_actions: deque[float] = deque()
         self._cooldowns: dict[tuple[str, str, str], float] = {}
         self._record_owned: dict[str, set[str]] = {}
+        self._motion_state: dict[str, tuple[Any, int, bool]] = {}
+        self._attachment_lock = threading.Lock()
+        self._event_clip_sessions: set[str] = set()
+        self._event_clip_transferred: set[str] = set()
+        self._clip_threads: set[threading.Thread] = set()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="spyder-workflows", daemon=True)
         self._thread.start()
@@ -589,7 +612,28 @@ class WorkflowService:
                     "seconds": {"type": "number", "minimum": 1, "maximum": 3600, "default": 10}
                 },
             },
-            {"type": "event", "params": {"message": {"type": "string", "maximum": 500}}},
+            {
+                "type": "event",
+                "params": {
+                    "message": {"type": "string", "maximum": 500},
+                    "name_pattern": {
+                        "type": "string",
+                        "maximum": 200,
+                        "default": "{workflow} · {camera} · {date} {time}",
+                    },
+                    "attachment": {
+                        "type": "string",
+                        "enum": ["none", "capture", "recording"],
+                        "default": "none",
+                    },
+                    "duration_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 300,
+                        "default": 10,
+                    },
+                },
+            },
             {
                 "type": "notification",
                 "params": {
@@ -1179,6 +1223,9 @@ class WorkflowService:
             if camera_ids is not None:
                 raise ValueError("stop does not accept camera_ids")
             with self._lock:
+                session_id = self.recorder.status().get("session_id")
+                if session_id in self._event_clip_sessions:
+                    self._event_clip_transferred.add(session_id)
                 memberships = list(self.recorder.status().get("camera_ids", []))
                 result = self.recorder.stop()
                 self.relinquish_recording(memberships)
@@ -1193,6 +1240,9 @@ class WorkflowService:
         ):
             raise ValueError("camera_ids must be a list of valid camera ids")
         with self._lock:
+            session_id = self.recorder.status().get("session_id")
+            if session_id in self._event_clip_sessions:
+                self._event_clip_transferred.add(session_id)
             previous = list(self.recorder.status().get("camera_ids", []))
             result = (
                 self.recorder.start(camera_ids)
@@ -1269,6 +1319,7 @@ class WorkflowService:
             self._tick_locked(statuses, now)
 
     def _tick_locked(self, statuses: dict[str, dict[str, Any]], now: float) -> None:
+        self._poll_motion_events(statuses)
         with self._lock:
             graphs = copy.deepcopy(list(self._graphs.values()))
             self._runtime = {
@@ -1330,6 +1381,40 @@ class WorkflowService:
             for camera_id in self._camera_ids(graph):
                 if camera_id in fresh:
                     self._evaluate(graph, camera_id, fresh[camera_id], now, statuses.get(camera_id))
+
+    def _poll_motion_events(self, statuses: dict[str, dict[str, Any]]) -> None:
+        """Persist one event when fresh native motion changes from quiet to active."""
+        for camera_id, status in statuses.items():
+            metadata = status.get("metadata") or {}
+            analysis = metadata.get("analysis") or {}
+            frame_sequence = status.get("frames")
+            if (
+                not isinstance(analysis, dict)
+                or analysis.get("state") != "ready"
+                or type(frame_sequence) is not int
+                or not _finite(analysis.get("result_age_seconds"))
+                or analysis["result_age_seconds"] > 2
+            ):
+                continue
+            session = status.get("capture_session")
+            previous = self._motion_state.get(camera_id)
+            if previous and previous[0] == session and frame_sequence <= previous[1]:
+                continue
+            active = bool(analysis.get("region_count", len(analysis.get("regions", []))))
+            was_active = bool(previous and previous[0] == session and previous[2])
+            self._motion_state[camera_id] = (session, frame_sequence, active)
+            if active and not was_active:
+                camera_name = status.get("name") or status.get("camera_name") or camera_id
+                try:
+                    self.event_store.create(
+                        name=f"Motion · {camera_name}",
+                        kind="motion",
+                        camera_id=camera_id,
+                        camera_name=camera_name,
+                        message="Motion detected",
+                    )
+                except (OSError, ValueError, RuntimeError):
+                    continue
 
     @staticmethod
     def _camera_ids(graph: dict[str, Any]) -> list[str]:
@@ -1684,7 +1769,16 @@ class WorkflowService:
                 and result
                 and self._action_allowed(graph["id"], camera_id, nid, now)
             ):
-                self._act(kind, runtime_params, graph["id"], camera_id, graph.get("name"))
+                self._act(
+                    kind,
+                    runtime_params,
+                    graph["id"],
+                    camera_id,
+                    graph.get("name"),
+                    node_id=nid,
+                    camera_name=(status or {}).get("name") or camera_id,
+                    detections=result,
+                )
             for target in outgoing[nid]:
                 if all(parent in values for parent in incoming[target]) and target not in queue:
                     queue.append(target)
@@ -1935,9 +2029,57 @@ class WorkflowService:
         graph_id: str,
         camera_id: str,
         workflow_name: str | None = None,
+        *,
+        node_id: str | None = None,
+        camera_name: str | None = None,
+        detections: list[dict[str, Any]] | None = None,
     ) -> None:
         try:
             if kind == "event":
+                now = datetime.now().astimezone()
+                labels = sorted(
+                    {
+                        value[:80]
+                        for detection in (detections or [])
+                        if isinstance(detection, dict)
+                        for value in (detection.get("label"), detection.get("identity"))
+                        if isinstance(value, str) and value.strip()
+                    }
+                )
+                tokens = {
+                    "workflow": workflow_name or graph_id,
+                    "camera": camera_name or camera_id,
+                    "date": now.strftime("%Y-%m-%d"),
+                    "time": now.strftime("%H:%M:%S"),
+                    "node": node_id or "event",
+                    "kind": "workflow",
+                    "label": ", ".join(labels)[:80] or "event",
+                }
+                pattern = params.get("name_pattern", "{workflow} · {camera} · {date} {time}")
+                name = re.sub(
+                    r"\{([A-Za-z_][A-Za-z0-9_]*)\}",
+                    lambda match: str(tokens.get(match.group(1), match.group(0))),
+                    pattern,
+                )[:200].strip()
+                event = self.event_store.create(
+                    name=name or "Workflow event",
+                    kind="workflow",
+                    camera_id=camera_id,
+                    camera_name=tokens["camera"],
+                    workflow_id=graph_id,
+                    node_id=node_id,
+                    message=params["message"],
+                    media=[],
+                )
+                if params.get("attachment", "none") == "capture":
+                    try:
+                        self.event_store.attach_media(
+                            event["id"], [self.recorder.capture([camera_id])]
+                        )
+                    except (OSError, RuntimeError, ValueError, KeyError):
+                        self.event_store.set_attachment_status(
+                            event["id"], "error", "Frame capture unavailable"
+                        )
                 with self._lock:
                     self._events.append(
                         {
@@ -1948,6 +2090,17 @@ class WorkflowService:
                         }
                     )
                     del self._events[:-100]
+                if params.get("attachment") == "recording":
+                    self.event_store.set_attachment_status(event["id"], "pending")
+                    clip_thread = threading.Thread(
+                        target=self._record_event_clip,
+                        args=(event["id"], camera_id, params.get("duration_seconds", 10)),
+                        name="spyder-event-recording",
+                        daemon=True,
+                    )
+                    with self._lock:
+                        self._clip_threads.add(clip_thread)
+                    clip_thread.start()
             elif kind == "notification":
                 with self._lock:
                     self._events.append(
@@ -1979,12 +2132,82 @@ class WorkflowService:
                 )
                 del self._errors[:-100]
 
+    def _record_event_clip(self, event_id: str, camera_id: str, duration: int) -> None:
+        """Record bounded clip; stop only same, unmodified recorder session."""
+        if not self._attachment_lock.acquire(blocking=False):
+            try:
+                self.event_store.set_attachment_status(
+                    event_id, "error", "Another event recording is active"
+                )
+            finally:
+                with self._lock:
+                    self._clip_threads.discard(threading.current_thread())
+            return
+        try:
+            with self._lock:
+                initial = self.recorder.status()
+                before = {item.get("id") for item in initial.get("items", [])}
+                if initial.get("state") != "idle":
+                    self.event_store.set_attachment_status(event_id, "error", "Recorder is busy")
+                    return
+                started = self.recorder.start([camera_id])
+                session_id = started.get("session_id") or self.recorder.status().get("session_id")
+                if not isinstance(session_id, str):
+                    self.event_store.set_attachment_status(
+                        event_id, "error", "Recorder did not report session ownership"
+                    )
+                    return
+                self._event_clip_sessions.add(session_id)
+            self._stop.wait(max(1, min(300, duration)))
+            with self._lock:
+                current = self.recorder.status()
+                can_stop = (
+                    current.get("session_id") == session_id
+                    and current.get("state") == "recording"
+                    and current.get("camera_ids") == [camera_id]
+                    and session_id not in self._event_clip_transferred
+                    and not self._record_owned.get(camera_id)
+                )
+                if can_stop:
+                    self.recorder.stop()
+                    current = self.recorder.status()
+                still_ours = current.get("session_id") == session_id
+                added = (
+                    [item for item in current.get("items", []) if item.get("id") not in before]
+                    if still_ours
+                    else []
+                )
+            if added:
+                self.event_store.attach_media(event_id, [added[-1]])
+            else:
+                self.event_store.set_attachment_status(
+                    event_id,
+                    "error",
+                    "Recording was handed to another action or did not finish",
+                )
+        except Exception:
+            try:
+                self.event_store.set_attachment_status(
+                    event_id, "error", "Recording attachment failed"
+                )
+            except Exception:
+                pass
+        finally:
+            if "session_id" in locals():
+                self._event_clip_sessions.discard(session_id)
+                self._event_clip_transferred.discard(session_id)
+            with self._lock:
+                self._clip_threads.discard(threading.current_thread())
+            self._attachment_lock.release()
+
     def _record(self, action: str, graph_id: str, camera_id: str) -> None:
         with self._lock:
             self._record_locked(action, graph_id, camera_id)
 
     def _record_locked(self, action: str, graph_id: str, camera_id: str) -> None:
         state = self.recorder.status()
+        if state.get("session_id") in self._event_clip_sessions:
+            self._event_clip_transferred.add(state["session_id"])
         members = list(state.get("camera_ids", []))
         if action == "start":
             if camera_id in members:
@@ -2032,3 +2255,7 @@ class WorkflowService:
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(1.0)
+        with self._lock:
+            clip_threads = list(self._clip_threads)
+        for thread in clip_threads:
+            thread.join(6.0)

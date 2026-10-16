@@ -4,12 +4,12 @@
   const find = (s, root = document) => root.querySelector(s);
   const pages = {
     "control-room": ["Control Room", "grid", "Observe / control"],
-    "vision-lab": ["Vision Lab", "vision", "Understand every frame"],
+    "vision-lab": ["Vision Lab", "vision", "Empower your security"],
     "camera-setup": ["Camera Setup", "settings", "Tune your devices"],
-    recordings: ["Recordings", "record", "One canvas. Every angle."],
-    events: ["Events", "events", "Activity worth revisiting"],
+    recordings: ["Recordings", "record", "Capture every activity simultaneously"],
+    events: ["Events", "events", "Record and log everything you need"],
     layouts: ["Layouts", "grid", "Arrange your perspective"],
-    system: ["System", "system", "Everything stays local"],
+    system: ["System", "system", "Everything stays local, nothing is ever uploaded"],
   };
   const nav = find("#workspace-nav");
   const chooser = find("#workspace-select");
@@ -19,13 +19,6 @@
   message.setAttribute("role", "status");
   message.hidden = true;
   find("main").prepend(message);
-  const indicator = document.createElement("button");
-  indicator.className = "button secondary recording-indicator";
-  indicator.textContent = "Record / capture";
-  indicator.addEventListener("click", () => {
-    location.hash = "recordings";
-  });
-  find(".top-actions").prepend(indicator);
   let current = "control-room";
   let media = { state: "idle", camera_ids: [], elapsed_seconds: 0, items: [] };
   let selected = new Set();
@@ -126,7 +119,7 @@
     try {
       const result = await request(path, ids ? { camera_ids: ids } : {});
       if (path === "/api/captures")
-        tell("Frame capture saved. Open Recordings to download it.");
+        tell("Frame capture saved. Open Recordings to view it.");
       else {
         media = result;
         selected = new Set(media.camera_ids || []);
@@ -156,6 +149,7 @@
     );
   }
   function route() {
+    window.spyderEventLibrary?.unmount();
     window.spyderVisionLab?.unmount();
     window.spyderWorkflows?.unmount();
     const key = location.hash.slice(1);
@@ -177,14 +171,16 @@
     const [title, , subtitle] = pages[current];
     page.innerHTML =
       '<header class="page-heading"><div><p class="eyebrow">WORKSPACE</p><h1 id="workspace-title" tabindex="-1"></h1><p class="intro"></p></div><span class="workspace-badge"></span></header><div id="workspace-content"></div>';
-    find("#workspace-title").textContent = title;
+    const workspaceTitle = find("#workspace-title");
+    workspaceTitle.textContent = title;
+    const titleDot = document.createElement("span");
+    titleDot.textContent = ".";
+    titleDot.setAttribute("aria-hidden", "true");
+    workspaceTitle.append(titleDot);
     find(".intro", page).textContent = subtitle;
-    find(".workspace-badge", page).textContent =
-      current === "recordings" ||
-      current === "camera-setup" ||
-      current === "system"
-        ? "LOCAL WORKSPACE"
-        : "FOUNDATION";
+    find(".workspace-badge", page).textContent = window.spyderShowcase
+      ? "ON-DEVICE SHOWCASE"
+      : "LOCAL WORKSPACE";
     const content = find("#workspace-content");
     cameraSignature = librarySignature = "";
     if (current === "recordings") {
@@ -214,7 +210,7 @@
       );
     } else if (current === "vision-lab") {
       content.innerHTML =
-        '<div class="recording-actions"><button id="vision-motion-tab" class="button primary">Motion & ROI</button><button id="vision-workflow-tab" class="button secondary">Models & workflows</button></div><div id="vision-mode-content"></div>';
+        '<div class="recording-actions"><button id="vision-motion-tab" class="button primary">Motion & ROI</button><button id="vision-workflow-tab" class="button secondary">Models & Workflows</button></div><div id="vision-mode-content"></div>';
       const mode = find("#vision-mode-content");
       function switchMode(workflow) {
         window.spyderVisionLab?.unmount();
@@ -251,13 +247,7 @@
           ? "Inspect each camera’s existing pipeline. OpenCV, YOLO and InsightFace run in the installed app. Model selection and detection tuning will be added here."
           : "Open a camera’s settings to tune supported controls and assign profiles. Add and remove devices from the Control Room.";
     } else if (current === "events") {
-      content.innerHTML =
-        '<section class="workspace-panel foundation-panel"><h2>An activity timeline starts here.</h2><p>Motion and detection events will appear here with camera, time and frame captures.</p><p class="field-help">Event indexing and alerts are planned. This workspace does not yet store an event history. Frame captures are available in Recordings.</p></section>';
-      content.append(
-        button("Open captures", () => {
-          location.hash = "recordings";
-        }),
-      );
+      window.spyderEventLibrary?.mount(content);
     } else if (current === "layouts") {
       content.innerHTML =
         '<section class="workspace-panel"><h2>Your wall, your scale.</h2><p class="workspace-description">Choose a tile size for the Control Room. Named arrangements and rotating views will be added here.</p><div class="layout-options"></div></section>';
@@ -276,30 +266,44 @@
       }
     } else {
       content.innerHTML =
-        '<section class="workspace-panel"><h2>Local system</h2><div id="system-details" class="system-details"></div><fieldset class="activity-policy"><legend>Camera focus preference</legend><label class="release-toggle"><input id="system-pause-unfocused" type="checkbox" checked /><span>Pause cameras when unfocused</span></label><p id="system-pause-status" class="field-help" role="status" aria-live="polite"></p><p class="field-help">When off, cameras keep running while the local server runs, even if you close this browser. Browser desktop notifications require this page to stay open.</p></fieldset><p class="field-help">CPU/GPU graphs and dependency diagnostics will be added here.</p></section>';
+        '<section class="workspace-panel"><h2>Local system</h2><div id="system-details" class="system-details"></div><div id="system-metrics" class="system-metrics"></div><fieldset class="activity-policy"><legend>Camera focus preference</legend><label class="release-toggle"><input id="system-pause-unfocused" type="checkbox" checked /><span>Pause cameras when unfocused</span></label><p id="system-pause-status" class="field-help" role="status" aria-live="polite"></p><p class="field-help">When off, cameras keep running while the local server runs, even if you close this browser. Browser desktop notifications require this page to stay open.</p></fieldset><form id="system-storage" class="system-storage"><label for="system-output">Recordings and captures folder</label><input id="system-output" type="text" required maxlength="4096" placeholder="Absolute local folder path" /><div class="recording-actions"><button class="button primary" type="submit">Save output folder</button><button id="system-output-reset" class="button secondary" type="button">Use default folder</button></div><p class="field-help">A dedicated folder on a local drive is recommended. Keep enough free space for video. Changes apply after restarting SpyDER; files stay in their original folders, and previous folders remain available for playback. Models and configuration stay in their current locations.</p><p id="system-storage-status" class="field-help" role="status"></p></form></section>';
       updateActivityPreference();
       const details = find("#system-details");
-      if (window.spyderShowcase)
-        details.textContent =
-          "Browser showcase · processing and recordings stay on your computer. Native CV requires the installed Python app.";
-      else {
-        details.textContent = "Loading local storage details…";
-        fetch("/api/system", { signal: AbortSignal.timeout(4000) })
-          .then((r) => {
-            if (!r.ok) throw new Error("Storage details unavailable");
-            return r.json();
-          })
-          .then((data) => {
-            details.textContent =
-              "Media folder: " +
-              data.media_directory +
-              " · Free space: " +
-              (data.free_bytes / 1024 ** 3).toFixed(1) +
-              " GiB";
-          })
-          .catch((e) => {
-            details.textContent = e.message;
-          });
+      const output = find("#system-output");
+      const storageStatus = find("#system-storage-status");
+      const storageForm = find("#system-storage");
+      let defaultDirectory = "";
+      function populateSystem(data) {
+        if (!details.isConnected) return;
+        details.textContent = "Media folder: " + data.media_directory + " · Free space: " + (data.free_bytes / 1024 ** 3).toFixed(1) + " GiB";
+        output.value = data.configured_media_directory || data.media_directory;
+        defaultDirectory = data.default_media_directory || data.media_directory;
+        storageStatus.textContent = data.storage_settings_error || (data.command_line_override ? "The --media-dir command-line option overrides this preference. Remove it to use this folder." : data.restart_required ? "Saved. Restart SpyDER to use the new output folder." : "Current output folder is active.");
+        const metrics = find("#system-metrics"); metrics.replaceChildren();
+        const fields = [
+          ["Application", "SpyDER " + (data.version || "")],
+          ["Runtime", "Python " + (data.python_version || "") + " · " + (data.platform || "")],
+          ["Cameras", (data.running_cameras || 0) + " running / " + (data.camera_count || 0) + " configured"],
+          ["Recording", data.recording_state || "idle"],
+          ["Event history", (data.event_count || 0) + " records · latest " + (data.event_retention_limit || 10000).toLocaleString() + " retained"],
+          ["Server uptime", Math.floor((data.uptime_seconds || 0) / 60) + " minutes"],
+        ];
+        for (const [engine, info] of Object.entries(data.engines || {})) fields.push([engine + " dependencies", Object.entries(info.packages || {}).map(([name, version]) => name + ": " + (version || "not installed")).join(" · ")]);
+        for (const [label, value] of fields) { const card = document.createElement("div"); card.className = "system-metric"; const title = document.createElement("strong"); title.textContent = label; const text = document.createElement("span"); text.textContent = value; card.append(title, text); metrics.append(card); }
+      }
+      if (window.spyderShowcase) {
+        details.textContent = "Browser showcase · processing and recordings stay on your computer. Native CV requires the installed Python app.";
+        storageForm.hidden = true;
+      } else {
+        details.textContent = "Loading local system details…";
+        fetch("/api/system", { signal: AbortSignal.timeout(4000) }).then((response) => { if (!response.ok) throw new Error("System details unavailable"); return response.json(); }).then(populateSystem).catch((error) => { if (details.isConnected) details.textContent = error.message; });
+        find("#system-output-reset").addEventListener("click", () => { output.value = defaultDirectory; output.focus(); });
+        storageForm.addEventListener("submit", async (event) => {
+          event.preventDefault(); const buttons = [...storageForm.querySelectorAll("button")]; buttons.forEach((button) => { button.disabled = true; }); storageStatus.textContent = "Checking folder and saving…";
+          try { const data = await app.request("/api/system/storage", { media_directory: output.value }); if (storageStatus.isConnected) storageStatus.textContent = data.command_line_override ? "Saved. Remove --media-dir and restart SpyDER to apply this preference." : data.restart_required ? "Saved. Restart SpyDER to use this output folder. Existing files are kept." : "Output folder is active."; }
+          catch (error) { if (storageStatus.isConnected) storageStatus.textContent = error.message; }
+          finally { buttons.forEach((button) => { button.disabled = false; }); }
+        });
       }
     }
     update();
@@ -346,10 +350,6 @@
   }
   function update() {
     window.dispatchEvent(new CustomEvent("spyder:media", { detail: media }));
-    indicator.textContent = active()
-      ? "● REC · " + Math.floor(media.elapsed_seconds || 0) + "s"
-      : "Record / capture";
-    indicator.dataset.recording = String(active());
     addCardActions();
     if (current === "camera-setup") {
       const list = find("#device-list");
@@ -498,7 +498,7 @@
         download.href = item.url;
         download.download = item.filename;
         row.append(
-          icon(item.kind === "capture" ? "capture" : "record"),
+          window.spyderEventLibrary.mediaButton(item),
           detail,
           download,
         );

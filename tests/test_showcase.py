@@ -22,6 +22,8 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "activity.js",
         "icons.svg",
         "spyder-emblem.png",
+        "event-library.js",
+        "event-library.css",
         "workspaces.js",
         "workspaces.css",
         "browser-recording.js",

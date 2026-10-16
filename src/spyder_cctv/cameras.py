@@ -21,6 +21,7 @@ from spyder_cctv.cv.contracts import VisionConfig
 from spyder_cctv.motion_config import AnalysisConfig
 from spyder_cctv.preferences import Preferences
 from spyder_cctv.presence import PresenceLeases
+from spyder_cctv.storage import StorageSettings
 from spyder_cctv.vision import Pipeline, create_pipeline
 
 logger = logging.getLogger(__name__)
@@ -492,12 +493,19 @@ class CameraManager:
         self._preferences = Preferences(
             config_path.with_name("preferences.json") if config_path is not None else None
         )
-        self.media_dir = (
-            media_dir
-            or (
-                (config_path.parent if config_path else user_data_path("SpyDER", appauthor=False))
-                / "media"
+        self.app_data_dir = (
+            config_path.parent
+            if config_path
+            else (
+                Path(media_dir).parent if media_dir else user_data_path("SpyDER", appauthor=False)
             )
+        ).resolve()
+        self.storage_settings = StorageSettings(
+            self.app_data_dir / "storage.json", self.app_data_dir / "media"
+        )
+        self.media_dir_overridden = media_dir is not None
+        self.media_dir = (
+            Path(media_dir) if media_dir else self.storage_settings.directory
         ).resolve()
         self._worker_options = worker_options
         self._idle_policy = idle_policy

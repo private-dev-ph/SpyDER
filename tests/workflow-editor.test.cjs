@@ -14,6 +14,9 @@ const {
   encodeWorkflow,
   decodeWorkflow,
   migrateDetectorNodes,
+  clampViewScale,
+  canvasDelta,
+  canvasPoint,
 } = require("../src/spyder_cctv/assets/workflow-editor.js");
 const fs = require("node:fs");
 const vm = require("node:vm");
@@ -90,6 +93,42 @@ test("new node parameters are independent and coordinates stay bounded", () => {
   assert.equal(one.x, 0);
   assert.equal(one.y, 5000);
   assert.equal(clamp(NaN), 0);
+});
+
+test("workflow viewport clamps zoom and converts pointer coordinates to canvas units", () => {
+  assert.equal(clampViewScale(0.01), 0.25);
+  assert.equal(clampViewScale(3), 2);
+  assert.equal(canvasDelta(80, 0.5), 160);
+  assert.equal(canvasPoint(140, 100, 2), 20);
+});
+
+test("event nodes expose safe default naming, attachment and duration settings", () => {
+  assert.equal(TYPES.event.params.attachment, "none");
+  assert.equal(TYPES.event.params.duration_seconds, 10);
+  assert.match(TYPES.event.params.name_pattern, /\{workflow\}/);
+  assert.match(source, /\{workflow\}, \{camera\}, \{date\}, \{time\}, \{node\}, \{kind\}, \{label\}/);
+  assert.match(source, /data-param="attachment"/);
+  assert.match(source, /data-param="duration_seconds" type="number" min="1" max="300"/);
+});
+
+test("zoom controls change canvas scale in place and clamp supported range", async () => {
+  const h = mountHarness();
+  await h.flush();
+  const canvas = h.root.querySelector("[data-canvas]");
+  const assignments = h.root.assignments;
+  h.root.dispatch("click", h.target("button", { zoomIn: "" }));
+  assert.equal(canvas.style.zoom, "1.1");
+  assert.equal(h.root.querySelector("[data-zoom-level]").textContent, "110%");
+  assert.equal(h.root.assignments, assignments, "zoom must not rerender preview canvas");
+  for (let i = 0; i < 30; i++)
+    h.root.dispatch("click", h.target("button", { zoomIn: "" }));
+  assert.equal(canvas.style.zoom, "2");
+  for (let i = 0; i < 40; i++)
+    h.root.dispatch("click", h.target("button", { zoomOut: "" }));
+  assert.equal(canvas.style.zoom, "0.25");
+  h.root.dispatch("click", h.target("button", { zoomReset: "" }));
+  assert.equal(canvas.style.zoom, "1");
+  h.window.spyderWorkflows.unmount();
 });
 
 function mountHarness({
