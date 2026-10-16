@@ -1,5 +1,6 @@
 import http.client
 import json
+import socket
 import sys
 import threading
 import time
@@ -90,6 +91,32 @@ def server(tmp_path):
     manager.close()
     thread.join(2)
     assert not thread.is_alive()
+
+
+def test_live_server_exclusively_owns_its_port(server):
+    url, _ = server
+    address = urlsplit(url)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as duplicate:
+        duplicate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        with pytest.raises(OSError):
+            duplicate.bind((address.hostname, address.port))
+    with urlopen(url + "/", timeout=2) as response:
+        assert response.status == 200
+
+
+def test_duplicate_server_start_keeps_original_healthy(server, tmp_path):
+    url, _ = server
+    manager = CameraManager([], config_path=tmp_path / "duplicate" / "config.json")
+    duplicate = None
+    try:
+        with pytest.raises(OSError):
+            duplicate = create_server(manager, urlsplit(url).port)
+        with urlopen(url + "/", timeout=2) as response:
+            assert response.status == 200
+    finally:
+        if duplicate is not None:
+            duplicate.server_close()
+        manager.close()
 
 
 def test_dashboard_assets_and_status(server):
