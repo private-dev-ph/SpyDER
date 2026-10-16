@@ -1,28 +1,30 @@
 /* One live wall; no duplicate capture or recording owners. */
 (() => {
   "use strict";
-  function layout(count, width, height) {
+  function layout(count, width, height, aspects = []) {
     count = Math.max(1, Math.floor(count || 1));
-    width = Math.max(1, width);
-    height = Math.max(1, height);
-    const target = Math.max(
-      1,
-      Math.min(
-        count,
-        Math.round(Math.sqrt((count * width) / height / (16 / 9))),
-      ),
+    width = Number.isFinite(width) ? Math.max(1, width) : 1;
+    height = Number.isFinite(height) ? Math.max(1, height) : 1;
+    const ratios = Array.from({ length: count }, (_, i) =>
+      Number.isFinite(aspects[i]) && aspects[i] > 0 ? aspects[i] : 16 / 9,
     );
+    // Fill rows horizontally on landscape and nearly square monitors. Portrait
+    // screens remain free to stack feeds instead of making them unreadably thin.
+    const horizontalFirst = width >= height * 0.9;
     let best = { columns: 1, rows: count };
     let score = -1;
     for (let columns = 1; columns <= count; columns++) {
       const rows = Math.ceil(count / columns);
+      if (horizontalFirst && columns < rows) continue;
       const w = Math.max(1, (width - 6 * (columns - 1)) / columns);
       const h = Math.max(1, (height - 6 * (rows - 1)) / rows);
-      const fitted = Math.min(w / 16, h / 9) ** 2;
+      const fitted = ratios.reduce(
+        (sum, ratio) => sum + Math.min(w, h * ratio) ** 2 / ratio,
+        0,
+      );
       if (
         fitted > score + 0.00001 ||
-        (Math.abs(fitted - score) < 0.00001 &&
-          Math.abs(columns - target) < Math.abs(best.columns - target))
+        (Math.abs(fitted - score) < 0.00001 && rows < best.rows)
       ) {
         best = { columns, rows };
         score = fitted;
@@ -43,7 +45,7 @@
   chrome.id = "wall-chrome";
   chrome.hidden = true;
   chrome.innerHTML =
-    '<button id="wall-nav-tab" class="wall-edge-tab left" aria-label="Open workspace navigation" aria-controls="wall-nav-panel" aria-expanded="false">Workspaces</button><aside id="wall-nav-panel" class="wall-drawer left" aria-label="Fullscreen workspaces" hidden><div class="wall-drawer-heading"><h2>Workspaces</h2><button class="icon-button" data-close="nav" aria-label="Close workspace navigation">×</button></div><nav id="wall-workspaces" aria-label="Fullscreen workspace navigation"></nav><button id="wall-exit" class="button secondary">Exit fullscreen wall</button></aside><button id="wall-tools-tab" class="wall-edge-tab right" aria-label="Open live view tools" aria-controls="wall-tools-panel" aria-expanded="false">Live tools</button><aside id="wall-tools-panel" class="wall-drawer right" aria-label="Live view tools" hidden><div class="wall-drawer-heading"><h2>Live tools</h2><button class="icon-button" data-close="tools" aria-label="Close live tools">×</button></div><p id="wall-live-summary" role="status"></p><section><h3>Live views</h3><div class="wall-tool-buttons"><button id="wall-start" class="button secondary">Start all</button><button id="wall-pause" class="button secondary">Pause unrecorded</button><button id="wall-fit" class="button secondary">Fit all feeds</button><button id="wall-fill" class="button secondary">Fill all tiles</button></div></section><section><h3>Camera settings</h3><label for="wall-camera-choice">Camera</label><select id="wall-camera-choice"></select><button id="wall-camera-settings" class="button secondary">Settings &amp; profiles</button><button id="wall-add" class="button secondary">Add camera</button></section><section><h3>Recording &amp; capture</h3><p id="wall-record-summary" role="status"></p><div class="wall-tool-buttons"><button id="wall-record" class="button primary">Record live feeds</button><button id="wall-stop-record" class="button secondary">Stop &amp; save</button><button id="wall-capture" class="button secondary">Capture live feeds</button></div></section><section><h3>Preferences</h3><button id="wall-theme" class="button secondary">Switch theme</button><label class="wall-idle"><input type="checkbox" id="wall-idle">Release unrecorded cameras when away</label><p class="field-help">Hover a tile for controls. Tab reveals keyboard controls. Esc exits fullscreen.</p></section></aside><p id="wall-notice" class="message" role="status" hidden></p>';
+    '<button id="wall-nav-tab" class="wall-edge-tab left" aria-label="Open workspace navigation" aria-controls="wall-nav-panel" aria-expanded="false">Workspaces</button><aside id="wall-nav-panel" class="wall-drawer left" aria-label="Fullscreen workspaces" hidden><div class="wall-drawer-heading"><h2>Workspaces</h2><button class="icon-button" data-close="nav" aria-label="Close workspace navigation">×</button></div><nav id="wall-workspaces" aria-label="Fullscreen workspace navigation"></nav><button id="wall-exit" class="button secondary">Exit fullscreen wall</button></aside><button id="wall-tools-tab" class="wall-edge-tab right" aria-label="Open live view tools" aria-controls="wall-tools-panel" aria-expanded="false">Live tools</button><aside id="wall-tools-panel" class="wall-drawer right" aria-label="Live view tools" hidden><div class="wall-drawer-heading"><h2>Live tools</h2><button class="icon-button" data-close="tools" aria-label="Close live tools">×</button></div><p id="wall-live-summary" role="status"></p><section><h3>Live views</h3><div class="wall-tool-buttons"><button id="wall-start" class="button secondary">Start all</button><button id="wall-pause" class="button secondary">Pause unrecorded</button><button id="wall-fit" class="button secondary">Fit all feeds</button><button id="wall-fill" class="button secondary">Fill all tiles</button></div></section><section><h3>Camera settings</h3><label for="wall-camera-choice">Camera</label><select id="wall-camera-choice"></select><button id="wall-camera-settings" class="button secondary">Settings &amp; profiles</button><button id="wall-add" class="button secondary">Add camera</button></section><section><h3>Recording &amp; capture</h3><p id="wall-record-summary" role="status"></p><div class="wall-tool-buttons"><button id="wall-record" class="button primary">Record live feeds</button><button id="wall-stop-record" class="button secondary">Stop &amp; save</button><button id="wall-capture" class="button secondary">Capture live feeds</button></div></section><section><h3>Preferences</h3><button id="wall-theme" class="button secondary">Switch theme</button><label class="wall-idle"><input type="checkbox" id="wall-idle">Pause cameras when unfocused</label><p class="field-help">Hover a tile for controls. Tab reveals keyboard controls. Esc exits fullscreen.</p></section></aside><p id="wall-notice" class="message" role="status" hidden></p>';
   document.body.append(chrome);
   for (const button of chrome.querySelectorAll("[data-close]")) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -67,19 +69,67 @@
     });
     find("#wall-workspaces").append(copy);
   }
+  const panelAnimations = new Map();
   function panel(name, open, restore = true) {
     const tab = find("#wall-" + name + "-tab");
     const drawer = find("#wall-" + name + "-panel");
+    const previous = panelAnimations.get(drawer);
+    const wasHidden = drawer.hidden;
+    const style = getComputedStyle(drawer);
+    const offset = name === "nav" ? "-20px" : "20px";
+    const from = wasHidden
+      ? { opacity: 0, transform: `translateX(${offset})` }
+      : { opacity: style.opacity, transform: style.transform };
+    previous?.cancel();
+    panelAnimations.delete(drawer);
+    if (!open && restore && drawer.contains(document.activeElement))
+      tab.focus();
     tab.setAttribute("aria-expanded", String(open));
-    drawer.hidden = !open;
+    drawer.inert = !open;
+    drawer.setAttribute("aria-hidden", String(!open));
+    if (
+      !active ||
+      (!open && wasHidden) ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      !drawer.animate
+    ) {
+      drawer.hidden = !open;
+    } else {
+      drawer.hidden = false;
+      const animation = drawer.animate(
+        [
+          from,
+          open
+            ? { opacity: 1, transform: "translateX(0)" }
+            : { opacity: 0, transform: `translateX(${offset})` },
+        ],
+        {
+          duration: open ? 240 : 180,
+          easing: "cubic-bezier(.22, 1, .36, 1)",
+          fill: "both",
+        },
+      );
+      panelAnimations.set(drawer, animation);
+      animation.finished
+        .then(() => {
+          if (panelAnimations.get(drawer) !== animation) return;
+          drawer.hidden = !open;
+          panelAnimations.delete(drawer);
+          animation.cancel();
+        })
+        .catch(() => {});
+    }
     if (open) {
       panel(name === "nav" ? "tools" : "nav", false, false);
       drawer.querySelector("button").focus();
-    } else if (restore && drawer.contains(document.activeElement)) tab.focus();
+    }
   }
   for (const name of ["nav", "tools"]) {
     find("#wall-" + name + "-tab").addEventListener("click", () =>
-      panel(name, find("#wall-" + name + "-panel").hidden),
+      panel(
+        name,
+        find("#wall-" + name + "-tab").getAttribute("aria-expanded") !== "true",
+      ),
     );
     chrome
       .querySelector('[data-close="' + name + '"]')
@@ -215,7 +265,7 @@
   find("#wall-idle").addEventListener("change", (event) => {
     const original = find("#release-idle");
     original.checked = event.target.checked;
-    original.dispatchEvent(new Event("change"));
+    original.dispatchEvent(new Event("change", { bubbles: true }));
   });
   function sync() {
     if (!active) return;
