@@ -66,6 +66,7 @@ $("#theme").addEventListener("click", () => {
 $("#density").value = readPreference("spyder-density", "auto");
 if (!$("#density").value) $("#density").value = "auto";
 function reflow() {
+  if (window.spyderLayouts?.reflow()) return;
   const count = Math.max(1, cards.size);
   if (window.spyderWall?.active()) {
     const padding = getComputedStyle(wall);
@@ -94,7 +95,14 @@ function reflow() {
   wall.style.setProperty("--columns", columns);
   wall.dataset.density = $("#density").value;
 }
-new ResizeObserver(reflow).observe(wall);
+let reflowFrame = null;
+new ResizeObserver(() => {
+  if (reflowFrame !== null) return;
+  reflowFrame = requestAnimationFrame(() => {
+    reflowFrame = null;
+    reflow();
+  });
+}).observe(wall);
 $("#density").addEventListener("change", () => {
   savePreference("spyder-density", $("#density").value);
   reflow();

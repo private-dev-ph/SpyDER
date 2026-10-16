@@ -347,7 +347,7 @@
             : error.message;
     }
   }
-  async function add(data) {
+  async function add(data, fixedId = null) {
     const source = data.source;
     const kind =
       source instanceof File ? "file" : source === "demo" ? "demo" : "webcam";
@@ -381,7 +381,7 @@
     canvas.width = 640;
     canvas.height = 360;
     const camera = {
-      id: "cam-" + crypto.randomUUID(),
+      id: fixedId || "cam-" + crypto.randomUUID(),
       name: data.name.trim(),
       kind,
       deviceId,
@@ -726,12 +726,12 @@
     fps: 10,
     pipeline: "motion",
     autostart: true,
-  });
+  }, "cam-demo-north");
   add({
     name: "Demo / South",
     source: "demo",
     fps: 10,
     pipeline: "motion",
     autostart: true,
-  });
+  }, "cam-demo-south");
 })();

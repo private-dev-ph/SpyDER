@@ -1,6 +1,7 @@
 # Public documentation
 
 - [Project overview, capabilities and setup](../README.md)
+- [Layout designer, dummy cameras and backups](layouts.md)
 - [Contribution guidelines](../CONTRIBUTING.md)
 - [Portfolio showcase metadata](../portfolio-showcase.json)
 
