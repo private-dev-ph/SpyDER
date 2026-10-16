@@ -45,6 +45,10 @@ def export_showcase(output: Path) -> None:
         "fullscreen.css",
         "vision-lab.js",
         "vision-lab.css",
+        "workflow-preview.js",
+        "workflow-editor.js",
+        "workflow-notifications.js",
+        "workflow-editor.css",
     ):
         (output / name).write_bytes(assets.joinpath(name).read_bytes())
     (output / "_headers").write_text(HEADERS, encoding="utf-8")

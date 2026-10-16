@@ -79,6 +79,14 @@
   color: var(--muted);
   font-size: 10px;
 }
+.vl-preview-banner {
+  margin: 12px 0;
+  padding: 9px 11px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--ink);
+  font-size: 11px;
+}
 .vl-stage {
   position: relative;
   display: grid;
@@ -92,6 +100,13 @@
   border-radius: 9px;
   background: #101214;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.vl-stage img {
+  user-select: none;
+  -webkit-user-drag: none;
+  user-drag: none;
 }
 .vl-stage:focus-visible {
   outline: 2px solid var(--accent);

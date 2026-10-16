@@ -157,7 +157,13 @@ def test_recording_retains_only_its_camera_while_idle():
         manager.set_recording("record", True)
         wait_for(lambda: all(item["state"] == "running" for item in manager.statuses()))
         manager.set_presence("tab", False, True)
-        wait_for(lambda: manager.statuses()[1]["idle_suspended"], timeout=4)
+        wait_for(
+            lambda: (
+                manager.statuses()[1]["idle_suspended"]
+                and manager.statuses()[1]["state"] == "stopped"
+            ),
+            timeout=4,
+        )
         assert manager.statuses()[0]["state"] == "running"
         assert manager.statuses()[1]["state"] == "stopped"
         manager.set_recording("record", False)
@@ -231,6 +237,84 @@ def test_recording_state_requires_boolean_and_open_manager():
         manager.set_recording("front", True)
 
 
+def test_global_preference_overrides_leases_and_only_resumes_policy_intent(tmp_path):
+    manager = CameraManager(
+        [CameraConfig("auto", 0, autostart=True), CameraConfig("manual", 1)],
+        config_path=tmp_path / "config.json",
+        idle_policy=True,
+        capture_factory=Capture,
+        pipeline_factory=lambda name: Pipeline(),
+        encoder=lambda frame: b"jpeg",
+    )
+    try:
+        manager.set_presence("tab", True, True)
+        manager.start_configured()
+        manager.control("manual", "start")
+        wait_for(lambda: all(item["state"] == "running" for item in manager.statuses()))
+
+        manager.set_pause_when_unfocused(False)
+        manager.set_presence("tab", False, True)
+        manager._leases._leases["tab"] = (
+            time.monotonic() - 1,
+            False,
+            True,
+            time.monotonic() - 5,
+        )
+        assert not manager._leases.keeps_cameras()
+        time.sleep(0.3)
+        assert all(item["state"] == "running" for item in manager.statuses())
+
+        manager.control("manual", "stop")
+        manager.set_pause_when_unfocused(True)
+        wait_for(lambda: manager.statuses()[0]["idle_suspended"])
+        assert manager.statuses()[1]["state"] == "stopped"
+        assert not manager.statuses()[1]["idle_suspended"]
+
+        manager.set_presence("tab2", True, True)
+        wait_for(lambda: manager.statuses()[0]["state"] == "running")
+        assert manager.statuses()[1]["state"] == "stopped"
+    finally:
+        manager.close()
+    assert Capture.opened == Capture.closed
+
+
+def test_persistent_pause_preference_survives_manager_restart(tmp_path):
+    config_path = tmp_path / "config.json"
+    first = CameraManager([], config_path=config_path, idle_policy=True)
+    assert first.preferences()["pause_when_unfocused"] is True
+    first.set_pause_when_unfocused(False)
+    first.close()
+
+    second = CameraManager([], config_path=config_path, idle_policy=True)
+    try:
+        assert second.preferences() == {
+            "pause_when_unfocused": False,
+            "configured": True,
+            "storage_error": None,
+        }
+    finally:
+        second.close()
+
+
+def test_configured_preference_overrides_legacy_tab_opt_out(tmp_path):
+    manager = CameraManager(
+        [CameraConfig("auto", 0, autostart=True)],
+        config_path=tmp_path / "config.json",
+        idle_policy=True,
+        capture_factory=Capture,
+        pipeline_factory=lambda name: Pipeline(),
+        encoder=lambda frame: b"jpeg",
+    )
+    try:
+        manager.set_pause_when_unfocused(True)
+        manager.set_presence("legacy-tab", False, False)
+        manager.start_configured()
+        wait_for(lambda: manager.statuses()[0]["idle_suspended"], timeout=4)
+        assert manager.statuses()[0]["state"] == "stopped"
+    finally:
+        manager.close()
+
+
 def test_presence_endpoint_validates_and_obeys_control_guards(tmp_path):
     manager = CameraManager([], idle_policy=True)
     server = create_server(manager, 0)
@@ -265,3 +349,68 @@ def test_presence_endpoint_validates_and_obeys_control_guards(tmp_path):
         server.server_close()
         manager.close()
         thread.join(2)
+
+
+def test_preferences_endpoint_has_control_guards_and_strict_body(tmp_path):
+    manager = CameraManager([], config_path=tmp_path / "config.json", idle_policy=True)
+    server = create_server(manager, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}"
+
+    try:
+        with urlopen(url + "/api/preferences", timeout=2) as response:
+            assert json.load(response) == {
+                "pause_when_unfocused": True,
+                "configured": False,
+                "storage_error": None,
+            }
+        request = Request(
+            url + "/api/preferences",
+            method="POST",
+            data=b'{"pause_when_unfocused":false}',
+            headers={"Content-Type": "application/json"},
+        )
+        with pytest.raises(HTTPError) as error:
+            urlopen(request, timeout=2)
+        assert error.value.code == 403
+
+        def post(body):
+            return urlopen(
+                Request(
+                    url + "/api/preferences",
+                    method="POST",
+                    data=json.dumps(body).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Spyder-Control": "1",
+                    },
+                ),
+                timeout=2,
+            )
+
+        with pytest.raises(HTTPError) as error:
+            post({"pause_when_unfocused": 0})
+        assert error.value.code == 400
+        with post({"pause_when_unfocused": False}) as response:
+            assert json.load(response)["configured"] is True
+        with pytest.raises(HTTPError) as error:
+            post({"pause_when_unfocused": True, "extra": 1})
+        assert error.value.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+        manager.close()
+        thread.join(2)
+
+
+def test_enabling_global_pause_ignores_existing_inactive_legacy_opt_out(tmp_path):
+    manager = CameraManager([], config_path=tmp_path / "config.json", idle_policy=True)
+    try:
+        manager._leases.inactive_grace = 0
+        manager.set_presence("old-tab", False, False)
+        assert not manager._should_suspend()
+        manager.set_pause_when_unfocused(True)
+        assert manager._should_suspend()
+    finally:
+        manager.close()

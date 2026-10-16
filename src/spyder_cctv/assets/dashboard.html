@@ -12,12 +12,16 @@
     <link rel="stylesheet" href="/workspaces.css" />
     <link rel="stylesheet" href="/fullscreen.css" />
     <link rel="stylesheet" href="/vision-lab.css" />
+    <link rel="stylesheet" href="/workflow-editor.css" />
     <script src="/dashboard.js" defer></script>
     <script src="/settings.js" defer></script>
     <script src="/activity.js" defer></script>
     <script src="/workspaces.js" defer></script>
     <script src="/fullscreen.js" defer></script>
     <script src="/vision-lab.js" defer></script>
+    <script src="/workflow-preview.js" defer></script>
+    <script src="/workflow-editor.js" defer></script>
+    <script src="/workflow-notifications.js" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -182,8 +186,8 @@
                   aria-hidden="true"
                   focusable="false"
                 >
-                  <use href="/icons.svg#leaf" /></svg
-                ><span>Release cameras when away</span></label
+                  <use href="/icons.svg#pause" /></svg
+                ><span>Pause cameras when unfocused</span></label
               ><span id="activity-note" role="status" aria-live="polite"
                 >Unrecorded cameras release when this view is away</span
               >

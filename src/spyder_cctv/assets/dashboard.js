@@ -68,10 +68,16 @@ if (!$("#density").value) $("#density").value = "auto";
 function reflow() {
   const count = Math.max(1, cards.size);
   if (window.spyderWall?.active()) {
+    const padding = getComputedStyle(wall);
     const layout = window.spyderWall.layout(
       count,
-      wall.clientWidth,
-      wall.clientHeight,
+      wall.clientWidth -
+        parseFloat(padding.paddingLeft) -
+        parseFloat(padding.paddingRight),
+      wall.clientHeight -
+        parseFloat(padding.paddingTop) -
+        parseFloat(padding.paddingBottom),
+      [...cards.values()].map((card) => card.aspect),
     );
     wall.style.setProperty("--columns", layout.columns);
     wall.style.setProperty("--rows", layout.rows);
@@ -338,6 +344,7 @@ function createCard(camera) {
     url: null,
     loading: false,
     lastFrame: null,
+    aspect: null,
   };
   $(".toggle-camera", element).addEventListener("click", () =>
     control(
@@ -364,6 +371,12 @@ function createCard(camera) {
     event.currentTarget.setAttribute("aria-pressed", String(fill));
   });
   $(".camera-image", element).addEventListener("load", () => {
+    const image = $(".camera-image", element);
+    const aspect = image.naturalWidth / image.naturalHeight;
+    if (Number.isFinite(aspect) && aspect > 0 && aspect !== card.aspect) {
+      card.aspect = aspect;
+      if (window.spyderWall?.active()) reflow();
+    }
     if (card.camera.state === "running" && card.url && connected) {
       $(".camera-image", element).hidden = false;
       $(".video-placeholder", element).hidden = true;

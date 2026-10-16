@@ -1,3 +1,5 @@
+from html.parser import HTMLParser
+
 from spyder_cctv.cli import main
 from spyder_cctv.showcase import export_showcase
 
@@ -27,6 +29,10 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "fullscreen.css",
         "vision-lab.js",
         "vision-lab.css",
+        "workflow-preview.js",
+        "workflow-editor.js",
+        "workflow-notifications.js",
+        "workflow-editor.css",
         "_headers",
     }
     html = (output / "index.html").read_text(encoding="utf-8")
@@ -48,3 +54,22 @@ def test_export_works_outside_checkout(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     export_showcase(tmp_path / "export")
     assert (tmp_path / "export" / "showcase.js").stat().st_size > 0
+
+
+def test_exported_html_references_only_bundled_assets(tmp_path):
+    output = tmp_path / "site"
+    export_showcase(output)
+    references = []
+
+    class Assets(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "link"):
+                attrs = dict(attrs)
+                references.append(attrs.get("src") or attrs.get("href"))
+
+    Assets().feed((output / "index.html").read_text(encoding="utf-8"))
+    assert references
+    for path in references:
+        assert path.startswith("/") and not path.startswith("//")
+        assert (output / path.lstrip("/")).is_file(), path
+    assert "/workflow-preview.js" in references

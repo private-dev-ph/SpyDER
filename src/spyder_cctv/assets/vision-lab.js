@@ -48,6 +48,21 @@
         timer = 0,
         token = 0,
         controller = null;
+      let previewSession = "",
+        draftRevision = 0,
+        appliedRevision = 0,
+        draftTimer = 0,
+        frameTimer = 0,
+        statusTimer = 0,
+        frameBusy = false,
+        previewBusy = false,
+        draftPending = false,
+        sessionRecovered = false,
+        frameController = null,
+        draftController = null,
+        statusController = null,
+        savedSettingsLoaded = false,
+        imageURL = "";
       let maskController = null,
         maskAbortTimer = 0,
         maskRefreshTimer = 0,
@@ -63,6 +78,7 @@
       let messageText = "",
         messageError = false;
       const showcase = !!window.spyderShowcase;
+      if (!showcase) maskState = "Loading isolated draft preview…";
       const root = document.createElement("div");
       root.className = "vision-lab";
       container.replaceChildren(root);
@@ -72,11 +88,53 @@
       const get = async (path, signal) => {
         const response = await fetch(path, { cache: "no-store", signal });
         const data = await response.json();
-        if (!response.ok)
-          throw new Error(data.error || "Analysis status unavailable.");
+        if (!response.ok) {
+          const error = new Error(data.error || "Analysis status unavailable.");
+          error.status = response.status;
+          throw error;
+        }
         return data;
       };
       const mutate = (path, data) => app.request(path, data);
+      const sessionPath = () => `/api/analysis/preview/${previewSession}`;
+      const makeSession = () => {
+        const bytes = new Uint8Array(18);
+        if (window.crypto?.getRandomValues)
+          window.crypto.getRandomValues(bytes);
+        else
+          for (let i = 0; i < bytes.length; i++) bytes[i] = Math.random() * 256;
+        return Array.from(bytes, (value) =>
+          value.toString(16).padStart(2, "0"),
+        ).join("");
+      };
+      function releaseSession() {
+        clearTimeout(draftTimer);
+        clearTimeout(frameTimer);
+        draftTimer = frameTimer = 0;
+        frameController?.abort();
+        frameController = null;
+        draftController?.abort();
+        draftController = null;
+        statusController?.abort();
+        statusController = null;
+        clearTimeout(statusTimer);
+        statusTimer = 0;
+        if (previewSession) {
+          const path = sessionPath();
+          previewSession = "";
+          fetch(path + "/release", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Spyder-Control": "1",
+            },
+            body: "{}",
+            keepalive: true,
+          }).catch(() => {});
+        }
+        if (imageURL) URL.revokeObjectURL(imageURL);
+        imageURL = "";
+      }
       const normalize = (settings) => {
         const next = { ...DEFAULTS };
         for (const key of Object.keys(DEFAULTS))
@@ -138,16 +196,17 @@
           </section>
           <div class="vl-grid">
             <section class="workspace-panel vl-preview-panel">
-              <div class="vl-section-head"><div><h2>Live preview</h2><span class="vl-sub">Fresh frame and native analysis results</span></div><span class="vl-status vl-preview-state" data-state="${esc(effective.state || c?.state || "idle")}">${esc(effective.state || c?.state || "offline")}</span></div>
+              <div class="vl-section-head"><div><h2>Live preview</h2><span class="vl-sub">Temporary draft preview. Apply activates settings in Control Room.</span></div><span class="vl-status vl-preview-state" data-state="${esc(effective.state || c?.state || "idle")}">${esc(effective.state || c?.state || "offline")}</span></div>
+              <p class="vl-preview-banner">Preview only — Apply activates Control Room</p>
               <label class="vl-view-picker"><span>Preview</span><select class="vl-view-mode" ${showcase ? "disabled" : ""}><option value="original" ${viewMode === "original" ? "selected" : ""}>Original</option><option value="mask" ${viewMode === "mask" ? "selected" : ""}>Foreground mask</option><option value="side-by-side" ${viewMode === "side-by-side" ? "selected" : ""}>Side by side</option></select><span class="vl-mask-note" role="status"></span></label>
-              <div class="vl-stage" tabindex="0" aria-label="Camera preview. Drag to draw a region of interest."><div class="vl-image-pair"><img class="vl-image" alt="Selected camera live frame"><img class="vl-mask-image" alt="Native foreground mask"></div><div class="vl-roi-box" hidden></div></div>
+              <div class="vl-stage" tabindex="0" aria-label="Camera preview. Drag to draw a region of interest."><div class="vl-image-pair"><img class="vl-image" draggable="false" alt="Selected camera live frame"><img class="vl-mask-image" draggable="false" alt="Draft foreground mask"></div><div class="vl-roi-box" hidden></div></div>
               <div class="vl-metrics"><div><span>Processing</span><b data-metric="processing">—</b></div><div><span>Result age</span><b data-metric="age">—</b></div><div><span>Dropped frames</span><b data-metric="dropped">—</b></div><div><span>Regions</span><b data-metric="regions">0</b></div><div><span>Tracks</span><b data-metric="tracks">0</b></div></div>
-              <p class="vl-preview-note">ROI uses normalized source-image coordinates. Letterboxing is excluded. Analysis boxes come from native preview frames.</p><p class="vl-runtime-note" role="status"></p><p class="vl-tracking-note" role="status"></p><div class="vl-results"></div>
+              <p class="vl-preview-note">ROI uses normalized source-image coordinates. Letterboxing is excluded. Draft preview never changes Control Room frames.</p><p class="vl-runtime-note" role="status"></p><p class="vl-tracking-note" role="status"></p><div class="vl-results"></div>
             </section>
             <section class="workspace-panel vl-config">
-              <div class="vl-section-head"><div><h2>Per-camera configuration</h2><span class="vl-sub">Changes take effect only after Apply</span></div><span class="vl-dirty" role="status">${dirty ? "Unsaved changes" : "Saved settings"}</span></div>
+              <div class="vl-section-head"><div><h2>Per-camera configuration</h2><span class="vl-sub">Edits preview live · Apply activates Control Room</span></div><span class="vl-dirty" role="status">${dirty ? "Unsaved changes" : "Saved settings"}</span></div>
               ${showcase ? '<p class="vl-disabled-note">Configuration and server capacity assessment require the installed app.</p>' : ""}
-              <form novalidate><fieldset ${showcase ? "disabled" : ""}><legend>Analysis settings</legend>
+              <form><fieldset ${showcase || !selected || !savedSettingsLoaded ? "disabled" : ""}><legend>Analysis settings</legend>
                 <label class="vl-toggle"><input name="enabled" type="checkbox" ${cfg.enabled ? "checked" : ""}><span><b>Enable analysis</b><small>Independent per-camera switch. Off by default.</small></span></label>
                 <p class="vl-help">OpenCV MOG2 foreground analysis runs separately from the app pipeline shown above.</p>
                 <div class="vl-check-grid">${check("contours", "Contour detection")}${check("components", "Connected components")}${check("tracking", "MIL tracking")}</div>
@@ -206,8 +265,14 @@
         const pair = root.querySelector(".vl-image-pair"),
           note = root.querySelector(".vl-mask-note");
         if (!img || !pair) return;
-        img.src = selected ? app.frame(selected) || "" : "";
+        img.src = showcase
+          ? selected
+            ? app.frame(selected) || ""
+            : ""
+          : imageURL;
+        img.draggable = false;
         mask.src = maskURL || "";
+        mask.draggable = false;
         img.hidden = viewMode === "mask";
         mask.hidden = viewMode === "original";
         pair.dataset.mode = viewMode;
@@ -337,6 +402,7 @@
         const badge = root.querySelector(".vl-dirty");
         if (badge) badge.textContent = "Unsaved changes";
         drawROI();
+        queueDraft();
       }
 
       function setMessage(text, error = false) {
@@ -359,10 +425,12 @@
         maskState = "";
       }
       async function loadMask() {
-        if (showcase || !selected || viewMode === "original") return;
+        if (showcase || !selected || !previewSession || viewMode === "original")
+          return;
         if (maskController) return;
         const id = selected,
           t = token,
+          revision = appliedRevision,
           requestController = new AbortController();
         maskController = requestController;
         const timeout = setTimeout(() => requestController.abort(), 4000);
@@ -372,18 +440,32 @@
           : "Loading foreground mask…";
         updatePreview();
         try {
-          const response = await fetch(
-            `/api/cameras/${encodeURIComponent(id)}/analysis/mask`,
-            { cache: "no-store", signal: requestController.signal },
-          );
-          if (!mounted || t !== token || id !== selected) return;
+          const response = await fetch(`${sessionPath()}/mask`, {
+            cache: "no-store",
+            signal: requestController.signal,
+          });
+          if (
+            !mounted ||
+            t !== token ||
+            id !== selected ||
+            revision !== appliedRevision ||
+            revision !== draftRevision
+          )
+            return;
           if (response.status === 503) {
             maskState = "Foreground mask warming up. Try again shortly.";
             return;
           }
           if (!response.ok) throw new Error("Foreground mask unavailable.");
           const blob = await response.blob();
-          if (!mounted || t !== token || id !== selected) return;
+          if (
+            !mounted ||
+            t !== token ||
+            id !== selected ||
+            revision !== appliedRevision ||
+            revision !== draftRevision
+          )
+            return;
           const nextURL = URL.createObjectURL(blob),
             previousURL = maskURL;
           maskURL = nextURL;
@@ -400,6 +482,200 @@
             updatePreview();
             scheduleMaskRefresh(id, t);
           }
+        }
+      }
+      function queueDraft(delay = 250) {
+        if (showcase || !mounted || !selected || !previewSession) return;
+        draftRevision++;
+        releaseMask();
+        maskState = "Updating draft preview…";
+        updatePreview();
+        clearTimeout(draftTimer);
+        clearTimeout(frameTimer);
+        frameTimer = 0;
+        draftTimer = setTimeout(configureDraft, delay);
+      }
+      async function configureDraft() {
+        if (showcase || !mounted || !selected || !previewSession) return;
+        if (previewBusy) {
+          draftPending = true;
+          return;
+        }
+        const session = previewSession,
+          id = selected,
+          t = token,
+          revision = draftRevision;
+        previewBusy = true;
+        const timeoutController = new AbortController();
+        draftController = timeoutController;
+        const timeout = setTimeout(() => timeoutController.abort(), 4000);
+        try {
+          const response = await fetch(sessionPath(), {
+            method: "POST",
+            cache: "no-store",
+            signal: timeoutController.signal,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Spyder-Control": "1",
+            },
+            body: JSON.stringify({ camera_id: id, settings: { ...cfg } }),
+          });
+          const data = await response.json();
+          if (!response.ok)
+            throw new Error(data.error || "Draft preview unavailable.");
+          if (
+            !mounted ||
+            t !== token ||
+            id !== selected ||
+            session !== previewSession
+          )
+            return;
+          if (revision === draftRevision) {
+            appliedRevision = revision;
+            sessionRecovered = false;
+            maskState = "";
+            runtime = data.runtime || data;
+            pipeline = data.pipeline || pipeline;
+            updateLive();
+            updatePreview();
+            if (viewMode !== "original") loadMask();
+            scheduleFrame();
+            scheduleDraftPoll();
+          }
+        } catch (error) {
+          if (mounted && t === token && error.name !== "AbortError") {
+            maskState = error.message;
+            updatePreview();
+          }
+        } finally {
+          clearTimeout(timeout);
+          if (draftController === timeoutController) draftController = null;
+          previewBusy = false;
+          if (
+            mounted &&
+            (draftPending || (t === token && revision !== draftRevision))
+          ) {
+            draftPending = false;
+            configureDraft();
+          }
+        }
+      }
+      function scheduleFrame(delay = 250) {
+        clearTimeout(frameTimer);
+        if (showcase || !mounted || !previewSession || !selected) return;
+        frameTimer = setTimeout(loadFrame, delay);
+      }
+      async function loadFrame() {
+        if (frameBusy || showcase || !mounted || !previewSession || !selected)
+          return;
+        frameBusy = true;
+        const id = selected,
+          t = token,
+          session = previewSession,
+          revision = appliedRevision;
+        const requestController = new AbortController();
+        frameController = requestController;
+        const timeout = setTimeout(() => requestController.abort(), 4000);
+        try {
+          const response = await fetch(`${sessionPath()}/frame`, {
+            cache: "no-store",
+            signal: requestController.signal,
+          });
+          if (
+            !mounted ||
+            t !== token ||
+            id !== selected ||
+            session !== previewSession ||
+            revision !== appliedRevision ||
+            revision !== draftRevision
+          )
+            return;
+          if (response.status === 503) {
+            maskState = "Preview warming up. Waiting for a fresh frame.";
+          } else {
+            if (!response.ok) throw new Error("Draft frame unavailable.");
+            const blob = await response.blob();
+            if (
+              !mounted ||
+              t !== token ||
+              id !== selected ||
+              session !== previewSession ||
+              revision !== appliedRevision ||
+              revision !== draftRevision
+            )
+              return;
+            const nextURL = URL.createObjectURL(blob),
+              previousURL = imageURL;
+            imageURL = nextURL;
+            if (previousURL) URL.revokeObjectURL(previousURL);
+            maskState = "";
+          }
+        } catch (error) {
+          if (mounted && t === token && error.name !== "AbortError")
+            maskState = error.message;
+        } finally {
+          clearTimeout(timeout);
+          if (frameController === requestController) frameController = null;
+          frameBusy = false;
+          if (mounted && previewSession) {
+            updatePreview();
+            scheduleFrame(250);
+          }
+        }
+      }
+      async function pollDraft() {
+        if (showcase || !mounted || !previewSession || !selected) return;
+        const id = selected,
+          t = token,
+          session = previewSession,
+          revision = appliedRevision;
+        const requestController = new AbortController();
+        statusController = requestController;
+        const timeout = setTimeout(() => requestController.abort(), 4000);
+        try {
+          const data = await get(sessionPath(), requestController.signal);
+          if (
+            !mounted ||
+            t !== token ||
+            id !== selected ||
+            session !== previewSession ||
+            revision !== appliedRevision ||
+            revision !== draftRevision
+          )
+            return;
+          runtime = data.runtime || {};
+          pipeline = data.pipeline || pipeline;
+          updateLive();
+        } catch (error) {
+          if (
+            error.status === 404 &&
+            !sessionRecovered &&
+            mounted &&
+            t === token &&
+            session === previewSession
+          ) {
+            sessionRecovered = true;
+            releaseSession();
+            if (camera()?.state === "running") {
+              previewSession = makeSession();
+              queueDraft(0);
+            }
+            return;
+          }
+          if (mounted && t === token && error.name !== "AbortError") {
+            runtime = { state: "error", message: error.message };
+            updateLive();
+          }
+        } finally {
+          clearTimeout(timeout);
+          if (statusController === requestController) statusController = null;
+          if (mounted && t === token) scheduleDraftPoll();
+        }
+      }
+      function scheduleDraftPoll() {
+        if (!showcase && mounted && previewSession) {
+          clearTimeout(statusTimer);
+          statusTimer = setTimeout(pollDraft, 1200);
         }
       }
       function scheduleMaskRefresh(id, t) {
@@ -446,12 +722,13 @@
             "/api/analysis/capacity",
             pollController.signal,
           );
-          const analysisPromise = id
-            ? get(
-                `/api/cameras/${encodeURIComponent(id)}/analysis`,
-                pollController.signal,
-              )
-            : Promise.resolve(null);
+          const analysisPromise =
+            id && !savedSettingsLoaded
+              ? get(
+                  `/api/cameras/${encodeURIComponent(id)}/analysis`,
+                  pollController.signal,
+                )
+              : Promise.resolve(null);
           const [nextCapacity, analysis] = await Promise.all([
             capacityPromise,
             analysisPromise,
@@ -465,7 +742,18 @@
             if (!dirty && !busy && loadedFor !== id && analysis.settings) {
               cfg = normalize(analysis.settings);
               loadedFor = id;
+              savedSettingsLoaded = true;
               render();
+              if (camera()?.state === "running") {
+                previewSession = makeSession();
+                queueDraft(0);
+              } else {
+                runtime = {
+                  state: "paused",
+                  message:
+                    "Camera stopped. Start camera in Control Room to preview analysis.",
+                };
+              }
             }
           }
           updateLive();
@@ -489,9 +777,11 @@
       function switchCamera(id) {
         if (id === selected) return;
         releaseMask();
+        releaseSession();
         selected = id;
         token++;
         loadedFor = null;
+        savedSettingsLoaded = false;
         clearTimeout(timer);
         controller?.abort();
         dirty = false;
@@ -519,6 +809,7 @@
         if (!event.target.closest("form")) return;
         readForm();
         dirty = true;
+        queueDraft();
         const badge = root.querySelector(".vl-dirty");
         if (badge) badge.textContent = "Unsaved changes";
         drawROI();
@@ -544,6 +835,7 @@
         readForm();
         const id = selected,
           t = token,
+          revision = draftRevision,
           body = { ...cfg };
         busy = true;
         const button = root.querySelector('button[type="submit"]');
@@ -556,11 +848,16 @@
             settings: body,
           });
           if (!mounted || t !== token || selected !== id) return;
-          dirty = false;
+          dirty = draftRevision !== revision;
           loadedFor = id;
-          setMessage("Settings saved and scheduled.");
+          setMessage(
+            dirty
+              ? "Settings saved. Newer draft edits remain unapplied."
+              : "Settings saved and scheduled.",
+          );
           const badge = root.querySelector(".vl-dirty");
-          if (badge) badge.textContent = "Saved settings";
+          if (badge)
+            badge.textContent = dirty ? "Unsaved changes" : "Saved settings";
         } catch (error) {
           if (mounted && t === token) setMessage(error.message, true);
         } finally {
@@ -586,16 +883,19 @@
           dirty = true;
           root.querySelector(".vl-dirty").textContent = "Unsaved changes";
           drawROI();
+          queueDraft();
         } else if (button.classList.contains("vl-reset")) {
           cfg = { ...DEFAULTS };
           dirty = true;
           render();
+          queueDraft();
           setMessage("Defaults staged. Apply settings to save.");
         } else if (button.classList.contains("vl-disable")) {
           cfg = { ...cfg, enabled: false };
           root.querySelector('[name="enabled"]').checked = false;
           dirty = true;
           root.querySelector(".vl-dirty").textContent = "Unsaved changes";
+          queueDraft();
         } else if (button.classList.contains("vl-assess")) {
           const t = token;
           capacityBusy = true;
@@ -623,6 +923,7 @@
           readForm();
           dirty = true;
           root.querySelector(".vl-dirty").textContent = "Unsaved changes";
+          queueDraft();
           setMessage("Recommendation staged. Apply settings to save.");
         }
       };
@@ -634,6 +935,7 @@
           !event.target.closest(".vl-stage")
         )
           return;
+        event.preventDefault?.();
         const rect = imageRect(),
           stage = root.querySelector(".vl-stage").getBoundingClientRect();
         const x = event.clientX - stage.left,
@@ -657,6 +959,12 @@
           dirty = true;
         }
       };
+      const onPointerCancel = () => {
+        drag = null;
+      };
+      const onDragStart = (event) => {
+        if (event.target.closest?.(".vl-image")) event.preventDefault?.();
+      };
       const resize = () => drawROI();
       const refresh = () => {
         const signature = JSON.stringify(
@@ -669,9 +977,11 @@
           (selected && !cams().some((c) => c.id === selected))
         ) {
           releaseMask();
+          releaseSession();
           selected = cams()[0]?.id || "";
           token++;
           loadedFor = null;
+          savedSettingsLoaded = false;
           controller?.abort();
           dirty = false;
           busy = false;
@@ -686,12 +996,35 @@
           return;
         }
         updateCameraOptions();
+        if (selected && camera()?.state !== "running" && previewSession) {
+          releaseMask();
+          releaseSession();
+          runtime = {
+            state: "paused",
+            message:
+              "Camera stopped. Start camera in Control Room to preview analysis.",
+          };
+          updateLive();
+          return;
+        }
+        if (
+          selected &&
+          camera()?.state === "running" &&
+          !previewSession &&
+          !showcase
+        ) {
+          if (savedSettingsLoaded) {
+            previewSession = makeSession();
+            queueDraft(0);
+          } else if (!polling) poll();
+        }
         updateLive();
       };
       const frameHandler = (event) => {
         if (event.detail?.id === selected) {
           const img = root.querySelector(".vl-image");
-          if (img && viewMode !== "mask") img.src = event.detail.url;
+          if (showcase && img && viewMode !== "mask")
+            img.src = event.detail.url;
         }
       };
 
@@ -702,6 +1035,9 @@
       root.addEventListener("pointerdown", onPointerDown);
       root.addEventListener("pointermove", onPointerMove);
       root.addEventListener("pointerup", onPointerUp);
+      root.addEventListener("pointercancel", onPointerCancel);
+      root.addEventListener("lostpointercapture", onPointerCancel);
+      root.addEventListener("dragstart", onDragStart);
       window.addEventListener("resize", resize);
       window.addEventListener("spyder:cameras", refresh);
       document.addEventListener("spyder:camera-update", refresh);
@@ -717,8 +1053,10 @@
         mounted = false;
         token++;
         clearTimeout(timer);
+        clearTimeout(statusTimer);
         controller?.abort();
         releaseMask();
+        releaseSession();
         window.removeEventListener("resize", resize);
         window.removeEventListener("spyder:cameras", refresh);
         document.removeEventListener("spyder:camera-update", refresh);
@@ -730,6 +1068,9 @@
         root.removeEventListener("pointerdown", onPointerDown);
         root.removeEventListener("pointermove", onPointerMove);
         root.removeEventListener("pointerup", onPointerUp);
+        root.removeEventListener("pointercancel", onPointerCancel);
+        root.removeEventListener("lostpointercapture", onPointerCancel);
+        root.removeEventListener("dragstart", onDragStart);
         root.remove();
       };
     },
