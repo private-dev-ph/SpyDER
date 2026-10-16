@@ -10,6 +10,7 @@ function runtime(
   },
   storage = new Map(),
   encode = (callback) => callback(new Blob(["jpeg"], { type: "image/jpeg" })),
+  { omitRoomLabel = false } = {},
 ) {
   const elements = new Map();
   const idleCallbacks = new Set();
@@ -56,6 +57,7 @@ function runtime(
     window,
     document: {
       querySelector(selector) {
+        if (omitRoomLabel && selector === ".room-label") return null;
         if (!elements.has(selector)) elements.set(selector, element());
         return elements.get(selector);
       },
@@ -148,6 +150,13 @@ test("two generated feeds run, encode locally, and unsupported controls stay dis
   assert.equal(settings.capabilities.zoom.supported, false);
   await app.request(`/api/cameras/${cameras[0].id}/remove`);
   assert.equal((await list(app)).length, 1);
+});
+
+test("showcase initializes with current markup that has no room label", async () => {
+  const app = runtime(undefined, new Map(), undefined, { omitRoomLabel: true });
+  const cameras = await list(app);
+  assert.equal(cameras.length, 2);
+  assert.ok(cameras.every((camera) => camera.state === "running"));
 });
 
 test("hardware readback, profile persistence, assignment, detach, and cleanup", async () => {

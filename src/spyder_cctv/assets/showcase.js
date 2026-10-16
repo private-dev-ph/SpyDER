@@ -707,9 +707,6 @@
           ? "demo"
           : "device:" + deviceSelect.value,
   };
-  document.querySelector(".room-label").textContent = "BROWSER SHOWCASE";
-  document.querySelector(".intro").textContent =
-    "Try the wall. Camera access, files, and motion analysis stay on your computer. The cloud serves only this interface.";
   document.querySelector(".rail-footer small").textContent =
     "No video uploads · no cloud processing";
   document.querySelector("#empty p").textContent =
