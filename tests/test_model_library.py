@@ -53,6 +53,82 @@ def test_uploaded_model_survives_restart_and_source_removal(tmp_path):
     assert open(restored_path, "rb").read() == b"weights"
 
 
+def test_remove_deletes_uploaded_weights_but_preserves_registered_source(tmp_path):
+    media = tmp_path / "media"
+    media.mkdir()
+    source = tmp_path / "external.pt"
+    source.write_bytes(b"external")
+    library = ModelLibrary(media)
+    external = library.register(str(source), engine="yolo")
+    uploaded = library.upload("upload.pt", "yolo", io.BytesIO(b"owned"), 5)
+    assert external["uploaded"] is False
+    assert uploaded["uploaded"] is True
+
+    assert library.remove(external["id"]) == {
+        "removed": True,
+        "id": external["id"],
+        "deleted_file": False,
+    }
+    assert source.read_bytes() == b"external"
+    assert library.remove(uploaded["id"]) == {
+        "removed": True,
+        "id": uploaded["id"],
+        "deleted_file": True,
+    }
+    assert not Path(uploaded["path"]).exists()
+
+
+def test_remove_restores_registry_and_uploaded_file_when_save_fails(tmp_path, monkeypatch):
+    media = tmp_path / "media"
+    media.mkdir()
+    library = ModelLibrary(media)
+    uploaded = library.upload("upload.pt", "yolo", io.BytesIO(b"owned"), 5)
+    monkeypatch.setattr(library, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+
+    with pytest.raises(OSError, match="disk full"):
+        library.remove(uploaded["id"])
+    assert library.get(uploaded["id"])["id"] == uploaded["id"]
+    assert Path(uploaded["path"]).read_bytes() == b"owned"
+
+
+def test_remove_preserves_uploaded_weights_referenced_by_another_registry_row(tmp_path):
+    media = tmp_path / "media"
+    media.mkdir()
+    library = ModelLibrary(media)
+    uploaded = library.upload("upload.pt", "yolo", io.BytesIO(b"owned"), 5)
+    alias = dict(library._models[uploaded["id"]])
+    alias["id"] = "a" * 32
+    library._models[alias["id"]] = alias
+    library._save()
+
+    outcome = library.remove(uploaded["id"])
+
+    assert outcome["deleted_file"] is False
+    assert Path(uploaded["path"]).read_bytes() == b"owned"
+    assert library.get(alias["id"])["path"] == uploaded["path"]
+
+
+def test_remove_reports_failed_uploaded_file_cleanup(tmp_path, monkeypatch):
+    media = tmp_path / "media"
+    media.mkdir()
+    library = ModelLibrary(media)
+    uploaded = library.upload("upload.pt", "yolo", io.BytesIO(b"owned"), 5)
+    original_unlink = Path.unlink
+
+    def fail_quarantine(path, *args, **kwargs):
+        if path.name.startswith(".remove-"):
+            raise PermissionError("blocked")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_quarantine)
+    outcome = library.remove(uploaded["id"])
+
+    assert outcome["removed"] is True
+    assert outcome["deleted_file"] is False
+    assert outcome["retained_quarantine"] is True
+    assert outcome["cleanup_error"]
+
+
 def test_instances_reload_reads_and_metadata_changes(tmp_path):
     media = tmp_path / "media"
     media.mkdir()

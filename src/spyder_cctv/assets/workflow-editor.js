@@ -46,6 +46,86 @@
       params: { language: "python", source: "output = detections" },
     },
   };
+  const NODE_GROUPS = [
+    { label: "Inputs & models", types: ["camera", "model", "classifier"] },
+    {
+      label: "Vision & conditions",
+      types: ["detections", "filter", "zone", "count"],
+    },
+    { label: "Flow & code", types: ["cooldown", "code"] },
+    {
+      label: "Views & actions",
+      types: ["preview", "event", "notification", "capture", "record"],
+    },
+  ];
+  function paletteGroups(query = "") {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return NODE_GROUPS.map((group) => ({
+      ...group,
+      types: group.types.filter((type) =>
+        words.every((word) =>
+          `${TYPES[type].label} ${type} ${group.label}`
+            .toLowerCase()
+            .includes(word),
+        ),
+      ),
+    })).filter((group) => group.types.length);
+  }
+  function modelPage(
+    models,
+    {
+      query = "",
+      engine = "all",
+      labels = "all",
+      sort = "name",
+      page = 0,
+      size = 8,
+    } = {},
+  ) {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const filtered = models.filter((model) => {
+      const hasLabels = !!model.classes?.length;
+      if (engine !== "all" && model.engine !== engine) return false;
+      if (
+        (labels === "available" && !hasLabels) ||
+        (labels === "missing" && hasLabels)
+      )
+        return false;
+      const text = [
+        model.name,
+        model.engine,
+        model.path,
+        model.metadata?.model_type,
+        ...(model.classes || []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return words.every((word) => text.includes(word));
+    });
+    const byName = (a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }) || String(a.id).localeCompare(String(b.id));
+    if (sort === "name-desc") filtered.sort((a, b) => -byName(a, b));
+    else if (sort === "engine")
+      filtered.sort(
+        (a, b) =>
+          String(a.engine).localeCompare(String(b.engine)) || byName(a, b),
+      );
+    else filtered.sort(byName);
+    size = Math.max(1, Math.min(24, Math.floor(size) || 8));
+    const pages = Math.max(1, Math.ceil(filtered.length / size));
+    page = Math.max(0, Math.min(pages - 1, Math.floor(page) || 0));
+    return {
+      models: filtered.slice(page * size, (page + 1) * size),
+      page,
+      pages,
+      total: filtered.length,
+      all: models.length,
+      size,
+    };
+  }
   const clone = (v) => JSON.parse(JSON.stringify(v));
   const BUILTIN_MODELS = [
     {
@@ -585,6 +665,9 @@
   if (typeof module !== "undefined" && module.exports)
     module.exports = {
       TYPES,
+      NODE_GROUPS,
+      paletteGroups,
+      modelPage,
       nodeSize,
       clamp,
       node,
@@ -651,19 +734,17 @@
         modalGeneration = 0,
         undoStack = [],
         redoStack = [],
-        modelCamera = "",
-        modelConfig = null,
-        modelDraft = null,
-        modelRevision = 0,
-        modelState = "",
-        runtimeState = "",
-        modelDirty = false,
-        modelBusy = false,
-        modelController,
         snapshotLoaded = false,
         library = [],
         libraryBusy = false,
         libraryMessage = "",
+        libraryQuery = "",
+        libraryEngine = "all",
+        libraryLabels = "all",
+        librarySort = "name",
+        libraryPageNumber = 0,
+        removingModel = "",
+        paletteQuery = "",
         libraryController,
         detectorCatalog = [],
         detectorMessage = "",
@@ -676,6 +757,8 @@
         activationMessage = "",
         activationError = false;
       const requestControllers = new Set();
+      const openModelDetails = new Set();
+      const collapsedPaletteGroups = new Set();
       const demo = !!window.spyderShowcase,
         key = "spyder.workflow-editor.draft",
         root = document.createElement("section");
@@ -696,41 +779,6 @@
         cameras: cameraList,
         demo,
       });
-      const defaultModel = () => ({
-        engine: "none",
-        model: "",
-        device: "cpu",
-        inference_fps: 5,
-        confidence: 0.5,
-        input_size: 640,
-        max_detections: 100,
-        recognition_enabled: false,
-        recognition_model: "",
-        identity_gallery: "",
-        recognition_threshold: 0.65,
-      });
-      function draftFrom(data) {
-        const s = data?.settings || {},
-          d = defaultModel();
-        d.engine =
-          data?.pipeline === "vision"
-            ? s.engine || "opencv"
-            : data?.pipeline || "none";
-        for (const k of [
-          "model",
-          "device",
-          "inference_fps",
-          "confidence",
-          "input_size",
-          "max_detections",
-          "recognition_model",
-          "identity_gallery",
-          "recognition_threshold",
-        ])
-          if (s[k] !== undefined && s[k] !== null) d[k] = s[k];
-        d.recognition_enabled = !!(s.recognition_model && s.identity_gallery);
-        return d;
-      }
       function upstreamClasses(id) {
         const visited = new Set(),
           pending = [id],
@@ -981,9 +1029,97 @@
           metadata.resolution === "selected" ? metadata.label_source : "";
         return `<section class="we-metadata-source"><h4>Label metadata source</h4>${metadata.explanation ? `<p>${esc(metadata.explanation)}</p>` : ""}${Array.isArray(metadata.warnings) ? metadata.warnings.map((w) => `<p>${esc(w)}</p>`).join("") : ""}${candidates.length ? `<label>Source field<select data-label-source="${esc(model.id)}"><option value="" ${!selected ? "selected" : ""}>Automatic detection</option>${candidates.map((c) => `<option value="${esc(c.path)}" ${c.path === selected ? "selected" : ""}>${esc(c.path)} · ${c.count} labels · ${esc(c.confidence)}</option>`).join("")}</select></label><button class="button secondary" data-use-label-source="${esc(model.id)}" ${demo || libraryBusy ? "disabled" : ""}>Use label source</button><p>This replaces manual labels with the selected metadata source. Reading file metadata preserves manual labels.</p><details><summary>Discovered label fields</summary>${candidates.map((c) => `<p><b>${esc(c.path)}</b>: ${esc((c.preview || []).join(", "))}<br>${esc(c.reason)}</p>`).join("")}</details>` : "<p>No usable label lists found. Manual labels remain available.</p>"}</section>`;
       }
-      function libraryPanel() {
-        return `<section class="we-library"><h3>Local model library</h3><button class="button secondary" data-refresh-models ${demo || libraryBusy ? "disabled" : ""}>Refresh models and classes</button><p>${demo ? "Showcase: model choices and workflows stay in this browser. Native model upload and inference require the installed app." : "Uploaded models persist across restarts and are shared by local instances using the same data folder. Registering an existing file keeps its original path. Connect a Model node to Detections."}</p><div class="we-library-import"><label>Model engine<select data-library-engine><option value="yolo">YOLO</option><option value="insightface">InsightFace</option></select></label><label>Model name<input data-library-name maxlength="128" placeholder="e.g. Entrance faces"></label><label>Model file<input data-library-file type="file" accept=".onnx,.pt" ${demo || libraryBusy ? "disabled" : ""}></label><button class="button primary" data-upload-model ${demo || libraryBusy ? "disabled" : ""}>Upload model</button></div><details><summary>Register existing file on this computer</summary><label>Local model path<input data-library-path placeholder="C:/models/detector.onnx"></label><button class="button secondary" data-register-model ${demo || libraryBusy ? "disabled" : ""}>Register local model</button></details><div class="we-library-list">${library.map((m) => `<article><b>${esc(m.name)}</b><span>${esc(m.engine)} | ${m.classes?.length || 0} ${m.metadata?.label_semantics === "identity" ? "identities" : "classes"} | ${esc(m.metadata?.inspection || m.inspection || m.status || "Registered")}</span>${m.metadata?.model_type ? `<p>Model role: ${esc(m.metadata.model_type)}${m.metadata.input_size ? ` · input ${esc(m.metadata.input_size)}` : ""}</p>` : ""}${m.metadata?.compatibility ? `<p class="we-model-help">${esc(m.metadata.compatibility)}</p>` : ""}${m.metadata?.unknown_rejection ? `<p>Unknown identity handling: ${esc(m.metadata.unknown_rejection)}</p>` : ""}${m.metadata?.inspection_error ? `<p>${esc(m.metadata.inspection_error)}</p>` : ""}${metadataSourcePanel(m)}<button class="button secondary" data-inspect-model="${esc(m.id)}" ${demo || libraryBusy ? "disabled" : ""}>Read file metadata</button><label>${m.metadata?.label_semantics === "identity" ? "Identity" : "Class"} labels (comma separated)<input data-library-classes="${esc(m.id)}" value="${esc((m.classes || []).join(", "))}"></label><button class="button secondary" data-save-classes="${esc(m.id)}" ${demo || libraryBusy ? "disabled" : ""}>Save labels</button></article>`).join("") || "<p>No models registered. Uploaded models remain local.</p>"}</div><p role="status" data-library-status>${esc(libraryMessage)}</p></section>`;
+      function modelReferences(model) {
+        const references = [...(model.usage?.references || [])];
+        if (
+          graph?.nodes.some(
+            (n) =>
+              ["model", "classifier"].includes(n.type) &&
+              n.params.model_id === model.id,
+          )
+        )
+          references.push(
+            "Current draft: disconnect or remove its Model / Classifier node, then save.",
+          );
+        return [...new Set(references)];
       }
+      function libraryResults() {
+        const result = modelPage(library, {
+          query: libraryQuery,
+          engine: libraryEngine,
+          labels: libraryLabels,
+          sort: librarySort,
+          page: libraryPageNumber,
+        });
+        libraryPageNumber = result.page;
+        const cards = result.models
+          .map((m) => {
+            const references = modelReferences(m),
+              blocked = references.length > 0 || !!m.usage?.in_use;
+            const classifier = m.metadata?.model_type === "face_classifier";
+            const title = classifier ? "Classifier" : "Model";
+            const count = m.classes?.length || 0;
+            const labels =
+              m.metadata?.label_semantics === "identity"
+                ? "identities"
+                : "classes";
+            return `<article class="we-model-card" data-library-model="${esc(m.id)}"><header><div><h4>${esc(m.name)}</h4><small>${esc(m.engine.toUpperCase())} · ${esc(m.format || "model")} · ${esc(m.id.slice(0, 8))}</small></div><span class="we-model-role" title="Model role: ${esc(m.metadata?.model_type || "Model")}">${esc((m.metadata?.model_type || "Model").replaceAll("_", " "))}</span></header><p class="we-model-label-summary">${count} ${labels}${count ? ` · ${esc(m.classes.slice(0, 5).join(", "))}${count > 5 ? " …" : ""}` : " · Add labels or read metadata"}</p><div class="we-model-card-actions"><button class="button secondary" data-library-use="${esc(m.id)}" ${libraryBusy ? "disabled" : ""}>Add ${title} node</button><button class="button secondary we-model-remove" data-request-remove-model="${esc(m.id)}" ${demo || libraryBusy || blocked ? "disabled" : ""} title="${esc(blocked ? "Referenced by a camera or workflow. Remove its assignments first." : "Remove this model from the local library")}">Remove</button></div>${blocked ? `<p class="we-model-in-use">In use${references.length ? ` · ${esc(references[0])}` : ""}</p>` : ""}${removingModel === m.id ? `<section class="we-model-remove-confirm" role="group" aria-label="Confirm model removal"><b>Remove ${esc(m.name)}?</b><p>${m.uploaded ? "This deletes the uploaded model file from this computer." : "This removes the library entry. The registered source file is kept."}</p><div><button class="button secondary" data-cancel-remove-model>Cancel</button><button class="button primary" data-confirm-remove-model="${esc(m.id)}" ${demo || libraryBusy || blocked ? "disabled" : ""}>${m.uploaded ? "Delete uploaded model" : "Remove from library"}</button></div></section>` : ""}<details data-model-details="${esc(m.id)}" ${openModelDetails.has(m.id) ? "open" : ""}><summary>Details, labels & metadata</summary><p class="we-model-path">${esc(m.path)}</p><p>${esc(m.metadata?.inspection || m.inspection || m.status || "Registered")}</p>${m.metadata?.compatibility ? `<p>${esc(m.metadata.compatibility)}</p>` : ""}${m.metadata?.unknown_rejection ? `<p>${esc(m.metadata.unknown_rejection)}</p>` : ""}${m.metadata?.inspection_error ? `<p role="status">${esc(m.metadata.inspection_error)}</p>` : ""}${references.length ? `<ul>${references.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}<button class="button secondary" data-inspect-model="${esc(m.id)}" ${demo || libraryBusy ? "disabled" : ""}>Read file metadata</button>${metadataSourcePanel(m)}<label>${labels === "identities" ? "Identity" : "Class"} labels (comma separated)<input data-library-classes="${esc(m.id)}" value="${esc((m.classes || []).join(", "))}" ${demo || libraryBusy ? "disabled" : ""}></label><button class="button secondary" data-save-classes="${esc(m.id)}" ${demo || libraryBusy ? "disabled" : ""}>Save labels</button></details></article>`;
+          })
+          .join("");
+        return `<p class="we-library-match" role="status">${result.total ? `${result.page * result.size + 1}–${Math.min((result.page + 1) * result.size, result.total)} of ${result.total}` : "0"} matching models · ${result.all} total</p><div class="we-library-list">${cards || `<p class="we-library-empty">${library.length ? "No models match these filters. Clear filters to see all models." : "No models registered. Add your first local model above."}</p>`}</div><nav class="we-library-pages" aria-label="Model library pages"><button class="button secondary" data-library-prev ${result.page === 0 ? "disabled" : ""}>Previous</button><span>Page ${result.page + 1} of ${result.pages}</span><button class="button secondary" data-library-next ${result.page + 1 >= result.pages ? "disabled" : ""}>Next</button></nav>`;
+      }
+      function refreshLibraryResults() {
+        const results = root.querySelector("[data-library-results]");
+        if (results) results.innerHTML = libraryResults();
+        const status = root.querySelector("[data-library-status]");
+        if (status) status.textContent = libraryMessage;
+      }
+      function paletteContents() {
+        return (
+          paletteGroups(paletteQuery)
+            .map(
+              (group) =>
+                `<details class="we-node-group" data-palette-group="${esc(group.label)}" ${paletteQuery || !collapsedPaletteGroups.has(group.label) ? "open" : ""}><summary>${esc(group.label)}<span>${group.types.length}</span></summary><div>${group.types.map((type) => `<button data-add="${type}" draggable="true">${esc(TYPES[type].label)}<span aria-hidden="true">+</span></button>`).join("")}</div></details>`,
+            )
+            .join("") ||
+          '<p class="we-palette-empty" role="status">No matching nodes.</p>'
+        );
+      }
+      function libraryPanel() {
+        return `<section class="we-library" aria-labelledby="we-library-title"><header class="we-library-header"><div><h3 id="we-library-title">Local model library</h3><p>${demo ? "Showcase editing only. Native model upload and inference require the installed app." : "Connect a Model or Classifier node to Detections. Model assignments are managed by workflows."}</p></div><button class="button secondary" data-refresh-models ${demo || libraryBusy ? "disabled" : ""}>Refresh models & usage</button></header><details class="we-library-add"><summary>Add or register models</summary><div class="we-library-import"><label>Model engine<select data-library-engine><option value="yolo">YOLO</option><option value="insightface">InsightFace</option></select></label><label>Model name<input data-library-name maxlength="128" placeholder="e.g. Entrance faces"></label><label>Model file<input data-library-file type="file" accept=".onnx,.pt" ${demo || libraryBusy ? "disabled" : ""}></label><button class="button primary" data-upload-model ${demo || libraryBusy ? "disabled" : ""}>Upload model</button></div><details><summary>Register an existing file</summary><label>Local model path<input data-library-path placeholder="C:/models/detector.onnx"></label><button class="button secondary" data-register-model ${demo || libraryBusy ? "disabled" : ""}>Register local model</button><p>Registered files stay in their original location. Removing a registration keeps its source file.</p></details></details><div class="we-library-tools"><label class="we-library-search">Search models<input type="search" data-library-search value="${esc(libraryQuery)}" placeholder="Name, identity, class or file path" autocomplete="off"></label><label>Engine<select data-library-filter-engine>${[
+          ["all", "All engines"],
+          ["yolo", "YOLO"],
+          ["insightface", "InsightFace"],
+        ]
+          .map(
+            ([v, label]) =>
+              `<option value="${v}" ${libraryEngine === v ? "selected" : ""}>${label}</option>`,
+          )
+          .join(
+            "",
+          )}</select></label><label>Labels<select data-library-filter-labels>${[
+          ["all", "All models"],
+          ["available", "With labels"],
+          ["missing", "Needs labels"],
+        ]
+          .map(
+            ([v, label]) =>
+              `<option value="${v}" ${libraryLabels === v ? "selected" : ""}>${label}</option>`,
+          )
+          .join("")}</select></label><label>Sort<select data-library-sort>${[
+          ["name", "Name A–Z"],
+          ["name-desc", "Name Z–A"],
+          ["engine", "Engine"],
+        ]
+          .map(
+            ([v, label]) =>
+              `<option value="${v}" ${librarySort === v ? "selected" : ""}>${label}</option>`,
+          )
+          .join(
+            "",
+          )}</select></label><button class="button secondary" data-library-clear>Clear filters</button></div><div data-library-results>${libraryResults()}</div><p role="status" data-library-status>${esc(libraryMessage)}</p></section>`;
+      }
+
       function detectorChoice(n) {
         return n?.type === "model"
           ? builtinModel(n.params.model_id)?.detector || "custom"
@@ -1069,6 +1205,45 @@
           clearTimeout(timeout);
         }
       }
+      async function removeLibraryModel(id) {
+        if (demo || libraryBusy) return;
+        const model = library.find((item) => item.id === id);
+        if (!model) return;
+        const references = modelReferences(model);
+        if (references.length || model.usage?.in_use) {
+          libraryMessage =
+            "Model is in use. Remove its camera/workflow assignments and save first.";
+          removingModel = "";
+          refreshLibraryResults();
+          return;
+        }
+        libraryBusy = true;
+        libraryMessage = "Removing local model…";
+        refreshLibraryResults();
+        try {
+          const result = await post(
+            `/api/models/${encodeURIComponent(id)}/remove`,
+            {},
+          );
+          if (!mounted) return;
+          library = library.filter((item) => item.id !== id);
+          openModelDetails.delete(id);
+          removingModel = "";
+          libraryMessage =
+            result.cleanup_error ||
+            (result.deleted_file
+              ? "Uploaded model and its library entry deleted."
+              : "Model removed from the library. Source file kept.");
+          await loadLibrary();
+        } catch (error) {
+          if (!mounted) return;
+          libraryMessage = error.message;
+          await loadLibrary();
+        } finally {
+          libraryBusy = false;
+          if (mounted) refreshLibraryResults();
+        }
+      }
       async function importModel(upload) {
         if (demo || libraryBusy) return;
         const engine =
@@ -1132,14 +1307,6 @@
             if (panel) panel.outerHTML = libraryPanel();
           }
         }
-      }
-      function modelPanel() {
-        const c = cameraList();
-        if (!modelCamera || !c.some((x) => x.id === modelCamera))
-          modelCamera = c[0]?.id || "";
-        const d = modelDraft || defaultModel(),
-          engine = d.engine;
-        return `<section class="we-models"><h3>Camera model pipeline</h3><p class="we-model-help">Model files stay on this computer. Saving changes applies camera configuration. Set engine to Disabled to turn off model pipeline.</p><div class="we-model-grid"><label>Camera<select data-model-camera>${c.map((x) => `<option value="${esc(x.id)}" ${x.id === modelCamera ? "selected" : ""}>${esc(x.name || x.id)}</option>`).join("")}</select></label><label>Detection engine<select data-model-engine><option value="none" ${engine === "none" ? "selected" : ""}>Disabled</option><option value="opencv" ${engine === "opencv" ? "selected" : ""}>OpenCV</option><option value="yolo" ${engine === "yolo" ? "selected" : ""}>YOLO</option><option value="insightface" ${engine === "insightface" ? "selected" : ""}>InsightFace</option></select></label><label>Model path<input data-model-path value="${esc(d.model)}" placeholder="Local model file path" ${engine === "none" || engine === "opencv" ? "disabled" : ""}></label><label>Device<select data-model-device><option ${d.device === "cpu" ? "selected" : ""}>cpu</option><option ${d.device === "cuda:0" ? "selected" : ""}>cuda:0</option></select></label><label>Inference FPS<input data-model-fps type="number" min="0.1" max="30" step="0.1" value="${esc(d.inference_fps)}"></label><label>Confidence<input data-model-confidence type="number" min="0" max="1" step="0.01" value="${esc(d.confidence)}"></label><label>Input size<input data-model-size type="number" min="128" max="1280" step="32" value="${esc(d.input_size)}"></label><label>Maximum detections<input data-model-max type="number" min="1" max="500" value="${esc(d.max_detections)}"></label><label class="we-model-advanced"><input data-recognition type="checkbox" ${d.recognition_enabled ? "checked" : ""}> InsightFace recognition fields</label><div class="we-model-grid we-model-advanced" data-recognition-fields ${d.recognition_enabled && engine === "insightface" ? "" : "hidden"}><label>Recognition ONNX path<input data-recognition-model value="${esc(d.recognition_model)}"></label><label>Identity gallery JSON path<input data-gallery value="${esc(d.identity_gallery)}"></label><label>Recognition threshold<input data-recognition-threshold type="number" min="0" max="1" step="0.01" value="${esc(d.recognition_threshold)}"></label></div></div><div class="we-model-actions"><button class="button primary" data-apply-model ${demo || modelBusy || !modelCamera ? "disabled" : ""}>${modelBusy ? "Applying…" : "Apply model configuration"}</button><span class="we-model-state" role="status">${esc(modelState)}</span></div><p class="we-runtime">${esc(runtimeState)}</p></section>`;
       }
       // Display padding lets workflows near coordinate zero be centered without
       // changing persisted node coordinates or running out of room to pan.
@@ -1373,7 +1540,7 @@
               if (n.type === "filter" && k === "identity_source")
                 return `<label>Identity source<select data-param="identity_source"><option value="identity" ${(v || "identity") === "identity" ? "selected" : ""}>Recognized identity</option><option value="class" ${v === "class" ? "selected" : ""}>Model class</option></select></label>`;
               if (k === "engine")
-                return `<label>Detection engine<select data-param="engine">${["any", "opencv", "yolo", "insightface"].map((x) => `<option ${x === v ? "selected" : ""}>${x}</option>`).join("")}</select></label><p>${n.params.engine === "insightface" ? "Choose an InsightFace detector in a connected Model node. Model OUT connects to MODEL IN; Classifier OUT connects to CLASSIFIER IN." : "A connected Model node selects its engine and local weights. Without one, use the camera's active pipeline."}</p>`;
+                return `<label>Detection engine<select data-param="engine">${["any", "opencv", "yolo", "insightface"].map((x) => `<option ${x === v ? "selected" : ""}>${x}</option>`).join("")}</select></label><p>${n.params.engine === "insightface" ? "Choose an InsightFace detector in a connected Model node. Model OUT connects to MODEL IN; Classifier OUT connects to CLASSIFIER IN." : n.params.engine === "opencv" ? "The built-in OpenCV person detector is configured when this workflow is enabled. No model file is needed." : "A connected Model node selects its engine and local weights. Any uses the camera's active pipeline."}</p>`;
               if (k === "action")
                 return `<label>Recording action<select data-param="action">${["start", "stop"].map((x) => `<option ${x === v ? "selected" : ""}>${x}</option>`).join("")}</select></label>`;
               if (k === "language")
@@ -1488,16 +1655,7 @@
                 "",
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
-        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><label>Workflow<select data-workflow>${workflows.map((w) => `<option value="${esc(w.id)}" ${w.id === graph.id ? "selected" : ""}>${esc(w.name)}</option>`).join("")}<option value="__new">New workflow</option></select></label><label>Name<input data-name value="${esc(graph.name)}"></label><div class="we-activation-control"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button class="button secondary" data-insightface-template>InsightFace notification template</button><button class="button secondary" data-template>Use Face event template</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${demo || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><h3>Node palette</h3><p>Click a node to add it.</p><div class="we-palette">${Object.entries(
-          TYPES,
-        )
-          .map(
-            ([t, s]) =>
-              `<button data-add="${t}">${s.label}<span>+</span></button>`,
-          )
-          .join(
-            "",
-          )}</div><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div><h3>Events</h3><div class="we-events">${
+        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><div class="we-toolbar-identity"><label>Workflow<select data-workflow>${workflows.map((w) => `<option value="${esc(w.id)}" ${w.id === graph.id ? "selected" : ""}>${esc(w.name)}</option>`).join("")}<option value="__new">New workflow</option></select></label><label>Name<input data-name value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button class="button secondary" data-insightface-template>InsightFace notification template</button><button class="button secondary" data-template>Use Face event template</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${demo || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
           events
             .slice(-5)
             .reverse()
@@ -1506,7 +1664,7 @@
                 `<p>${esc(e.message || "Detection event")}<small>${esc(e.camera_id || "")} · ${esc(e.created_at ? new Date(e.created_at * 1000).toLocaleTimeString() : "")}</small></p>`,
             )
             .join("") || "<p>No recent events.</p>"
-        }</div></aside><section class="we-workspace"><div class="we-canvas-tools"><span>Drag empty space to pan. Middle-drag anywhere on the canvas.</span><button class="button secondary" data-center>Center workflow</button></div>${
+        }</div></section></aside><section class="we-workspace"><div class="we-canvas-tools"><span>Drag empty space to pan. Middle-drag anywhere on the canvas.</span><button class="button secondary" data-center>Center workflow</button></div>${
           reconnectChoice
             ? `<div class="we-reconnect-choice" role="status"><b>Drag the connection to move its IN end:</b>${graph.edges
                 .filter(
@@ -1558,7 +1716,7 @@
           centerCanvas(graph.nodes[0]);
         }
         canvasFocus?.focus?.({ preventScroll: true });
-        root.insertAdjacentHTML("beforeend", libraryPanel() + modelPanel());
+        root.insertAdjacentHTML("beforeend", libraryPanel());
         const settings = graph.nodes.find((n) => n.id === settingsNode);
         if (settings)
           root.insertAdjacentHTML(
@@ -1661,155 +1819,15 @@
           });
           const data = await r.json();
           if (!r.ok) throw Error(data.error || `Request failed (${r.status})`);
+          if (
+            url === "/api/workflows" ||
+            /^\/api\/workflows\/[^/]+\/remove$/.test(url)
+          )
+            loadLibrary();
           return data;
         } finally {
           clearTimeout(limit);
           requestControllers.delete(requestController);
-        }
-      }
-      function syncModelDraft() {
-        if (!modelDraft) modelDraft = defaultModel();
-        const value = (q) => root.querySelector(q)?.value ?? "";
-        modelDraft.engine = value("[data-model-engine]") || "none";
-        modelDraft.model = value("[data-model-path]");
-        modelDraft.device = value("[data-model-device]") || "cpu";
-        modelDraft.inference_fps = Number(value("[data-model-fps]"));
-        modelDraft.confidence = Number(value("[data-model-confidence]"));
-        modelDraft.input_size = Number(value("[data-model-size]"));
-        modelDraft.max_detections = Number(value("[data-model-max]"));
-        modelDraft.recognition_enabled =
-          !!root.querySelector("[data-recognition]")?.checked;
-        modelDraft.recognition_model = value("[data-recognition-model]");
-        modelDraft.identity_gallery = value("[data-gallery]");
-        modelDraft.recognition_threshold = Number(
-          value("[data-recognition-threshold]"),
-        );
-        modelDirty = true;
-        modelRevision++;
-      }
-      async function applyModel() {
-        if (demo || modelBusy || !modelCamera) return;
-        syncModelDraft();
-        const snapshot = clone(modelDraft),
-          cameraId = modelCamera,
-          revision = modelRevision,
-          engine = snapshot.engine;
-        let settings = null;
-        if (engine !== "none") {
-          settings = {
-            engine,
-            device: snapshot.device,
-            inference_fps: snapshot.inference_fps,
-            confidence: snapshot.confidence,
-            input_size: snapshot.input_size,
-            max_detections: snapshot.max_detections,
-          };
-          if (engine !== "opencv") settings.model = snapshot.model.trim();
-          if (engine === "insightface" && snapshot.recognition_enabled) {
-            settings.recognition_model =
-              snapshot.recognition_model.trim() || null;
-            settings.identity_gallery =
-              snapshot.identity_gallery.trim() || null;
-            settings.recognition_threshold = snapshot.recognition_threshold;
-          }
-        }
-        const errors = [];
-        if (settings) {
-          if (
-            !Number.isFinite(settings.inference_fps) ||
-            settings.inference_fps < 0.1 ||
-            settings.inference_fps > 30
-          )
-            errors.push("Inference FPS must be 0.1–30.");
-          if (
-            !Number.isFinite(settings.confidence) ||
-            settings.confidence < 0 ||
-            settings.confidence > 1
-          )
-            errors.push("Confidence must be 0–1.");
-          if (
-            !Number.isInteger(settings.input_size) ||
-            settings.input_size < 128 ||
-            settings.input_size > 1280 ||
-            settings.input_size % 32
-          )
-            errors.push(
-              "Input size must be a multiple of 32 from 128 to 1280.",
-            );
-          if (
-            !Number.isInteger(settings.max_detections) ||
-            settings.max_detections < 1 ||
-            settings.max_detections > 500
-          )
-            errors.push("Maximum detections must be 1–500.");
-          if (engine !== "opencv" && !settings.model)
-            errors.push("Enter a local model path.");
-          if (
-            engine === "insightface" &&
-            snapshot.recognition_enabled &&
-            (!settings.recognition_model || !settings.identity_gallery)
-          )
-            errors.push(
-              "Recognition requires both ONNX model and identity gallery paths.",
-            );
-          if (
-            engine === "insightface" &&
-            snapshot.recognition_enabled &&
-            (!Number.isFinite(settings.recognition_threshold) ||
-              settings.recognition_threshold < 0 ||
-              settings.recognition_threshold > 1)
-          )
-            errors.push("Recognition threshold must be 0–1.");
-        }
-        if (settings && engine !== "yolo" && settings.device !== "cpu") {
-          errors.push("Only YOLO supports GPU device selection.");
-        }
-        if (errors.length) {
-          modelState = errors.join(" ");
-          render();
-          return;
-        }
-        modelBusy = true;
-        modelState = "Applying camera configuration…";
-        render();
-        const active = new AbortController(),
-          limit = setTimeout(() => active.abort(), 4000);
-        modelController?.abort();
-        modelController = active;
-        try {
-          const response = await fetch(
-              `/api/cameras/${encodeURIComponent(cameraId)}/vision`,
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Spyder-Control": "1",
-                },
-                body: JSON.stringify({ settings }),
-                signal: active.signal,
-              },
-            ),
-            data = await response.json().catch(() => ({}));
-          if (!response.ok)
-            throw Error(data.error || `Request failed (${response.status})`);
-          if (!mounted || modelCamera !== cameraId) return;
-          if (modelRevision === revision) {
-            modelConfig = data;
-            modelDraft = draftFrom(data);
-            modelDirty = false;
-          }
-          runtimeState = data.runtime?.message || data.runtime?.state || "";
-          modelState = `Applied. Pipeline: ${data.pipeline || "none"}`;
-        } catch (e) {
-          if (mounted && modelCamera === cameraId)
-            modelState =
-              e.name === "AbortError" ? "Request timed out." : e.message;
-        } finally {
-          clearTimeout(limit);
-          if (mounted && modelCamera === cameraId) {
-            modelBusy = false;
-            render();
-          }
         }
       }
       function activationStatus(message, failed = false) {
@@ -2086,57 +2104,6 @@
           if (mounted) render();
         }
       }
-      async function loadModel() {
-        if (demo || !modelCamera || !mounted) return;
-        const cameraId = modelCamera;
-        modelController?.abort();
-        modelController = new AbortController();
-        const active = modelController,
-          limit = setTimeout(() => active.abort(), 4000);
-        try {
-          const r = await fetch(
-              `/api/cameras/${encodeURIComponent(cameraId)}/vision`,
-              { cache: "no-store", signal: active.signal },
-            ),
-            data = await r.json();
-          if (!r.ok)
-            throw Error(data.error || "Camera model settings unavailable.");
-          if (
-            !mounted ||
-            modelController !== active ||
-            modelCamera !== cameraId
-          )
-            return;
-          runtimeState = data.runtime?.message || data.runtime?.state || "";
-          const liveStatus = root.querySelector(".we-runtime");
-          if (liveStatus) liveStatus.textContent = runtimeState;
-          if (!modelDirty) {
-            const first = !modelDraft;
-            modelConfig = data;
-            modelDraft = draftFrom(data);
-            runtimeState = data.runtime?.message || data.runtime?.state || "";
-            modelState = `Pipeline: ${data.pipeline || "none"}`;
-            const status = root.querySelector(".we-runtime");
-            if (status) status.textContent = runtimeState;
-            const state = root.querySelector(".we-model-state");
-            if (state) state.textContent = modelState;
-            if (first) {
-              if (settingsNode || pointerDrag || wireDrag || panDrag) {
-                const panel = root.querySelector(".we-models");
-                if (panel) panel.outerHTML = modelPanel();
-              } else render(true);
-            }
-          }
-        } catch (e) {
-          if (mounted && modelCamera === cameraId && e.name !== "AbortError") {
-            modelState = e.message;
-            const state = root.querySelector(".we-model-state");
-            if (state) state.textContent = modelState;
-          }
-        } finally {
-          clearTimeout(limit);
-        }
-      }
       function updateSnapshot() {
         const chooser = root.querySelector("[data-workflow]");
         if (chooser) {
@@ -2187,19 +2154,12 @@
               data.errors[data.errors.length - 1].message ||
                 "Workflow action failed.",
             );
-          if (!modelBusy) loadModel();
           if (!busy && !activationBusy && !activationReview) {
             const saved = workflows.find((w) => w.id === graph?.id);
             if (saved) graph.enabled = !!saved.enabled;
             syncActivationControls();
           }
-          if (
-            !dirty &&
-            !busy &&
-            !modelDirty &&
-            !activationReview &&
-            !activationBusy
-          ) {
+          if (!dirty && !busy && !activationReview && !activationBusy) {
             const latest = workflows.find((w) => w.id === graph?.id);
             if (latest) graph = migrateDetectorNodes(latest);
             else if (!snapshotLoaded && workflows[0])
@@ -2218,24 +2178,17 @@
       }
       const input = (e) => {
         const t = e.target;
-        if (t.matches("[data-model-engine]")) {
-          syncModelDraft();
-          const selectedEngine = t.value,
-            path = root.querySelector("[data-model-path]"),
-            recognitionFields = root.querySelector("[data-recognition-fields]");
-          if (path)
-            path.disabled =
-              selectedEngine === "none" || selectedEngine === "opencv";
-          if (recognitionFields)
-            recognitionFields.hidden = selectedEngine !== "insightface";
+        if (t.matches("[data-palette-search]")) {
+          paletteQuery = t.value;
+          const palette = root.querySelector(".we-palette");
+          if (palette) palette.innerHTML = paletteContents();
           return;
         }
-        if (
-          t.matches(
-            "[data-model-path],[data-model-device],[data-model-fps],[data-model-confidence],[data-model-size],[data-model-max],[data-recognition-model],[data-gallery],[data-recognition-threshold],[data-recognition]",
-          )
-        ) {
-          syncModelDraft();
+        if (t.matches("[data-library-search]")) {
+          libraryQuery = t.value;
+          libraryPageNumber = 0;
+          removingModel = "";
+          refreshLibraryResults();
           return;
         }
         if (t.matches("[data-name]")) {
@@ -2266,6 +2219,10 @@
         if (!n) return;
         const k = t.dataset.param,
           old = n.params[k];
+        if (k === "model_id" && libraryBusy && removingModel) {
+          t.value = old;
+          return;
+        }
         if (
           n.type === "detections" &&
           k === "engine" &&
@@ -2326,6 +2283,21 @@
       };
       const change = (e) => {
         const t = e.target;
+        if (
+          t.matches(
+            "[data-library-filter-engine],[data-library-filter-labels],[data-library-sort]",
+          )
+        ) {
+          if (t.matches("[data-library-filter-engine]"))
+            libraryEngine = t.value;
+          else if (t.matches("[data-library-filter-labels]"))
+            libraryLabels = t.value;
+          else librarySort = t.value;
+          libraryPageNumber = 0;
+          removingModel = "";
+          refreshLibraryResults();
+          return;
+        }
         if (t.matches("[data-import-file]")) {
           const file = t.files?.[0],
             generation = ++importGeneration;
@@ -2375,36 +2347,6 @@
             redoStack = [];
             selected = "";
           }
-        } else if (t.matches("[data-model-camera]")) {
-          modelCamera = t.value;
-          modelBusy = false;
-          modelDirty = false;
-          modelDraft = null;
-          modelConfig = null;
-          modelState = "Loading camera settings…";
-          modelController?.abort();
-          render();
-          loadModel();
-          return;
-        } else if (t.matches("[data-model-engine]")) {
-          input(e);
-          return;
-        } else if (t.matches("[data-recognition]")) {
-          syncModelDraft();
-          const pane = root.querySelector("[data-recognition-fields]");
-          if (pane)
-            pane.hidden =
-              !t.checked ||
-              root.querySelector("[data-model-engine]")?.value !==
-                "insightface";
-          return;
-        } else if (
-          t.matches(
-            "[data-model-path],[data-model-device],[data-model-fps],[data-model-confidence],[data-model-size],[data-model-max],[data-recognition-model],[data-gallery],[data-recognition-threshold]",
-          )
-        ) {
-          syncModelDraft();
-          return;
         } else if (t.matches("[data-param]")) {
           input(e);
           return;
@@ -2531,6 +2473,67 @@
           link.download = `${graph.name.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 80) || "workflow"}.json`;
           link.click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } else if (b.dataset.libraryUse) {
+          if (libraryBusy || graph.nodes.length >= 64) return;
+          const model = library.find(
+            (item) => item.id === b.dataset.libraryUse,
+          );
+          if (!model) return;
+          add(
+            model.metadata?.model_type === "face_classifier"
+              ? "classifier"
+              : "model",
+          );
+          const created = graph.nodes.find((n) => n.id === selected);
+          if (created && ["model", "classifier"].includes(created.type)) {
+            created.params.model_id = model.id;
+            changed();
+          }
+        } else if (b.dataset.requestRemoveModel) {
+          if (demo || libraryBusy) return;
+          const model = library.find(
+            (item) => item.id === b.dataset.requestRemoveModel,
+          );
+          if (!model) return;
+          if (modelReferences(model).length || model.usage?.in_use) {
+            libraryMessage =
+              "Model is in use. Remove assignments and save first.";
+            refreshLibraryResults();
+            return;
+          }
+          removingModel = model.id;
+          refreshLibraryResults();
+          root.querySelector("[data-cancel-remove-model]")?.focus?.();
+        } else if (b.dataset.confirmRemoveModel) {
+          await removeLibraryModel(b.dataset.confirmRemoveModel);
+        } else if (b.dataset.cancelRemoveModel !== undefined) {
+          removingModel = "";
+          refreshLibraryResults();
+        } else if (
+          b.dataset.libraryPrev !== undefined ||
+          b.dataset.libraryNext !== undefined
+        ) {
+          libraryPageNumber += b.dataset.libraryPrev !== undefined ? -1 : 1;
+          removingModel = "";
+          refreshLibraryResults();
+        } else if (b.dataset.libraryClear !== undefined) {
+          libraryQuery = "";
+          libraryEngine = "all";
+          libraryLabels = "all";
+          librarySort = "name";
+          libraryPageNumber = 0;
+          removingModel = "";
+          const values = {
+            "[data-library-search]": "",
+            "[data-library-filter-engine]": "all",
+            "[data-library-filter-labels]": "all",
+            "[data-library-sort]": "name",
+          };
+          for (const [selector, value] of Object.entries(values)) {
+            const field = root.querySelector(selector);
+            if (field) field.value = value;
+          }
+          refreshLibraryResults();
         } else if (b.dataset.refreshModels !== undefined) {
           await loadLibrary();
           if (mounted) render(true);
@@ -2687,8 +2690,7 @@
           } finally {
             if (runGeneration === modalGeneration) testRunning = false;
           }
-        } else if (b.dataset.applyModel !== undefined) applyModel();
-        else if (b.dataset.insightfaceTemplate !== undefined) {
+        } else if (b.dataset.insightfaceTemplate !== undefined) {
           if (!demo) window.spyderNotifications?.useNode?.();
           remember();
           graph = insightfaceTemplate({
@@ -3287,16 +3289,21 @@
         const current = JSON.stringify(cameraList().map((c) => [c.id, c.name]));
         if (current === cameraSignature) return;
         cameraSignature = current;
-        const needsLoad = !modelCamera && cameraList().length > 0;
-        if (needsLoad) {
-          modelCamera = cameraList()[0].id;
-          modelDirty = false;
-          modelDraft = null;
-          modelConfig = null;
-        }
         render();
-        if (needsLoad && !demo) loadModel();
       };
+      const toggleDetails = (e) => {
+        if (e.target.matches?.("[data-palette-group]") && !paletteQuery) {
+          if (e.target.open)
+            collapsedPaletteGroups.delete(e.target.dataset.paletteGroup);
+          else collapsedPaletteGroups.add(e.target.dataset.paletteGroup);
+        }
+        if (e.target.matches?.("[data-model-details]")) {
+          if (e.target.open)
+            openModelDetails.add(e.target.dataset.modelDetails);
+          else openModelDetails.delete(e.target.dataset.modelDetails);
+        }
+      };
+      root.addEventListener("toggle", toggleDetails, true);
       root.addEventListener("input", input);
       root.addEventListener("change", change);
       root.addEventListener("click", click);
@@ -3324,7 +3331,6 @@
       render();
       cameraSignature = JSON.stringify(cameraList().map((c) => [c.id, c.name]));
       if (!demo) {
-        loadModel();
         loadLibrary();
         loadDetectorCatalog();
       }
@@ -3350,12 +3356,12 @@
         } catch {}
         clearTimeout(timer);
         controller?.abort();
-        modelController?.abort();
         libraryController?.abort();
         detectorController?.abort();
         importGeneration++;
         for (const request of requestControllers) request.abort();
         window.removeEventListener("spyder:cameras", refreshCameras);
+        root.removeEventListener("toggle", toggleDetails, true);
         root.removeEventListener("input", input);
         root.removeEventListener("change", change);
         root.removeEventListener("click", click);

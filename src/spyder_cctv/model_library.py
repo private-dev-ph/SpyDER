@@ -161,6 +161,7 @@ class ModelLibrary:
             and isinstance(row.get("settings"), dict)
             and row["settings"].get("model") == path
             and isinstance(row.get("metadata"), dict)
+            and ("uploaded" not in row or type(row["uploaded"]) is bool)
         )
 
     @staticmethod
@@ -202,7 +203,13 @@ class ModelLibrary:
             raise ValueError(str(error)) from None
 
     def _add(
-        self, path: Path, engine: str, name: str | None = None, classes: list[str] | None = None
+        self,
+        path: Path,
+        engine: str,
+        name: str | None = None,
+        classes: list[str] | None = None,
+        *,
+        uploaded: bool = False,
     ) -> dict[str, Any]:
         engine = engine.lower() if isinstance(engine, str) else ""
         if engine not in _ENGINES:
@@ -239,6 +246,7 @@ class ModelLibrary:
             "settings": settings,
             "format": path.suffix.lower().lstrip("."),
             "metadata": metadata,
+            "uploaded": uploaded,
         }
         self._models[ident] = row
         try:
@@ -273,7 +281,7 @@ class ModelLibrary:
     def _descriptor(row: dict[str, Any]) -> dict[str, Any]:
         return copy.deepcopy(
             {
-                key: row[key]
+                key: row.get(key, False) if key == "uploaded" else row[key]
                 for key in (
                     "id",
                     "name",
@@ -283,6 +291,7 @@ class ModelLibrary:
                     "settings",
                     "format",
                     "metadata",
+                    "uploaded",
                 )
             }
         )
@@ -353,7 +362,7 @@ class ModelLibrary:
                 output.flush()
                 os.fsync(output.fileno())
             with self._mutation():
-                return self._add(destination, engine, name or Path(basename).stem)
+                return self._add(destination, engine, name or Path(basename).stem, uploaded=True)
         except Exception:
             destination.unlink(missing_ok=True)
             raise
@@ -394,6 +403,61 @@ class ModelLibrary:
                 self._models[ident] = previous
                 raise
             return self._descriptor(row)
+
+    def remove(self, ident: str) -> dict[str, Any]:
+        """Remove registry entry and delete only a verified library-owned upload."""
+        with self._mutation():
+            row = self._models.get(ident)
+            if row is None:
+                raise KeyError(ident)
+            previous = copy.deepcopy(row)
+            uploaded = row.get("uploaded", False) is True
+            source = Path(row["path"])
+            source_key = source.resolve()
+            shared = any(
+                other_id != ident and Path(other["path"]).resolve() == source_key
+                for other_id, other in self._models.items()
+            )
+            quarantine: Path | None = None
+            if uploaded and not shared:
+                root = self.root.resolve()
+                # Uploaded files use random UUID names. Refuse symlinks and path escapes.
+                if not re.fullmatch(r"[0-9a-f]{32}", source.stem):
+                    raise RuntimeError("Uploaded model path is not library-owned")
+                try:
+                    if source.parent.resolve() != root or source.is_symlink():
+                        raise RuntimeError("Uploaded model path is not library-owned")
+                    info = source.lstat()
+                    if not source.is_file() or source.resolve().parent != root:
+                        raise RuntimeError("Uploaded model path is not library-owned")
+                except FileNotFoundError:
+                    info = None
+                if info is not None:
+                    quarantine = root / (".remove-" + uuid.uuid4().hex)
+                    os.replace(source, quarantine)
+            del self._models[ident]
+            try:
+                self._save()
+            except OSError:
+                self._models[ident] = previous
+                if quarantine is not None:
+                    os.replace(quarantine, source)
+                raise
+            deleted_file = False
+            cleanup_error = None
+            if quarantine is not None:
+                try:
+                    quarantine.unlink()
+                    deleted_file = True
+                except OSError:
+                    cleanup_error = (
+                        "Could not delete uploaded model bytes; bytes remain in private quarantine"
+                    )
+            outcome = {"removed": True, "id": ident, "deleted_file": deleted_file}
+            if cleanup_error is not None:
+                outcome["cleanup_error"] = cleanup_error
+                outcome["retained_quarantine"] = True
+            return outcome
 
     def reinspect(
         self, ident: str, *, label_source: str | None = None, reset_source: bool = False

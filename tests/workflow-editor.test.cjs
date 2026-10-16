@@ -1,6 +1,9 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  TYPES,
+  paletteGroups,
+  modelPage,
   faceTemplate,
   insightfaceTemplate,
   validate,
@@ -294,7 +297,7 @@ function mountHarness({
   };
 }
 
-test("save posts exact graph contract and camera model payload applies locally", async () => {
+test("save posts the graph contract without a separate camera model editor", async () => {
   const h = mountHarness();
   await h.flush();
   h.root.dispatch("click", h.target("button", { add: "detections" }));
@@ -324,31 +327,14 @@ test("save posts exact graph contract and camera model payload applies locally",
   assert.deepEqual(save.body.workflow.edges, [
     { from: nodeIds[0], to: nodeIds[1] },
   ]);
-  const engine = h.target("[data-model-engine]");
-  engine.value = "yolo";
-  h.root.querySelector("[data-model-engine]").value = "yolo";
-  h.root.querySelector("[data-model-path]").value = "models/detector.pt";
-  for (const [selector, value] of [
-    ["[data-model-device]", "cpu"],
-    ["[data-model-fps]", "5"],
-    ["[data-model-confidence]", "0.5"],
-    ["[data-model-size]", "640"],
-    ["[data-model-max]", "100"],
-  ])
-    h.root.querySelector(selector).value = value;
-  h.root.dispatch("click", h.target("button", { applyModel: "" }));
-  await h.flush();
-  const model = h.calls.find(
-    (call) => call.options.method === "POST" && call.url.endsWith("/vision"),
+  assert.doesNotMatch(
+    h.root.innerHTML,
+    /Camera model pipeline|data-apply-model/,
   );
-  assert.ok(
-    model,
-    JSON.stringify(h.calls.map((call) => [call.url, call.options.method])),
+  assert.equal(
+    h.calls.some((call) => call.url.endsWith("/vision")),
+    false,
   );
-  assert.equal(model.body.settings.engine, "yolo");
-  assert.equal(model.body.settings.model, "models/detector.pt");
-  assert.equal(model.body.settings.device, "cpu");
-  assert.equal(model.options.headers["X-Spyder-Control"], "1");
   h.window.spyderWorkflows.unmount();
 });
 
@@ -418,278 +404,27 @@ test("snapshot polling preserves unsaved name edit and unmount aborts requests",
   assert.ok(h.calls.some((call) => call.options.signal?.aborted));
 });
 
-test("vision pipeline reads active engine and model draft survives graph rerender", async () => {
-  const h = mountHarness({
-    fetcher: async (url) => ({
-      ok: true,
-      status: 200,
-      json: async () =>
-        url.endsWith("/vision")
-          ? {
-              id: "cam-1",
-              pipeline: "vision",
-              settings: { engine: "insightface" },
-              runtime: { state: "ready" },
-            }
-          : { workflows: [], events: [] },
-    }),
-  });
+test("camera updates stay within the sidebar and do not request camera model settings", async () => {
+  const h = mountHarness({ initialCameras: [] });
   await h.flush();
-  assert.match(h.root.innerHTML, /value="insightface" selected/);
+  h.window.spyder.cameras = () => [{ id: "cam-late", name: "Late camera" }];
+  h.listeners.get("spyder:cameras")();
+  await h.flush();
   assert.match(
     h.root.innerHTML,
-    /data-recognition[^>]*type="checkbox"(?! checked)/,
+    /<section class="we-camera-panel"><h3>Cameras<\/h3><div class="we-cameras">/,
   );
-  const path = h.root.querySelector("[data-model-path]");
-  path.value = "local/face-detector.onnx";
-  h.root.dispatch("input", path);
-  h.root.dispatch("click", h.target("button", { add: "detections" }));
-  assert.match(h.root.innerHTML, /value="local\/face-detector\.onnx"/);
-  assert.doesNotMatch(h.root.innerHTML, />ArcFace</);
-  h.window.spyderWorkflows.unmount();
-});
-
-test("late camera event loads camera model settings", async () => {
-  const h = mountHarness({ initialCameras: [] });
+  assert.match(h.root.innerHTML, /Late camera/);
+  assert.equal(
+    h.calls.some((call) => call.url.endsWith("/vision")),
+    false,
+  );
+  h.root.dispatch("click", h.target("button", { applyModel: "" }));
   await h.flush();
   assert.equal(
     h.calls.some((call) => call.url.endsWith("/vision")),
     false,
   );
-  h.window.spyder.cameras = () => [{ id: "cam-late", name: "Late camera" }];
-  h.listeners.get("spyder:cameras")();
-  await h.flush();
-  assert.ok(
-    h.calls.some((call) => call.url === "/api/cameras/cam-late/vision"),
-  );
-  assert.match(h.root.innerHTML, /Late camera/);
-  h.window.spyderWorkflows.unmount();
-});
-
-test("stale camera settings response cannot replace newly selected camera", async () => {
-  let finishOld;
-  const h = mountHarness({
-    initialCameras: [
-      { id: "cam-1", name: "First" },
-      { id: "cam-2", name: "Second" },
-    ],
-    fetcher: (url, options) => {
-      if (url.endsWith("/cam-1/vision"))
-        return new Promise((resolve, reject) => {
-          finishOld = resolve;
-          options.signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                Object.assign(new Error("Aborted"), { name: "AbortError" }),
-              ),
-            { once: true },
-          );
-        });
-      if (url.endsWith("/cam-2/vision"))
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            id: "cam-2",
-            pipeline: "vision",
-            settings: { engine: "yolo", model: "second.pt" },
-            runtime: { state: "second camera" },
-          }),
-        });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => ({ workflows: [], events: [] }),
-      });
-    },
-  });
-  await h.flush();
-  const camera = h.root.querySelector("[data-model-camera]");
-  camera.value = "cam-2";
-  h.root.dispatch("change", camera);
-  await h.flush();
-  finishOld({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      id: "cam-1",
-      pipeline: "vision",
-      settings: { engine: "opencv" },
-      runtime: {},
-    }),
-  });
-  await h.flush();
-  assert.match(h.root.innerHTML, /value="cam-2" selected/);
-  assert.match(h.root.innerHTML, /value="second\.pt"/);
-  h.window.spyderWorkflows.unmount();
-});
-
-test("model edits made during apply survive response and graph rerender", async () => {
-  let finishApply;
-  const h = mountHarness({
-    fetcher: (url, options) => {
-      if (url.endsWith("/vision") && options.method === "POST")
-        return new Promise((resolve) => {
-          finishApply = resolve;
-        });
-      return {
-        ok: true,
-        status: 200,
-        json: async () =>
-          url.endsWith("/vision")
-            ? {
-                id: "cam-1",
-                pipeline: "vision",
-                settings: { engine: "yolo", model: "old.pt" },
-                runtime: {},
-              }
-            : { workflows: [], events: [] },
-      };
-    },
-  });
-  await h.flush();
-  const set = (selector, value) => {
-    const field = h.root.querySelector(selector);
-    field.value = value;
-    h.root.dispatch("input", field);
-  };
-  set("[data-model-engine]", "yolo");
-  set("[data-model-device]", "cpu");
-  set("[data-model-fps]", "5");
-  set("[data-model-confidence]", "0.5");
-  set("[data-model-size]", "640");
-  set("[data-model-max]", "100");
-  set("[data-model-path]", "before.pt");
-  h.root.dispatch("click", h.target("button", { applyModel: "" }));
-  await h.flush();
-  assert.equal(
-    h.calls.find(
-      (call) => call.options.method === "POST" && call.url.endsWith("/vision"),
-    ).body.settings.model,
-    "before.pt",
-  );
-  set("[data-model-path]", "newer.pt");
-  h.root.dispatch("click", h.target("button", { add: "filter" }));
-  finishApply({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      id: "cam-1",
-      pipeline: "vision",
-      settings: { engine: "yolo", model: "before.pt" },
-      runtime: {},
-    }),
-  });
-  await h.flush();
-  assert.match(h.root.innerHTML, /value="newer\.pt"/);
-  h.window.spyderWorkflows.unmount();
-});
-
-test("late model POST cannot mutate unmounted workspace", async () => {
-  let finishApply;
-  const h = mountHarness({
-    fetcher: (url, options) => {
-      if (url.endsWith("/vision") && options.method === "POST")
-        return new Promise((resolve) => {
-          finishApply = resolve;
-        });
-      return {
-        ok: true,
-        status: 200,
-        json: async () =>
-          url.endsWith("/vision")
-            ? {
-                id: "cam-1",
-                pipeline: "yolo",
-                settings: { engine: "yolo", model: "detector.pt" },
-                runtime: {},
-              }
-            : { workflows: [], events: [] },
-      };
-    },
-  });
-  await h.flush();
-  h.root.dispatch("click", h.target("button", { applyModel: "" }));
-  await h.flush();
-  const renders = h.root.assignments;
-  h.window.spyderWorkflows.unmount();
-  finishApply({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      id: "cam-1",
-      pipeline: "opencv",
-      settings: { engine: "opencv" },
-      runtime: {},
-    }),
-  });
-  await h.flush();
-  assert.equal(h.root.assignments, renders);
-  assert.equal(h.root.removed, true);
-});
-
-test("late model POST from previous camera cannot replace current camera draft", async () => {
-  let finishApply;
-  const h = mountHarness({
-    initialCameras: [
-      { id: "cam-1", name: "First" },
-      { id: "cam-2", name: "Second" },
-    ],
-    fetcher: (url, options) => {
-      if (url.endsWith("/vision") && options.method === "POST")
-        return new Promise((resolve) => {
-          finishApply = resolve;
-        });
-      if (url.endsWith("/cam-2/vision"))
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            id: "cam-2",
-            pipeline: "vision",
-            settings: { engine: "yolo", model: "second.pt" },
-            runtime: {},
-          }),
-        });
-      if (url.endsWith("/cam-1/vision"))
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            id: "cam-1",
-            pipeline: "vision",
-            settings: { engine: "yolo", model: "first.pt" },
-            runtime: {},
-          }),
-        });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => ({ workflows: [], events: [] }),
-      });
-    },
-  });
-  await h.flush();
-  h.root.dispatch("click", h.target("button", { applyModel: "" }));
-  await h.flush();
-  const camera = h.root.querySelector("[data-model-camera]");
-  camera.value = "cam-2";
-  h.root.dispatch("change", camera);
-  await h.flush();
-  finishApply({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      id: "cam-1",
-      pipeline: "opencv",
-      settings: { engine: "opencv" },
-      runtime: {},
-    }),
-  });
-  await h.flush();
-  assert.match(h.root.innerHTML, /value="cam-2" selected/);
-  assert.match(h.root.innerHTML, /value="second\.pt"/);
   h.window.spyderWorkflows.unmount();
 });
 
@@ -2791,5 +2526,231 @@ test("showcase rejects code execution even when disabled controls receive synthe
   await h.flush();
   assert.equal(h.calls.length, 0);
   assert.doesNotMatch(h.root.innerHTML, /data-test-pane/);
+  h.window.spyderWorkflows.unmount();
+});
+
+test("palette groups contain each node once and search by name or function", () => {
+  const groups = paletteGroups();
+  assert.deepEqual(
+    groups.flatMap((g) => g.types).sort(),
+    Object.keys(TYPES).sort(),
+  );
+  assert.deepEqual(
+    paletteGroups("PREVIEW").flatMap((g) => g.types),
+    ["preview"],
+  );
+  assert.deepEqual(paletteGroups("nonexistent"), []);
+  assert.equal(paletteGroups("vision")[0].types.includes("filter"), true);
+});
+
+test("model library search, filters and pagination are stable and do not mutate source order", () => {
+  const models = Array.from({ length: 64 }, (_, i) => ({
+    id: `model-${i}`,
+    name: `Model ${64 - i}`,
+    engine: i % 2 ? "yolo" : "insightface",
+    classes: i % 3 ? ["Alice"] : [],
+    path: `C:/models/file-${i}.onnx`,
+  }));
+  const original = models.map((m) => m.id);
+  const first = modelPage(models);
+  assert.equal(first.models[0].name, "Model 1");
+  assert.equal(first.models.length, 8);
+  assert.equal(first.pages, 8);
+  const last = modelPage(models, { page: 999 });
+  assert.equal(last.page, 7);
+  assert.equal(last.models.length, 8);
+  const filtered = modelPage(models, {
+    query: "ALICE",
+    engine: "yolo",
+    labels: "available",
+  });
+  assert.ok(filtered.total > 8);
+  assert.ok(
+    filtered.models.every(
+      (m) => m.engine === "yolo" && m.classes.includes("Alice"),
+    ),
+  );
+  assert.equal(modelPage(models, { query: "file-2.onnx" }).total, 1);
+  assert.ok(
+    modelPage(models, { labels: "missing" }).models.every(
+      (m) => !m.classes.length,
+    ),
+  );
+  assert.equal(modelPage(models, { query: "no matching model" }).total, 0);
+  assert.deepEqual(
+    models.map((m) => m.id),
+    original,
+  );
+});
+
+test("toolbar rows, grouped scrollable palette and camera section render independently", async () => {
+  const h = mountHarness();
+  await h.flush();
+  assert.match(
+    h.root.innerHTML,
+    /we-toolbar-identity[\s\S]*data-workflow[\s\S]*data-name[\s\S]*we-toolbar-actions[\s\S]*we-activation-main[\s\S]*data-activate[\s\S]*data-workflow-state/,
+  );
+  assert.match(h.root.innerHTML, /data-palette-search/);
+  assert.match(h.root.innerHTML, /data-palette-group="Inputs &amp; models"/);
+  assert.match(
+    h.root.innerHTML,
+    /<section class="we-camera-panel"><h3>Cameras<\/h3><div class="we-cameras">/,
+  );
+  const before = h.root.assignments;
+  const search = h.target("[data-palette-search]");
+  search.value = "preview";
+  h.root.dispatch("input", search);
+  const palette = h.root.querySelector(".we-palette").innerHTML;
+  assert.match(palette, /data-add="preview"/);
+  assert.doesNotMatch(palette, /data-add="camera"/);
+  assert.equal(
+    h.root.assignments,
+    before,
+    "search must not replace workflow canvas",
+  );
+  h.window.spyderWorkflows.unmount();
+});
+
+test("library filter controls update results without replacing the canvas or search control", async () => {
+  const h = mountHarness({
+    initialModels: Array.from({ length: 20 }, (_, i) => ({
+      id: `m-${i}`,
+      name: `Entry ${i}`,
+      engine: i % 2 ? "yolo" : "insightface",
+      classes: [`class-${i}`],
+    })),
+  });
+  await h.flush();
+  const before = h.root.assignments;
+  const search = h.target("[data-library-search]");
+  search.value = "Entry 19";
+  h.root.dispatch("input", search);
+  let html = h.root.querySelector("[data-library-results]").innerHTML;
+  assert.match(html, /Entry 19/);
+  assert.doesNotMatch(html, /data-library-model="m-18"/);
+  h.root.dispatch("click", h.target("button", { libraryClear: "" }));
+  html = h.root.querySelector("[data-library-results]").innerHTML;
+  assert.match(html, /Page 1 of 3/);
+  h.root.dispatch("click", h.target("button", { libraryNext: "" }));
+  assert.match(
+    h.root.querySelector("[data-library-results]").innerHTML,
+    /Page 2 of 3/,
+  );
+  assert.equal(h.root.assignments, before);
+  h.window.spyderWorkflows.unmount();
+});
+
+test("removing an uploaded model requires inline confirmation and sends guarded empty payload", async () => {
+  let models = [
+    {
+      id: "remove-me",
+      name: "Unused weights",
+      engine: "yolo",
+      classes: [],
+      uploaded: true,
+      usage: { in_use: false, references: [] },
+    },
+  ];
+  const h = mountHarness({
+    fetcher: (url) => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        if (url === "/api/models") return { models };
+        if (url === "/api/models/remove-me/remove") {
+          models = [];
+          return { removed: true, id: "remove-me", deleted_file: true };
+        }
+        return { workflows: [], events: [] };
+      },
+    }),
+  });
+  await h.flush();
+  h.root.dispatch(
+    "click",
+    h.target("button", { requestRemoveModel: "remove-me" }),
+  );
+  assert.match(
+    h.root.querySelector("[data-library-results]").innerHTML,
+    /deletes the uploaded model file/,
+  );
+  assert.equal(
+    h.calls.some((c) => c.url.endsWith("/remove")),
+    false,
+  );
+  h.root.dispatch("click", h.target("button", { cancelRemoveModel: "" }));
+  assert.equal(
+    h.calls.some((c) => c.url.endsWith("/remove")),
+    false,
+  );
+  h.root.dispatch(
+    "click",
+    h.target("button", { requestRemoveModel: "remove-me" }),
+  );
+  h.root.dispatch(
+    "click",
+    h.target("button", { confirmRemoveModel: "remove-me" }),
+  );
+  await h.flush();
+  const call = h.calls.find((c) => c.url === "/api/models/remove-me/remove");
+  assert.deepEqual(call.body, {});
+  assert.equal(call.options.headers["X-Spyder-Control"], "1");
+  assert.match(
+    h.root.querySelector("[data-library-status]").textContent,
+    /deleted/,
+  );
+  h.window.spyderWorkflows.unmount();
+});
+
+test("saved usage and current unsaved draft references both block library removal", async () => {
+  const h = mountHarness({
+    initialModels: [
+      {
+        id: "used",
+        name: "Used model",
+        engine: "yolo",
+        classes: [],
+        usage: { in_use: true, references: ["Workflow Entrance / node model"] },
+      },
+      {
+        id: "draft-model",
+        name: "Draft model",
+        engine: "insightface",
+        classes: ["Alice"],
+        metadata: { model_type: "face_classifier" },
+      },
+    ],
+  });
+  await h.flush();
+  h.root.dispatch("click", h.target("button", { confirmRemoveModel: "used" }));
+  await h.flush();
+  assert.equal(
+    h.calls.some((c) => c.url.endsWith("/remove")),
+    false,
+  );
+  h.root.dispatch("click", h.target("button", { libraryUse: "draft-model" }));
+  assert.match(h.root.innerHTML, /Classifier node/);
+  h.root.dispatch(
+    "click",
+    h.target("button", { confirmRemoveModel: "draft-model" }),
+  );
+  await h.flush();
+  assert.equal(
+    h.calls.some((c) => c.url.endsWith("/remove")),
+    false,
+  );
+  h.root.dispatch("click", h.target("button", { save: "" }));
+  await h.flush();
+  const saved = h.calls.find(
+    (c) => c.url === "/api/workflows" && c.options.method === "POST",
+  ).body.workflow;
+  assert.equal(
+    saved.nodes.find((n) => n.type === "classifier").params.model_id,
+    "draft-model",
+  );
+  assert.equal(
+    h.calls.some((c) => c.url.endsWith("/vision")),
+    false,
+  );
   h.window.spyderWorkflows.unmount();
 });
