@@ -1,6 +1,68 @@
+function computeSettingsPreview(capabilities = {}, draft = {}) {
+  const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+  const delta = (name) => {
+    const capability = capabilities[name];
+    if (!capability?.supported || !Object.hasOwn(draft, name)) return 0;
+    const selected = Number(draft[name]),
+      baseline = Number(capability.value);
+    return Number.isFinite(selected) && Number.isFinite(baseline)
+      ? selected - baseline
+      : 0;
+  };
+  const factor = (name) => {
+    const capability = capabilities[name];
+    if (!capability?.supported || !Object.hasOwn(draft, name)) return 1;
+    const current = Number(draft[name]);
+    const actual = Number(capability.value);
+    if (
+      !Number.isFinite(current) ||
+      !Number.isFinite(actual) ||
+      current <= 0 ||
+      actual <= 0
+    )
+      return 1;
+    return clamp(actual / current, 1, 4);
+  };
+  const zoomCapability = capabilities.zoom;
+  let zoom = 1;
+  if (zoomCapability?.supported && Object.hasOwn(draft, "zoom")) {
+    const baseline = Number(zoomCapability.value),
+      selected = Number(draft.zoom);
+    if (Number.isFinite(baseline) && Number.isFinite(selected))
+      zoom *= clamp(
+        baseline > 0 ? selected / baseline : 1 + (selected - baseline) / 100,
+        1,
+        4,
+      );
+  }
+  zoom *= factor("fov");
+  zoom = clamp(zoom, 1, 4);
+  const panX = clamp((delta("pan") / 100) * 50, -50, 50);
+  const panY = clamp((delta("tilt") / 100) * 50, -50, 50);
+  const filterFactor = (name, low, high) =>
+    clamp(1 + delta(name) / 50, low, high);
+  const filter = [
+    `brightness(${filterFactor("brightness", 0.25, 2.5)})`,
+    `contrast(${filterFactor("contrast", 0.25, 2.5)})`,
+    `saturate(${filterFactor("saturation", 0, 3)})`,
+  ].join(" ");
+  return {
+    filter,
+    zoom,
+    panX,
+    panY,
+    transform: `scale(${zoom})`,
+    transformOrigin: `${clamp(50 - panX, 0, 100)}% ${clamp(50 - panY, 0, 100)}%`,
+  };
+}
+
+if (typeof module === "object" && module.exports)
+  module.exports = { computeSettingsPreview };
+
 /* Device controls and profile workflows use the dashboard's small public interface. */
 (() => {
   "use strict";
+  if (typeof window === "undefined") return;
   const app = window.spyder;
   const find = (selector, root = document) => root.querySelector(selector);
   const dialog = find("#settings-dialog");
@@ -23,6 +85,8 @@
   let busy = false;
   let pollTimer = null;
   let pollController = null;
+  let draftRevision = 0;
+  let simulationSuspended = false;
   const rows = new Map();
   function current(id, token) {
     return active === id && generation === token && dialog.open;
@@ -61,6 +125,45 @@
     for (const [name, row] of rows)
       if (row.include.checked) values[name] = Number(row.slider.value);
     return values;
+  }
+  function resetPreviewStyles() {
+    const image = find("#settings-preview");
+    image.draggable = false;
+    image.style.removeProperty("filter");
+    image.style.removeProperty("transform");
+    image.style.removeProperty("transform-origin");
+  }
+  function updateSimulatedPreview() {
+    const image = find("#settings-preview");
+    const note = find("#settings-preview-note");
+    image.draggable = false;
+    if (
+      !snapshot?.available ||
+      !image.getAttribute("src") ||
+      simulationSuspended
+    ) {
+      resetPreviewStyles();
+      if (snapshot?.available && simulationSuspended) {
+        note.hidden = false;
+        note.textContent =
+          "Hardware is applying changes. Preview simulation resumes after readback.";
+      }
+      return;
+    }
+    if (!dirty) {
+      resetPreviewStyles();
+      note.hidden = false;
+      note.textContent =
+        "Live hardware preview · Edit controls for a simulated draft";
+      return;
+    }
+    const simulated = computeSettingsPreview(snapshot.capabilities, draft);
+    image.style.filter = simulated.filter;
+    image.style.transform = simulated.transform;
+    image.style.transformOrigin = simulated.transformOrigin;
+    note.hidden = false;
+    note.textContent =
+      "Simulated preview · Apply changes hardware/Control Room · Approximate vs driver";
   }
   function availability() {
     for (const [name, row] of rows) {
@@ -138,6 +241,11 @@
         if (include.checked) draft[name] = Number(slider.value);
         else delete draft[name];
         dirty = true;
+        draftRevision++;
+        updateSimulatedPreview();
+        settingsMessage(
+          "Unsaved changes. Apply to activate settings on hardware.",
+        );
         availability();
       });
       slider.addEventListener("input", () => {
@@ -145,6 +253,11 @@
         draft[name] = Number(slider.value);
         output.textContent = percent(slider.value);
         dirty = true;
+        draftRevision++;
+        updateSimulatedPreview();
+        settingsMessage(
+          "Unsaved changes. Apply to activate settings on hardware.",
+        );
       });
       heading.append(label, output);
       row.append(heading, slider, native);
@@ -158,6 +271,8 @@
       find("#settings-preview").hidden = true;
       find("#settings-preview").removeAttribute("src");
       find("#settings-preview-note").hidden = false;
+      find("#settings-preview-note").textContent =
+        "Start the camera to preview its current frame";
     }
     for (const [name, row] of rows) {
       const capability = snapshot.capabilities[name];
@@ -193,6 +308,7 @@
         row.native.append(state);
       }
     }
+    updateSimulatedPreview();
     availability();
   }
   function chooseDraft() {
@@ -218,6 +334,8 @@
       if (!current(id, token)) return;
       const changed = snapshot.available !== next.available;
       snapshot = next;
+      if (simulationSuspended && snapshot.settings_state !== "pending")
+        simulationSuspended = false;
       if (changed && !dirty) chooseDraft();
       else updateReadbacks();
       if (!busy && !dirty)
@@ -245,9 +363,18 @@
   }
   async function openSettings(id) {
     const token = ++generation;
+    clearTimeout(pollTimer);
+    pollController?.abort();
+    pollController = null;
     active = id;
     snapshot = null;
     draft = {};
+    simulationSuspended = false;
+    resetPreviewStyles();
+    find("#settings-preview").removeAttribute("src");
+    find("#settings-preview-note").textContent =
+      "Start the camera for a live preview";
+    find("#settings-preview-note").hidden = false;
     dirty = false;
     busy = true;
     rows.clear();
@@ -270,6 +397,7 @@
       find("#settings-preview").hidden = !frame || !camera.available;
       find("#settings-preview-note").hidden = !!frame && camera.available;
       if (frame && camera.available) find("#settings-preview").src = frame;
+      updateSimulatedPreview();
       settingsMessage(
         camera.available
           ? "Select the controls you want to apply or include in a profile."
@@ -292,7 +420,7 @@
     if (dialog.open && active === event.detail.id && snapshot?.available) {
       find("#settings-preview").src = event.detail.url;
       find("#settings-preview").hidden = false;
-      find("#settings-preview-note").hidden = true;
+      updateSimulatedPreview();
     }
   });
   for (const button of document.querySelectorAll(".close-settings"))
@@ -302,7 +430,12 @@
     active = null;
     clearTimeout(pollTimer);
     pollController?.abort();
+    simulationSuspended = false;
+    resetPreviewStyles();
     find("#settings-preview").removeAttribute("src");
+    find("#settings-preview-note").textContent =
+      "Start the camera for a live preview";
+    find("#settings-preview-note").hidden = false;
     find("#profile-name").value = "";
   });
   find("#control-defaults").addEventListener("click", () => {
@@ -321,24 +454,31 @@
         if (row.include.checked) draft[name] = Number(row.slider.value);
       }
     dirty = true;
+    draftRevision++;
+    updateSimulatedPreview();
     settingsMessage("Defaults are staged. Apply to this camera to save them.");
   });
+  find("#assign-profile").textContent = "Assign & apply";
   find("#apply-settings").addEventListener("click", async () => {
     if (busy || !active) return;
     const id = active;
     const token = generation;
+    const submittedRevision = draftRevision;
+    const settings = selectedSettings();
     busy = true;
     availability();
     try {
       const updated = await app.request("/api/cameras/" + id + "/settings", {
-        settings: selectedSettings(),
+        settings,
       });
       if (!current(id, token)) {
         await app.refresh();
         return;
       }
       snapshot = updated;
-      dirty = false;
+      simulationSuspended = true;
+      dirty = draftRevision !== submittedRevision;
+      updateSimulatedPreview();
       profileOptions("");
       settingsMessage("Settings saved. The camera worker is applying them…");
       await app.refresh();
@@ -358,9 +498,10 @@
     if (profile) {
       draft = { ...profile.settings };
       dirty = true;
+      draftRevision++;
       drawControls();
       settingsMessage(
-        "Profile preview staged. Assign profile to save it to this camera.",
+        "Profile preview staged. Assign & apply to activate it on this camera.",
       );
     } else
       settingsMessage(
@@ -382,6 +523,7 @@
         return;
       }
       snapshot = updated;
+      simulationSuspended = true;
       chooseDraft();
       settingsMessage(
         snapshot.available
@@ -416,37 +558,21 @@
     availability();
     try {
       const profile = await app.request("/api/profiles", { name, settings });
-      // Saving a profile and assigning it are separate durable operations.
+      // Saving a profile does not assign or apply it.
       profiles = await get("/api/profiles");
       if (!current(id, token)) {
         app.notify("Profile saved. Use Profiles to assign it.");
         return;
       }
       profileOptions(profile.id);
-      try {
-        const updated = await app.request("/api/cameras/" + id + "/profile", {
-          profile_id: profile.id,
-        });
-        if (!current(id, token)) {
-          await app.refresh();
-          return;
-        }
-        snapshot = updated;
-        chooseDraft();
-        settingsMessage(
-          "“" +
-            profile.name +
-            "” saved and assigned. Use Profiles to share it with other cameras.",
-        );
-      } catch (error) {
-        if (current(id, token))
-          settingsMessage(
-            "Profile saved, but assignment failed. " + error.message,
-            true,
-          );
-      }
+      draft = { ...settings };
+      draftRevision++;
+      dirty = true;
+      drawControls();
+      settingsMessage(
+        "Profile saved. Apply settings or Assign & apply to activate.",
+      );
       find("#profile-name").value = "";
-      await app.refresh();
     } catch (error) {
       if (current(id, token)) settingsMessage(error.message, true);
     } finally {

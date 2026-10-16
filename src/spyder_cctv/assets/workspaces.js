@@ -60,6 +60,39 @@
     message.hidden = !text;
     window.dispatchEvent(new CustomEvent("spyder:notice", { detail: text }));
   }
+  function updateActivityPreference(event) {
+    const preference = event?.detail || window.spyderActivity?.getState();
+    const checkbox = find("#system-pause-unfocused");
+    const status = find("#system-pause-status");
+    if (!preference || !checkbox || !status) return;
+    checkbox.checked = preference.continuous
+      ? false
+      : preference.pause_when_unfocused;
+    checkbox.disabled =
+      preference.continuous ||
+      preference.loading ||
+      preference.saving ||
+      !preference.saved;
+    status.textContent = preference.continuous
+      ? "Continuous server mode · cameras stay active"
+      : preference.loading
+        ? "Loading preference…"
+        : !preference.saved
+          ? "Preference unavailable · retrying"
+          : preference.saving
+            ? "Saving preference…"
+            : preference.saveError
+              ? "Could not save preference · previous setting restored"
+              : window.spyderShowcase
+                ? "Saved in this browser · showcase mode"
+                : preference.storage_error
+                  ? "Preference storage unavailable · changes may not persist"
+                  : "Saved on this computer";
+  }
+  window.addEventListener(
+    "spyder:activity-preference",
+    updateActivityPreference,
+  );
   function settings(id) {
     document.dispatchEvent(
       new CustomEvent("spyder:camera-settings", { detail: { id } }),
@@ -124,6 +157,7 @@
   }
   function route() {
     window.spyderVisionLab?.unmount();
+    window.spyderWorkflows?.unmount();
     const key = location.hash.slice(1);
     current = pages[key] ? key : "control-room";
     if (current !== "control-room") window.spyderWall?.exit();
@@ -179,7 +213,34 @@
         act("/api/captures", [...selected]),
       );
     } else if (current === "vision-lab") {
-      window.spyderVisionLab?.mount(content);
+      content.innerHTML =
+        '<div class="recording-actions"><button id="vision-motion-tab" class="button primary">Motion & ROI</button><button id="vision-workflow-tab" class="button secondary">Models & workflows</button></div><div id="vision-mode-content"></div>';
+      const mode = find("#vision-mode-content");
+      function switchMode(workflow) {
+        window.spyderVisionLab?.unmount();
+        window.spyderWorkflows?.unmount();
+        find("#vision-motion-tab").setAttribute(
+          "aria-pressed",
+          String(!workflow),
+        );
+        find("#vision-workflow-tab").setAttribute(
+          "aria-pressed",
+          String(workflow),
+        );
+        find("#vision-motion-tab").className =
+          "button " + (workflow ? "secondary" : "primary");
+        find("#vision-workflow-tab").className =
+          "button " + (workflow ? "primary" : "secondary");
+        if (workflow) window.spyderWorkflows?.mount(mode);
+        else window.spyderVisionLab?.mount(mode);
+      }
+      find("#vision-motion-tab").addEventListener("click", () =>
+        switchMode(false),
+      );
+      find("#vision-workflow-tab").addEventListener("click", () =>
+        switchMode(true),
+      );
+      switchMode(false);
     } else if (current === "camera-setup") {
       content.innerHTML =
         '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section>';
@@ -215,7 +276,8 @@
       }
     } else {
       content.innerHTML =
-        '<section class="workspace-panel"><h2>Local system</h2><div id="system-details" class="system-details"></div><p class="field-help">CPU/GPU graphs and dependency diagnostics will be added here.</p></section>';
+        '<section class="workspace-panel"><h2>Local system</h2><div id="system-details" class="system-details"></div><fieldset class="activity-policy"><legend>Camera focus preference</legend><label class="release-toggle"><input id="system-pause-unfocused" type="checkbox" checked /><span>Pause cameras when unfocused</span></label><p id="system-pause-status" class="field-help" role="status" aria-live="polite"></p><p class="field-help">When off, cameras keep running while the local server runs, even if you close this browser. Browser desktop notifications require this page to stay open.</p></fieldset><p class="field-help">CPU/GPU graphs and dependency diagnostics will be added here.</p></section>';
+      updateActivityPreference();
       const details = find("#system-details");
       if (window.spyderShowcase)
         details.textContent =
@@ -446,8 +508,18 @@
   }
   window.addEventListener("hashchange", route);
   window.addEventListener("spyder:vision-lab-ready", () => {
-    if (current === "vision-lab")
-      window.spyderVisionLab.mount(find("#workspace-content"));
+    if (
+      current === "vision-lab" &&
+      find("#vision-motion-tab")?.getAttribute("aria-pressed") === "true"
+    )
+      window.spyderVisionLab.mount(find("#vision-mode-content"));
+  });
+  window.addEventListener("spyder:workflows-ready", () => {
+    if (
+      current === "vision-lab" &&
+      find("#vision-workflow-tab")?.getAttribute("aria-pressed") === "true"
+    )
+      window.spyderWorkflows.mount(find("#vision-mode-content"));
   });
   window.addEventListener("spyder:cameras", update);
   async function poll() {

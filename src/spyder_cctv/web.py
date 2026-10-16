@@ -5,28 +5,51 @@ import mimetypes
 import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
-from urllib.parse import urlsplit
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
+from spyder_cctv.analysis_preview import AnalysisPreviews
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.capacity import CapacityAssessment
+from spyder_cctv.capture import encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile
+from spyder_cctv.cv.detectors import DetectorCatalog
+from spyder_cctv.model_library import MAX_UPLOAD_BYTES, ModelLibrary
 from spyder_cctv.recording import RecordingService
+from spyder_cctv.workflow import WorkflowService
+from spyder_cctv.workflow_code import run_code
 
 
 def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServer:
     recorder = RecordingService(manager, manager.media_dir)
     capacity = CapacityAssessment(manager)
+    previews = AnalysisPreviews(manager)
+    models = ModelLibrary(manager.media_dir)
+    detectors = DetectorCatalog()
+    workflows = WorkflowService(
+        manager,
+        recorder,
+        manager.media_dir.parent,
+        model_library=models,
+        detector_catalog=detectors,
+    )
 
     class LocalServer(ThreadingHTTPServer):
         def server_close(self) -> None:
             try:
-                recorder.close()
+                workflows.close()
             finally:
                 try:
-                    capacity.close()
+                    recorder.close()
                 finally:
-                    super().server_close()
+                    try:
+                        previews.close()
+                    finally:
+                        try:
+                            capacity.close()
+                        finally:
+                            super().server_close()
 
     class Handler(BaseHTTPRequestHandler):
         # Reuse preview/status connections instead of exhausting local ephemeral ports.
@@ -58,12 +81,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         def json(self, code: int, value: object) -> None:
             self.send(code, json.dumps(value).encode(), "application/json")
 
-        def body(self) -> dict:
+        def body(self, maximum: int = 16384) -> dict:
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("Send application/json")
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 16384:
-                raise ValueError("Request must contain 1-16384 bytes")
+            if not 0 < length <= maximum:
+                raise ValueError("Request body exceeds the size limit")
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
                 raise ValueError("Request must contain an object")
@@ -122,6 +145,10 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/fullscreen.css",
                 "/vision-lab.js",
                 "/vision-lab.css",
+                "/workflow-editor.js",
+                "/workflow-preview.js",
+                "/workflow-notifications.js",
+                "/workflow-editor.css",
             ):
                 asset = path.removeprefix("/")
                 content_type = {
@@ -137,12 +164,61 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 )
             elif path == "/api/cameras":
                 self.json(200, manager.statuses())
+            elif path == "/api/preferences":
+                self.json(200, manager.preferences())
             elif path == "/api/profiles":
                 self.json(200, manager.profiles())
             elif path == "/api/recordings":
                 self.json(200, recorder.status())
             elif path == "/api/analysis/capacity":
                 self.json(200, capacity.snapshot())
+            elif path == "/api/workflows/notifications":
+                self.json(200, workflows.notifications())
+            elif path == "/api/workflows":
+                self.json(200, workflows.list())
+            elif path == "/api/vision/detectors":
+                self.json(200, {"detectors": detectors.list(), "default": "scrfd-500mf"})
+            elif path == "/api/models":
+                descriptors = models.list()
+                for descriptor in descriptors:
+                    if descriptor["classes"]:
+                        continue
+                    for camera in manager.statuses():
+                        try:
+                            worker = manager.get_worker(camera["id"])
+                        except KeyError:
+                            continue
+                        config = worker.config.vision
+                        if (
+                            config is None
+                            or config.engine != descriptor["engine"]
+                            or not config.model
+                            or Path(config.model).expanduser().resolve()
+                            != Path(descriptor["path"]).resolve()
+                        ):
+                            continue
+                        runtime = worker.vision_snapshot().get("runtime", {})
+                        classes = runtime.get("classes")
+                        if (
+                            isinstance(classes, list)
+                            and classes
+                            and all(isinstance(label, str) and label.strip() for label in classes)
+                        ):
+                            descriptor["classes"] = list(classes)
+                            descriptor["metadata"] = {
+                                **descriptor["metadata"],
+                                "inspection": "loaded from active camera",
+                                "classes": "available",
+                            }
+                        break
+                self.json(
+                    200,
+                    {
+                        "models": descriptors,
+                        "storage_error": models.storage_error,
+                        "storage_directory": str(models.root),
+                    },
+                )
             elif path == "/api/system":
                 disk = shutil.disk_usage(
                     manager.media_dir if manager.media_dir.exists() else manager.media_dir.parent
@@ -169,6 +245,23 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     self.json(404, {"error": "Unknown media"})
             else:
                 parts = path.strip("/").split("/")
+                if len(parts) in (4, 5) and parts[:3] == ["api", "analysis", "preview"]:
+                    try:
+                        if len(parts) == 4:
+                            self.json(200, previews.snapshot(parts[3]))
+                        elif parts[4] in ("frame", "mask"):
+                            jpeg = previews.image(parts[3], mask=parts[4] == "mask")
+                            if jpeg is None:
+                                self.json(503, {"error": "No fresh draft preview available"})
+                            else:
+                                self.send(200, jpeg, "image/jpeg")
+                        else:
+                            self.json(404, {"error": "Unknown preview route"})
+                    except KeyError:
+                        self.json(404, {"error": "Preview expired or camera removed"})
+                    except ValueError:
+                        self.json(400, {"error": "Invalid preview session"})
+                    return
                 if (
                     len(parts) in (4, 5)
                     and parts[:2] == ["api", "cameras"]
@@ -193,7 +286,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 if (
                     len(parts) == 4
                     and parts[:2] == ["api", "cameras"]
-                    and parts[3] in ("frame", "settings")
+                    and parts[3] in ("frame", "preview-frame", "settings", "vision")
                 ):
                     try:
                         worker = manager.get_worker(parts[2])
@@ -202,6 +295,16 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         return
                     if parts[3] == "settings":
                         self.json(200, worker.settings_snapshot())
+                        return
+                    if parts[3] == "vision":
+                        self.json(200, worker.vision_snapshot())
+                        return
+                    if parts[3] == "preview-frame":
+                        frame = worker.raw_frame()
+                        if frame is None:
+                            self.json(503, {"error": "No fresh raw preview frame available"})
+                        else:
+                            self.send(200, encode_jpeg(frame), "image/jpeg")
                         return
                     if (jpeg := worker.jpeg()) is None:
                         self.json(503, {"error": "No fresh frame available"})
@@ -222,7 +325,150 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
             try:
-                if parts == ["api", "analysis", "assess"]:
+                if (
+                    len(parts) == 5
+                    and parts[:3] == ["api", "vision", "detectors"]
+                    and parts[4] == "install"
+                ):
+                    data = self.body()
+                    if data:
+                        raise ValueError("Detector installation accepts an empty object")
+                    self.json(200, detectors.install(parts[3]))
+                elif parts == ["api", "models", "upload"]:
+                    query = parse_qs(
+                        urlsplit(self.path).query, keep_blank_values=True, strict_parsing=True
+                    )
+                    if (
+                        set(query) - {"filename", "engine", "name"}
+                        or not query.get("filename")
+                        or not query.get("engine")
+                    ):
+                        raise ValueError("Send filename and engine query parameters")
+                    if (
+                        self.headers.get("Content-Type", "").split(";")[0]
+                        != "application/octet-stream"
+                    ):
+                        raise ValueError("Send application/octet-stream")
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                    except ValueError:
+                        raise ValueError("Invalid Content-Length") from None
+                    if not 0 < length <= MAX_UPLOAD_BYTES:
+                        raise ValueError("Upload must be between 1 byte and 256 MiB")
+                    result = models.upload(
+                        query["filename"][0],
+                        query["engine"][0],
+                        self.rfile,
+                        length,
+                        query.get("name", [None])[0],
+                    )
+                    self.json(201, result)
+                elif parts == ["api", "models", "register"]:
+                    data = self.body()
+                    if (
+                        set(data) - {"path", "name", "engine", "classes"}
+                        or "path" not in data
+                        or "engine" not in data
+                    ):
+                        raise ValueError("Send path and engine, with optional name and classes")
+                    self.json(
+                        201,
+                        models.register(
+                            data["path"], data.get("name"), data["engine"], data.get("classes")
+                        ),
+                    )
+                elif len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] == "inspect":
+                    data = self.body()
+                    if set(data) - {"label_source"}:
+                        raise ValueError("Send an empty object or label_source")
+                    self.json(
+                        200,
+                        models.reinspect(
+                            parts[2],
+                            label_source=data.get("label_source"),
+                            reset_source="label_source" in data and data["label_source"] is None,
+                        ),
+                    )
+                elif len(parts) == 4 and parts[:2] == ["api", "models"] and parts[3] == "metadata":
+                    data = self.body()
+                    if not data or set(data) - {"name", "classes"}:
+                        raise ValueError("Send name and/or classes")
+                    self.json(200, models.update_metadata(parts[2], **data))
+                elif parts == ["api", "workflows", "code", "test"]:
+                    data = self.body(1048576)
+                    if set(data) - {"source", "detections", "context", "language"} or not {
+                        "source",
+                        "detections",
+                        "context",
+                    }.issubset(data):
+                        self.json(
+                            400,
+                            {
+                                "error": (
+                                    "Send source, detections and context, with optional language"
+                                )
+                            },
+                        )
+                        return
+                    try:
+                        detections = run_code(
+                            data["source"],
+                            data["detections"],
+                            data["context"],
+                            language=data.get("language", "python"),
+                        )
+                    except ValueError as error:
+                        self.json(400, {"error": str(error)})
+                    else:
+                        self.json(200, {"detections": detections})
+                elif parts == ["api", "workflows", "activation-preview"]:
+                    data = self.body(1048576)
+                    if set(data) != {"workflow"}:
+                        raise ValueError("Send a workflow graph")
+                    self.json(200, workflows.activation_preview(data["workflow"]))
+                elif parts == ["api", "workflows", "preview"]:
+                    data = self.body(1048576)
+                    if set(data) - {"workflow", "node_id", "camera_id"} or not {
+                        "workflow",
+                        "node_id",
+                    }.issubset(data):
+                        raise ValueError("Send workflow and node_id, with optional camera_id")
+                    self.json(
+                        200,
+                        workflows.preview(data["workflow"], data["node_id"], data.get("camera_id")),
+                    )
+                elif parts == ["api", "workflows"]:
+                    data = self.body(1048576)
+                    if "workflow" not in data or set(data) - {"workflow", "disable_motion"}:
+                        raise ValueError("Send a workflow graph with optional disable_motion")
+                    self.json(
+                        200,
+                        workflows.save(
+                            data["workflow"], disable_motion=data.get("disable_motion", False)
+                        ),
+                    )
+                elif len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "remove":
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    workflows.remove(parts[2])
+                    self.json(200, {"removed": parts[2]})
+                elif len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "vision":
+                    data = self.body()
+                    if set(data) != {"settings"}:
+                        raise ValueError("Send model settings")
+                    self.json(202, manager.set_vision(parts[2], data["settings"]))
+                elif len(parts) in (4, 5) and parts[:3] == ["api", "analysis", "preview"]:
+                    data = self.body()
+                    if len(parts) == 5 and parts[4] == "release" and data == {}:
+                        previews.release(parts[3])
+                        self.json(200, {"released": True})
+                    elif len(parts) == 4 and set(data) == {"camera_id", "settings"}:
+                        self.json(
+                            202, previews.configure(parts[3], data["camera_id"], data["settings"])
+                        )
+                    else:
+                        raise ValueError("Invalid preview fields")
+                elif parts == ["api", "analysis", "assess"]:
                     if self.body() != {}:
                         raise ValueError("Send an empty object")
                     self.json(202, capacity.start())
@@ -239,18 +485,19 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     data = self.body()
                     if set(data) != {"camera_ids"}:
                         raise ValueError("Send camera_ids")
-                    action = (
-                        recorder.capture
+                    outcome = (
+                        recorder.capture(data["camera_ids"])
                         if parts == ["api", "captures"]
-                        else recorder.start
-                        if parts[-1] == "start"
-                        else recorder.select
+                        else workflows.manual_recording(
+                            "start" if parts[-1] == "start" else "select", data["camera_ids"]
+                        )
                     )
-                    self.json(200, action(data["camera_ids"]))
+                    self.json(200, outcome)
                 elif parts == ["api", "recordings", "stop"]:
                     if self.body() != {}:
                         raise ValueError("Send an empty object")
-                    self.json(200, recorder.stop())
+                    outcome = workflows.manual_recording("stop")
+                    self.json(200, outcome)
                 elif parts == ["api", "cameras"]:
                     data = self.body()
                     data.setdefault("id", "cam-" + uuid4().hex[:12])
@@ -276,6 +523,14 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         client_id, data["active"], data["release_when_idle"]
                     )
                     self.json(200, {"accepted": True, "idle_policy": enabled})
+                elif parts == ["api", "preferences"]:
+                    data = self.body()
+                    if (
+                        set(data) != {"pause_when_unfocused"}
+                        or type(data["pause_when_unfocused"]) is not bool
+                    ):
+                        raise ValueError("Send pause_when_unfocused as a boolean")
+                    self.json(200, manager.set_pause_when_unfocused(data["pause_when_unfocused"]))
                 elif parts == ["api", "profiles"]:
                     data = self.body()
                     data.setdefault("id", "profile-" + uuid4().hex[:12])
@@ -309,12 +564,15 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     self.json(404, {"error": "Unknown route"})
             except KeyError:
                 self.json(404, {"error": "Unknown camera or profile"})
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError) as error:
                 self.json(
                     400,
                     {
-                        "error": "Invalid details. Check camera selection, fields or "
-                        "settings (0-100%)."
+                        "error": str(error)
+                        if parts[:2]
+                        in (["api", "workflows"], ["api", "models"], ["api", "preferences"])
+                        or parts[:3] == ["api", "vision", "detectors"]
+                        else "Invalid details. Check camera selection, fields or settings (0-100%)."
                     },
                 )
             except OSError:
@@ -325,4 +583,11 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             except RuntimeError as error:
                 self.json(409, {"error": str(error)})
 
-    return LocalServer(("127.0.0.1", port), Handler)
+    try:
+        return LocalServer(("127.0.0.1", port), Handler)
+    except Exception:
+        workflows.close()
+        previews.close()
+        capacity.close()
+        recorder.close()
+        raise

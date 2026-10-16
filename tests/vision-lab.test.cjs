@@ -8,7 +8,7 @@ const source = fs.readFileSync(
   path.join(__dirname, "../src/spyder_cctv/assets/vision-lab.js"),
   "utf8",
 );
-const flush = () => new Promise((resolve) => setImmediate(resolve));
+const flush = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve)); };
 
 function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
   const requests = [];
@@ -76,7 +76,7 @@ function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
     contains() { return false; }
     getBoundingClientRect() { return this.bounds || { left: 0, top: 0, width: 640, height: 480 }; }
     setPointerCapture() {}
-    closest(selector) { return selector === ".vl-stage" ? this : selector === "form" ? this : null; }
+    closest(selector) { return selector === ".vl-stage" ? this : selector === ".vl-image" && this.selector === ".vl-image" ? this : selector === "form" ? this : null; }
     matches(selector) { return selector === "form" && this.selector === "form"; }
     preventDefault() {}
     querySelector(selector) {
@@ -157,14 +157,18 @@ function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
     CustomEvent: class { constructor(type, init = {}) { this.type = type; this.detail = init.detail; } },
     Option: class { constructor(text, value) { this.text = text; this.value = value; } },
     AbortController, setImmediate, console,
-    setTimeout(fn, ms) { const id = ++sequence; timerMap.set(id, { fn, ms }); return id; },
+    setTimeout(fn, ms) { const id = ++sequence; timerMap.set(id, { fn, ms }); if (ms === 0) setImmediate(() => { if (timerMap.has(id)) { timerMap.delete(id); fn(); } }); return id; },
     clearTimeout(id) { timerMap.delete(id); },
     URL: { createObjectURL(blob) { const value = "blob:mask-" + created.length; created.push({ blob, value }); return value; }, revokeObjectURL(url) { revoked.push(url); } },
     fetch: async (url, options = {}) => {
-      requests.push({ method: "GET", url, options });
+      const request = { method: options.method || "GET", url, options, data: options.body ? JSON.parse(options.body) : undefined };
+      requests.push(request);
       if (fetcher) return fetcher(url, options);
       if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
-      if (url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: 16 }, runtime: { state: "running" } }) };
+      if (url.includes("/api/cameras/") && url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: 16 }, runtime: { state: "running" } }) };
+      if (url.endsWith("/release")) return { ok: true, json: async () => ({ released: true }) };
+      if (url.endsWith("/frame") || url.endsWith("/mask")) return { ok: true, blob: async () => new Blob([url.endsWith("/frame") ? "frame" : "mask"]) };
+      if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ camera_id: "cam-a", settings: {}, runtime: { state: "running" }, state: "running", pipeline: "vision", revision: 1 }) };
       return { ok: true, blob: async () => new Blob(["mask"]) };
     },
   });
@@ -184,7 +188,7 @@ test("showcase preview never calls native analysis or mask endpoints", async () 
   h.window.spyderVisionLab.unmount();
 });
 
-test("camera arriving after mount becomes selected and starts analysis polling", async () => {
+test("camera arriving after mount loads saved settings and configures isolated draft", async () => {
   const h = setup({ cameras: [] });
   await flush();
   assert.equal(h.requests.some((r) => r.url?.endsWith("/analysis")), false);
@@ -192,26 +196,35 @@ test("camera arriving after mount becomes selected and starts analysis polling",
   h.listeners.get("window:spyder:cameras")();
   await flush();
   assert.equal(h.root.cameraSelect.value, "cam-late");
-  assert.equal(h.root.image.src, "blob:frame-cam-late");
+  assert.equal(h.root.image.src, "", "saved Control Room frame never appears in draft preview");
   assert.ok(h.requests.some((r) => r.url === "/api/cameras/cam-late/analysis"));
+  assert.ok(h.requests.some((r) => r.method === "POST" && r.url.startsWith("/api/analysis/preview/") && r.data.camera_id === "cam-late"));
+  h.listeners.get("document:spyder:frame")({ detail: { id: "cam-late", url: "blob:saved-control-room-frame" } });
+  assert.notEqual(h.root.image.src, "blob:saved-control-room-frame");
   h.window.spyderVisionLab.unmount();
+  const release = h.requests.find((r) => r.url?.endsWith("/release"));
+  assert.equal(release.options.keepalive, true);
+  assert.equal(release.options.headers["X-Spyder-Control"], "1");
 });
 
-test("unsaved form values survive a server poll", async () => {
+test("form edits configure draft preview and persist only after Apply", async () => {
   const h = setup();
   await flush();
   h.root.form.elements.threshold.value = "77";
   h.root.dispatch("input", { target: { closest: () => h.root.form } });
-  const poll = [...h.timerMap.values()].find((item) => item.ms === 1200);
-  assert.ok(poll);
-  const renders = h.root.renderCount;
-  poll.fn();
+  const draft = [...h.timerMap.values()].filter((item) => item.ms === 250).at(-1);
+  assert.ok(draft);
+  draft.fn();
   await flush();
+  const renders = h.root.renderCount;
   assert.equal(h.root.renderCount, renders, "runtime poll must not rebuild form DOM");
   assert.equal(h.root.form.elements.threshold.value, "77");
+  const previewPost = h.requests.filter((r) => r.method === "POST" && r.url.startsWith("/api/analysis/preview/")).at(-1);
+  assert.equal(previewPost.data.settings.threshold, 77);
+  assert.equal(h.requests.some((r) => r.method === "POST" && r.url === "/api/cameras/cam-a/analysis"), false);
   h.root.dispatch("submit", { target: h.root.form, preventDefault() {} });
   await flush();
-  const post = h.requests.find((r) => r.method === "POST");
+  const post = h.requests.find((r) => r.method === "POST" && r.url === "/api/cameras/cam-a/analysis");
   assert.equal(post.url, "/api/cameras/cam-a/analysis");
   assert.equal(post.data.settings.threshold, 77);
   assert.deepEqual(Object.keys(post.data.settings).sort(), [
@@ -220,6 +233,119 @@ test("unsaved form values survive a server poll", async () => {
     "min_area_percent", "overlay", "roi", "threshold", "tracking",
     "warmup_frames",
   ].sort());
+  h.window.spyderVisionLab.unmount();
+});
+
+test("edits made during Apply remain dirty after earlier save completes", async () => {
+  let resolveSave;
+  const h = setup({ postRequest: () => new Promise((resolve) => { resolveSave = resolve; }) });
+  await flush();
+  h.root.form.elements.threshold.value = "44";
+  h.root.dispatch("input", { target: { closest: () => h.root.form } });
+  h.root.dispatch("submit", { target: h.root.form, preventDefault() {} });
+  h.root.form.elements.threshold.value = "55";
+  h.root.dispatch("input", { target: { closest: () => h.root.form } });
+  resolveSave({ state: "running" });
+  await flush();
+  assert.equal(h.root.dirty.textContent, "Unsaved changes");
+  assert.equal(h.root.form.elements.threshold.value, "55");
+  h.window.spyderVisionLab.unmount();
+});
+
+test("ROI pointerdown prevents image drag and pointercancel clears drag", () => {
+  const h = setup();
+  let prevented = false;
+  h.root.dispatch("pointerdown", { button: 0, clientX: 64, clientY: 96, pointerId: 1, target: h.root.image, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  h.root.dispatch("pointercancel", { target: h.root.stage });
+  const before = h.root.form.elements.roi_x.value;
+  h.root.dispatch("pointermove", { clientX: 400, clientY: 240, pointerId: 1, target: h.root.stage });
+  assert.equal(h.root.form.elements.roi_x.value, before);
+  let dragPrevented = false;
+  h.root.dispatch("dragstart", { target: h.root.image, preventDefault() { dragPrevented = true; } });
+  assert.equal(dragPrevented, true);
+  h.window.spyderVisionLab.unmount();
+});
+
+test("frame response from older draft revision cannot replace current preview", async () => {
+  let resolveFrame;
+  const h = setup({ fetcher: async (url) => {
+    if (url.endsWith("/frame")) return new Promise((resolve) => { resolveFrame = resolve; });
+    if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
+    if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ runtime: { state: "running" }, pipeline: "vision", revision: 1 }) };
+    return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: 16 }, runtime: {} }) };
+  } });
+  await flush();
+  const frame = [...h.timerMap.values()].find((item) => item.ms === 250);
+  assert.ok(frame);
+  frame.fn();
+  await flush();
+  h.root.form.elements.threshold.value = "70";
+  h.root.dispatch("input", { target: { closest: () => h.root.form } });
+  const config = [...h.timerMap.values()].filter((item) => item.ms === 250).at(-1);
+  config.fn();
+  await flush();
+  resolveFrame({ ok: true, blob: async () => new Blob(["stale frame"]) });
+  await flush();
+  assert.equal(h.root.image.src, "");
+  assert.equal(h.created.length, 0);
+  h.window.spyderVisionLab.unmount();
+});
+
+test("camera switch waits for old draft configuration then configures new session", async () => {
+  const pending = [];
+  const h = setup({ fetcher: async (url, options = {}) => {
+    if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
+    if (url.includes("/api/cameras/") && url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: url.includes("cam-b") ? 22 : 16 }, runtime: {} }) };
+    if (url.includes("/api/analysis/preview/") && options.method === "POST" && !url.endsWith("/release")) return new Promise((resolve) => pending.push({ resolve, data: JSON.parse(options.body) }));
+    return { ok: true, json: async () => ({ runtime: {}, pipeline: "vision" }), blob: async () => new Blob(["preview"]) };
+  } });
+  await flush();
+  assert.equal(pending.length, 1);
+  h.root.cameraSelect.value = "cam-b";
+  h.root.dispatch("change", { target: h.root.cameraSelect });
+  await flush();
+  assert.equal(pending.length, 1);
+  pending[0].resolve({ ok: true, json: async () => ({ runtime: {}, pipeline: "vision" }) });
+  await flush();
+  assert.equal(pending.length, 2);
+  assert.equal(pending[1].data.camera_id, "cam-b");
+  pending[1].resolve({ ok: true, json: async () => ({ runtime: {}, pipeline: "vision" }) });
+  await flush();
+  h.window.spyderVisionLab.unmount();
+});
+
+test("draft edits keep current image dimensions while replacement loads", async () => {
+  const h = setup();
+  await flush();
+  const frame = [...h.timerMap.values()].filter((item) => item.ms === 250).at(-1);
+  frame.fn();
+  await flush();
+  const source = h.root.image.src;
+  assert.ok(source);
+  h.root.image.naturalWidth = 640;
+  h.root.image.naturalHeight = 480;
+  h.root.form.elements.threshold.value = "80";
+  h.root.dispatch("input", { target: { closest: () => h.root.form } });
+  assert.equal(h.root.image.src, source);
+  assert.equal(h.root.image.naturalWidth, 640);
+  h.window.spyderVisionLab.unmount();
+});
+
+test("camera resume recreates preview with paused draft settings", async () => {
+  const h = setup();
+  await flush();
+  h.root.form.elements.threshold.value = "91";
+  h.root.dispatch("input", { target: { closest: () => h.root.form } });
+  h.cameraList[0].state = "stopped";
+  h.listeners.get("window:spyder:cameras")();
+  assert.match(h.root.runtimeNote.textContent, /Start camera in Control Room/);
+  h.cameraList[0].state = "running";
+  h.listeners.get("window:spyder:cameras")();
+  await flush();
+  const draftPosts = h.requests.filter((r) => r.method === "POST" && r.url.startsWith("/api/analysis/preview/") && !r.url.endsWith("/release"));
+  assert.equal(draftPosts.at(-1).data.camera_id, "cam-a");
+  assert.equal(draftPosts.at(-1).data.settings.threshold, 91);
   h.window.spyderVisionLab.unmount();
 });
 
@@ -234,7 +360,7 @@ test("ROI pointer coordinates exclude preview letterboxing", () => {
   assert.equal(+h.root.form.elements.roi_h.value, 80);
   h.root.dispatch("submit", { target: h.root.form, preventDefault() {} });
   return flush().then(() => {
-    assert.deepEqual(Array.from(h.requests.find((r) => r.method === "POST").data.settings.roi), [0.1, 0.1, 0.8, 0.8]);
+    assert.deepEqual(Array.from(h.requests.find((r) => r.method === "POST" && r.url === "/api/cameras/cam-a/analysis").data.settings.roi), [0.1, 0.1, 0.8, 0.8]);
     h.window.spyderVisionLab.unmount();
   });
 });
@@ -262,7 +388,7 @@ test("mask image loads as binary blob and cleanup revokes it on unmount", async 
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
   await flush();
-  assert.ok(h.requests.some((r) => r.url === "/api/cameras/cam-a/analysis/mask"));
+  assert.ok(h.requests.some((r) => r.url?.startsWith("/api/analysis/preview/") && r.url.endsWith("/mask")));
   assert.equal(h.root.maskImage.src, "blob:mask-0");
   assert.ok([...h.timerMap.values()].some((timer) => timer.ms === 1200), "mask refresh is scheduled while mask view stays open");
   h.window.spyderVisionLab.unmount();
@@ -275,9 +401,13 @@ test("mask refresh keeps prior image visible until replacement arrives", async (
   const h = setup({ fetcher: async (url) => {
     if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
     if (url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
+    if (url.endsWith("/mask")) {
     maskCalls++;
     if (maskCalls === 1) return { ok: true, blob: async () => new Blob(["first"]) };
     return new Promise((resolve) => { resolveReplacement = resolve; });
+    }
+    if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ pipeline: "vision", runtime: {} }) };
+    return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
   } });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
@@ -312,11 +442,12 @@ test("late mask response after camera switch cannot create stale object URL", as
   const resolveMasks = [];
   const h = setup({ fetcher: async (url) => {
     if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
-    if (url.endsWith("/analysis/mask")) return new Promise((resolve) => { resolveMasks.push(resolve); });
+    if (url.endsWith("/mask")) return new Promise((resolve) => { resolveMasks.push(resolve); });
     return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
   } });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
+  await flush();
   h.root.cameraSelect.value = "cam-b";
   h.root.dispatch("change", { target: h.root.cameraSelect });
   resolveMasks[0]({ ok: true, blob: async () => new Blob(["stale"]) });
@@ -347,7 +478,8 @@ test("camera switch serializes polls and unmount aborts active requests", async 
 test("mask warming status is shown without reporting a request error", async () => {
   const h = setup({ fetcher: async (url) => {
     if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
-    if (url.endsWith("/analysis/mask")) return { status: 503, ok: false };
+    if (url.endsWith("/mask")) return { status: 503, ok: false };
+    if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ pipeline: "vision", runtime: {} }) };
     return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
   } });
   h.root.viewSelect.value = "mask";
