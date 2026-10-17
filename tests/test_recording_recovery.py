@@ -6,6 +6,7 @@ import sys
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -253,3 +254,45 @@ def test_failed_decode_restores_original_tail(tmp_path, monkeypatch):
         recover_fragmented_file(path)
     assert path.read_bytes() == original
     assert path.with_name(path.name + ".interrupted-tail").exists()
+
+
+def test_failed_recovery_rename_retains_source_and_retries(tmp_path, monkeypatch):
+    item, source = video_file(tmp_path)
+    original = source.read_bytes()
+    replace = os.replace
+
+    def unavailable(src, dst):
+        if Path(src) == source:
+            raise OSError("synthetic rename failure")
+        return replace(src, dst)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", unavailable)
+        service = RecordingService(Manager(), tmp_path)
+        assert not service.status()["items"]
+        assert source.read_bytes() == original
+        assert service.status()["recovery"]["pending"]
+        service.close()
+    restored = RecordingService(Manager(), tmp_path)
+    assert restored.status()["items"][0]["id"] == item["id"]
+    assert restored.status()["items"][0]["keep_forever"]
+    restored.close()
+
+
+def test_failed_tail_checkpoint_never_truncates_original(tmp_path, monkeypatch):
+    import spyder_cctv.recording_recovery as recovery
+
+    _, source = video_file(tmp_path)
+    with source.open("ab") as output:
+        output.write(struct.pack(">I4s", 1000, b"moof") + b"tail to retain")
+    original = source.read_bytes()
+
+    def unavailable(_):
+        raise OSError("synthetic sync failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(recovery, "sync_directory", unavailable)
+        with pytest.raises(OSError, match="sync failure"):
+            recover_fragmented_file(source)
+    assert source.read_bytes() == original
+    assert recover_fragmented_file(source)["duration_seconds"] > 0

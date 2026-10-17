@@ -46,6 +46,7 @@ function runtime({
   sourceWidth = 640,
   sourceHeight = 360,
   captureBlobSize,
+  storedSettings = new Map(),
 } = {}) {
   const listeners = {};
   const revoked = [];
@@ -118,6 +119,10 @@ function runtime({
     retention: [],
   };
   const window = {
+    localStorage: {
+      getItem: (key) => storedSettings.get(key) || null,
+      setItem: (key, value) => storedSettings.set(key, value),
+    },
     spyderShowcase: showcase,
     MediaRecorder: recorder,
     addEventListener(name, fn) {
@@ -529,4 +534,21 @@ test("recording posters are local and revoked with their video", async () => {
   app.listeners["win:pagehide"]({ persisted: false });
   assert.ok(app.revoked.includes(item.thumbnail_url));
   assert.ok(app.revoked.includes(item.url));
+});
+
+test("new defaults preserve saved lengths and long choices survive reload", async () => {
+  const storedSettings = new Map([
+    [
+      "spyder.recording-storage.v1",
+      JSON.stringify({ profile: "archive", segment_minutes: 15 }),
+    ],
+  ]);
+  const app = runtime({ storedSettings });
+  assert.equal((await app.api.status()).storage.segment_minutes, 15);
+  await app.api.request("/api/recordings/settings", {
+    profile: "efficient",
+    segment_minutes: 1440,
+  });
+  const reloaded = runtime({ storedSettings });
+  assert.equal((await reloaded.api.status()).storage.segment_minutes, 1440);
 });
