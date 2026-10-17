@@ -291,3 +291,31 @@
   border-radius: 12px;
   background: var(--surface);
 }
+
+/* Storage controls wrap without squeezing camera tiles or mobile labels. */
+.recording-storage {
+  margin-block: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  min-width: 0;
+}
+.recording-storage-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.8rem;
+}
+.recording-storage-fields label {
+  display: grid;
+  gap: 0.4rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.recording-storage-fields select {
+  width: 100%;
+  min-width: 0;
+}
+.recording-storage-fields button {
+  flex: 0 1 auto;
+}

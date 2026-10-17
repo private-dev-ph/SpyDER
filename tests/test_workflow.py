@@ -2402,3 +2402,37 @@ def test_activity_snapshot_is_bounded_stable_and_has_no_notification_text(servic
     assert first_id == service.notifications()["activities"][0]["id"]
     snapshot["activities"][0]["camera_id"] = "changed"
     assert service.notifications()["activities"][0]["camera_id"] == "cam1"
+
+
+def test_event_clip_attaches_all_rotated_parts_without_unrelated_captures(service, monkeypatch):
+    class SegmentedRecorder:
+        def __init__(self):
+            self.current = {"state": "idle", "camera_ids": [], "session_id": None, "items": []}
+
+        def status(self):
+            return dict(self.current)
+
+        def start(self, camera_ids):
+            self.current.update(state="recording", camera_ids=list(camera_ids), session_id="owned")
+            return self.status()
+
+        def stop(self):
+            self.current.update(
+                state="idle",
+                camera_ids=[],
+                items=[
+                    {"id": "part-1", "kind": "recording", "session_id": "owned"},
+                    {"id": "capture", "kind": "capture"},
+                    {"id": "part-2", "kind": "recording", "session_id": "owned"},
+                ],
+            )
+            return self.status()
+
+    service.recorder = SegmentedRecorder()
+    attached = []
+    monkeypatch.setattr(
+        service.event_store, "attach_media", lambda event_id, media: attached.extend(media)
+    )
+    # The fixture stops the worker; its stop event makes this timed clip deterministic.
+    service._record_event_clip("event", "cam1", 1)
+    assert [item["id"] for item in attached] == ["part-1", "part-2"]
