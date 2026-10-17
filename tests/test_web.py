@@ -130,6 +130,7 @@ def test_dashboard_assets_and_status(server):
         ("/spyder-emblem.png", "image/png"),
         ("/workspaces.js", "text/javascript"),
         ("/workspaces.css", "text/css"),
+        ("/wall-order.js", "text/javascript"),
         ("/layouts.js", "text/javascript"),
         ("/layouts.css", "text/css"),
         ("/fullscreen.js", "text/javascript"),

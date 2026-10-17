@@ -40,6 +40,7 @@ def export_showcase(output: Path) -> None:
         "spyder-emblem.png",
         "event-library.js",
         "event-library.css",
+        "wall-order.js",
         "layouts.js",
         "layouts.css",
         "workspaces.js",

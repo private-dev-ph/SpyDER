@@ -133,7 +133,12 @@
       });
       if (!response.ok) throw Error("Notifications unavailable");
       const data = await response.json();
-      if (!stopped && controller === active) feed.accept(data);
+      if (!stopped && controller === active) {
+        feed.accept(data);
+        window.dispatchEvent(
+          new CustomEvent("spyder:activity-snapshot", { detail: data }),
+        );
+      }
     } catch {
       /* Keep other camera features usable during a connection failure. */
     } finally {

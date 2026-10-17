@@ -2382,3 +2382,23 @@ def test_preview_catalog_matches_terminal_camera_and_data_ports(service):
     descriptor = next(node for node in service.catalog() if node["type"] == "preview")
     assert descriptor["inputs"] == ["camera", "detections"]
     assert descriptor["outputs"] == []
+
+
+def test_activity_snapshot_is_bounded_stable_and_has_no_notification_text(service):
+    service._events = [
+        {
+            "workflow_id": "flow",
+            "camera_id": "cam1",
+            "created_at": float(index),
+            "message": "private event content",
+        }
+        for index in range(140)
+    ]
+    snapshot = service.notifications()
+    assert len(snapshot["activities"]) == 100
+    assert snapshot["notifications"] == []
+    assert set(snapshot["activities"][0]) == {"id", "camera_id", "created_at"}
+    first_id = snapshot["activities"][0]["id"]
+    assert first_id == service.notifications()["activities"][0]["id"]
+    snapshot["activities"][0]["camera_id"] = "changed"
+    assert service.notifications()["activities"][0]["camera_id"] == "cam1"

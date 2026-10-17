@@ -10,6 +10,8 @@ let focusReturn = null;
 let removing = null;
 let refreshing = false;
 let bulkPending = false;
+let frameRequests = 0;
+let nextFrameRequest = 0;
 const stateLabels = {
   running: "LIVE",
   starting: "CONNECTING",
@@ -421,6 +423,15 @@ async function loadFrame(card) {
     card.timer = setTimeout(() => loadFrame(card), 500);
     return;
   }
+  // A large wall shares a preview budget; backend capture/CV/recording is independent.
+  const now = performance.now();
+  if (frameRequests >= 6 || now < nextFrameRequest ||
+      (card.element.hidden && !$("#control-room").hidden && card.element.dataset.pinned !== "true")) {
+    card.timer = setTimeout(() => loadFrame(card), Math.max(45, nextFrameRequest - now));
+    return;
+  }
+  nextFrameRequest = now + 1000 / 24;
+  frameRequests++;
   card.loading = true;
   const controller = new AbortController();
   card.controller = controller;
@@ -461,13 +472,14 @@ async function loadFrame(card) {
     clearTimeout(timeout);
     if (card.controller === controller) card.controller = null;
     card.loading = false;
+    frameRequests--;
     if (
       cards.has(card.camera.id) &&
       connected &&
       card.camera.state === "running"
     ) {
       // Limit aggregate preview load as the number of cameras grows; never overlap frame requests.
-      const interval = Math.max(120, Math.min(1000, cards.size * 45));
+      const interval = focused ? 120 : Math.max(120, cards.size * 45);
       card.timer = setTimeout(() => loadFrame(card), interval);
     }
   }
