@@ -1,33 +1,40 @@
-# Public documentation
+# SpyDER documentation
 
-- [Project overview, capabilities and setup](../README.md)
-- [Layout designer, dummy cameras and backups](layouts.md)
-- [Contribution guidelines](../CONTRIBUTING.md)
-- [Portfolio showcase metadata](../portfolio-showcase.json)
+SpyDER is a local Python camera application with a browser interface. These guides
+cover installation, daily use, development, and the separate browser showcase.
+Start with [Getting started](getting-started.md) for a working local installation.
 
-## Presentation assets
+## User guides
 
-| Asset | What it shows |
-| --- | --- |
-| [Control Room](assets/control-room.png) | The static browser showcase with two locally generated camera feeds. |
-| [Vision Lab](assets/vision-lab.png) | The native workflow editor with synthetic camera input and demonstration detections. |
-| [Project emblem](../src/spyder_cctv/assets/spyder-emblem.png) | The shared SpyDER application and portfolio logo. |
+- [Camera setup and Control Room](user-guide/cameras.md): sources, tuning, profiles,
+  fullscreen, and camera release behavior.
+- [Vision Lab and workflows](user-guide/vision-workflows.md): motion analysis,
+  compatible models, connections, previews, and activation.
+- [Layouts](layouts.md): saved walls, pins, activity priority, and simulated cameras.
+- [Recordings and storage](recording-storage.md): quality, long clips, recovery,
+  storage allowances, and protected recordings.
+- [Events and notifications](user-guide/events.md): searchable activity, attachments,
+  naming patterns, and desktop notification permissions.
+- [Troubleshooting](troubleshooting.md): connection resets, stale changes, cameras,
+  models, missing events, and interrupted recordings.
 
-These are captures of the running interface, not production surveillance footage or
-model-accuracy evidence. No private cameras, faces, recordings or uploaded weights are
-included. Screenshots are stored as PNG files; the application uses its shared SVG icon sprite.
+## Deployment and reference
 
-## Portfolio integration
+- [Cloudflare showcase](deployment/cloudflare.md): export, static hosting, security
+  headers, and the differences from the installed application.
+- [Data, storage, and privacy](reference/data-and-privacy.md): what persists, where it
+  lives, backup boundaries, and local network behavior.
+- [Portfolio and presentation assets](portfolio.md): screenshots, emblem, and showcase metadata.
 
-The repository-root `portfolio-showcase.json` describes the problem, purpose, features,
-technology, role, implementation decisions, challenges, results and lessons. Image paths
-are relative to the repository root and include accessible alternative text and captions.
-The existing emblem is reused rather than introducing a second project identity.
+## Developer documentation
 
-`internalDemoAvailable` remains `false` until a public deployment is ready. No undeployed
-URL or unverified mapping to an existing portfolio project is included. Publishing this
-metadata and the assets to the repository's default branch is a separate step from local
-preparation; this change does not deploy the application or refresh the portfolio cache.
+- [Development guide](development/guide.md): one environment, edit/restart behavior,
+  isolated testing, and wheel verification.
+- [Architecture](development/architecture.md): module responsibilities, frame ownership,
+  model scheduling, persistence, and extension points.
+- [Contributing](../CONTRIBUTING.md): contribution and validation conventions.
 
-Engineering notes remain in the local, Git-ignored `docs/` directory. Public pages must
-not depend on that directory, and source distributions exclude it.
+The [root README](../README.md) provides the project overview and quick start.
+SpyDER is an active prototype for local, single-user operation. Hardware support,
+model compatibility, and browser capabilities vary; the guides describe those limits
+alongside the relevant features.
