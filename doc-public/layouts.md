@@ -18,6 +18,31 @@ Choose **Automatic wall** to return to the standard camera wall and tile-size co
 Rotation supports **Pause rotation**, **Resume rotation** and **Next view** in both modes.
 It stops advancing while the tab is hidden or another workspace is open.
 
+## Pins, activity and manual reordering
+
+Use the pin icon inside a Control Room tile to pin it in its current position. Pins persist in
+that arrangement, take precedence over hidden settings and remain visible during rotation.
+When pinned tiles scroll out of view, a small **Pinned views** dock shows their existing frames.
+The dock opens no capture devices or extra frame requests. Click a dock tile to return to its
+position. In fullscreen, pinned tiles remain in the camera wall.
+
+Use **Activity first** in the Control Room or fullscreen Live tools to promote active unpinned
+cameras. Layouts offers individual motion, CV and workflow-event sources plus a 3–120 second hold
+period (10 seconds by default). Fresh activity moves into the available unpinned positions;
+pinned slots stay fixed. Simultaneous signals retain their manual order. Quiet cameras return
+to their manual positions after the hold period. Stopped cameras and stale results are ignored.
+Workflow events reuse the existing notification poll and never request notification permission.
+
+Choose **Reorder cameras** to freeze automatic movement and enable tile dragging. Drop on a tile's
+left or right half to place the dragged camera before or after it. Touch users can drag the grip;
+arrow buttons provide a keyboard and touch alternative. Choose **Apply order & pins** to save the
+arrangement and pin moved cameras, or **Cancel** to discard the edits. Pins can also be edited in
+Camera lineup. Reordering does not reopen cameras or alter recording/CV assignments.
+
+If the automatic wall has no saved arrangement, a pin, activity toggle or applied reorder creates
+a named Control Room arrangement. Switching to **Automatic wall** restores the default wall;
+your saved arrangement remains available in the selector.
+
 ## Simulate camera counts
 
 In **Simulation cameras**, choose a name prefix, shape and count, then **Add dummy cameras**.
@@ -56,3 +81,11 @@ The regression uses a temporary Chrome profile and a local server with the expor
 It checks draft/apply behavior, dummy isolation, reload persistence, fullscreen bounds, rotation,
 mobile sizing, imports and resetting to Automatic wall. Set `CHROME_PATH` if Chrome is not installed
 at the Windows default path. No npm installation or frontend build is required.
+
+For large-wall verification, `node tests/camera-priority-browser.mjs <showcase-directory>` exercises
+128 and 256 synthetic camera cards, pins, activity promotion, drag/apply/cancel, the scroll dock,
+rotation, fullscreen and mobile controls. Unit stress tests also check 200 ordering rounds at each
+count. These verify presentation and scheduling, not simultaneous physical-camera capacity.
+Browser wall previews share a budget of at most 24 requests per second and six requests in flight;
+individual tiles refresh less often as the wall grows. Capture, inference and recording are
+independent of that preview budget. Hundreds of fullscreen tiles necessarily become small.

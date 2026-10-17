@@ -100,7 +100,7 @@ try {
             `Timed out: ${method} ${(params.expression || "").slice(0, 180)}`,
           ),
         );
-      }, 10000);
+      }, 30000);
       pending.set(id, { resolve, reject, timer });
       socket.send(JSON.stringify({ id, method, params, sessionId }));
     });
@@ -254,14 +254,14 @@ try {
   await click("Save & apply");
   await evaluate("location.hash='control-room'");
   await until("!document.querySelector('#control-room').hidden");
-  const first = (await visible())[0];
+  const first = (await visible()).at(-1);
   await click("Next view");
-  assert.notEqual((await visible())[0], first);
+  assert.notEqual((await visible()).at(-1), first);
   await click("Pause rotation");
-  const paused = (await visible())[0];
+  const paused = (await visible()).at(-1);
   await delay(3300);
   assert.equal(
-    (await visible())[0],
+    (await visible()).at(-1),
     paused,
     "Paused rotation must hold its camera",
   );

@@ -15,6 +15,10 @@
     hidden: [],
     featured: "",
     dummies: [],
+    pinned: [],
+    autoPriority: false,
+    activitySources: ["motion", "cv", "events"],
+    activityHold: 10,
   });
   function validate(value) {
     if (
@@ -76,6 +80,43 @@
       ids.add(d.id);
       return { id: d.id, name: d.name.trim(), ratio: d.ratio };
     });
+    if (value.pinned !== undefined) {
+      if (
+        !Array.isArray(value.pinned) ||
+        value.pinned.length > 256 ||
+        value.pinned.some(
+          (id) => typeof id !== "string" || !/^[\w-]{1,100}$/.test(id),
+        )
+      )
+        throw new Error("Invalid pinned cameras.");
+      result.pinned = [...new Set(value.pinned)];
+    }
+    if (
+      value.autoPriority !== undefined &&
+      typeof value.autoPriority !== "boolean"
+    )
+      throw new Error("Invalid activity priority.");
+    result.autoPriority = value.autoPriority ?? false;
+    if (value.activitySources !== undefined) {
+      if (
+        !Array.isArray(value.activitySources) ||
+        value.activitySources.some(
+          (source) => !["motion", "cv", "events"].includes(source),
+        )
+      )
+        throw new Error("Invalid activity sources.");
+      result.activitySources = [...new Set(value.activitySources)];
+    }
+    if (value.activityHold !== undefined) {
+      if (
+        !Number.isInteger(value.activityHold) ||
+        value.activityHold < 3 ||
+        value.activityHold > 120
+      )
+        throw new Error("Activity hold must be 3–120 seconds.");
+      result.activityHold = value.activityHold;
+    }
+    result.hidden = result.hidden.filter((id) => !result.pinned.includes(id));
     result.mode = value.mode;
     result.fit = value.fit;
     result.featured = value.featured;
@@ -100,14 +141,40 @@
         : Math.min(Math.ceil(Math.sqrt(count || 1)), count || 1);
     if (!fullscreen) columns = Math.min(columns, limit);
     if (config.mode === "sequence") {
-      columns = 1;
-      count = Math.min(1, count);
+      count = Math.min(count, (config.pinned?.length || 0) + 1);
+      columns = Math.min(columns, count || 1);
     }
     if (config.mode === "featured" && count > 1) columns = width < 540 ? 1 : 3;
+    let featuredRows = 0;
+    if (config.mode === "featured" && columns > 1 && count > 1) {
+      const occupied = new Set();
+      let cursor = 0;
+      for (let index = 0; index < count; index++) {
+        const span = index === (config.featuredIndex || 0) ? 2 : 1;
+        while (true) {
+          const row = Math.floor(cursor / columns),
+            col = cursor % columns;
+          let free = col + span <= columns;
+          for (let y = 0; y < span && free; y++)
+            for (let x = 0; x < span; x++)
+              if (occupied.has((row + y) * columns + col + x)) free = false;
+          if (free) {
+            for (let y = 0; y < span; y++)
+              for (let x = 0; x < span; x++)
+                occupied.add((row + y) * columns + col + x);
+            featuredRows = Math.max(featuredRows, row + span);
+            cursor += span;
+            break;
+          }
+          cursor++;
+        }
+      }
+    }
     return {
       columns: Math.max(1, columns),
       rows: Math.max(
         1,
+        featuredRows,
         Math.ceil(
           (count +
             (config.mode === "featured" && columns > 1 && count > 1 ? 3 : 0)) /
@@ -121,6 +188,16 @@
   if (typeof window === "undefined") return;
 
   const app = window.spyder;
+  const policy = window.spyderWallOrder;
+  const activityRanks = new policy.ActivityRanks();
+  let wallConnected = true;
+  let ranks = new Map(),
+    reorderDraft = null,
+    wallDragging = null;
+  let dragTarget = null;
+  const registeredCards = new WeakSet();
+  const pinButtons = new Map();
+  const dockTiles = new Map();
   const $ = (s, root = document) => root.querySelector(s);
   const key =
     "spyder-layouts-v1-" + (window.spyderShowcase ? "showcase" : "local");
@@ -229,31 +306,38 @@
     return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   }
   function arranged(config, cameras) {
-    const visible = ordered(config, cameras);
-    if (
-      config.mode === "featured" &&
-      visible.some((c) => c.id === config.featured)
-    ) {
-      const i = visible.findIndex((c) => c.id === config.featured);
-      visible.unshift(...visible.splice(i, 1));
-    }
-    return visible;
+    return policy.order(config, cameras, ranks);
   }
   function display(config) {
-    const cameras = arranged(config, all(config));
-    if (config.mode !== "sequence") return cameras;
-    return cameras.length ? [cameras[rotation % cameras.length]] : [];
+    return policy.order(
+      config,
+      all(config),
+      reorderDraft ? new Map() : ranks,
+      config.mode === "sequence" && !reorderDraft ? rotation : null,
+    );
   }
   function applyGeometry(container, config, count, fullscreen) {
     const box = container.getBoundingClientRect();
     let grid = geometry(
-      config,
+      {
+        ...config,
+        featuredIndex: Math.max(
+          0,
+          [...container.children]
+            .filter((tile) => !tile.hidden)
+            .findIndex((tile) => tile.classList.contains("layout-featured")),
+        ),
+      },
       count,
       box.width || 800,
       box.height || 450,
       fullscreen,
     );
-    if (config.mode === "auto" && fullscreen && window.spyderWall) {
+    if (
+      (config.mode === "auto" || config.mode === "sequence") &&
+      fullscreen &&
+      window.spyderWall
+    ) {
       const style = getComputedStyle(container);
       const aspects = [...container.children]
         .filter((tile) => !tile.hidden)
@@ -282,17 +366,19 @@
   function reflowWall() {
     const wall = $("#cameras");
     if (!wall) return false;
+    const config = reorderDraft ? { ...reorderDraft, mode: "grid" } : applied;
+    installCardControls(wall);
     for (const [id, element] of dummyElements) {
-      if (!applied?.dummies.some((d) => d.id === id)) {
+      if (!config?.dummies.some((d) => d.id === id)) {
         element.remove();
         dummyElements.delete(id);
       }
     }
-    $("#density").disabled = !!applied;
-    $("#density").title = applied
+    $("#density").disabled = !!config;
+    $("#density").title = config
       ? "Choose Automatic wall to use tile-size controls."
       : "";
-    if (!applied) {
+    if (!config) {
       wall.removeAttribute("data-layout-mode");
       wall.removeAttribute("data-layout-fit");
       wall.style.removeProperty("--layout-gap");
@@ -301,9 +387,11 @@
         card.classList.remove("layout-featured");
       }
       $("#wall-count").textContent = String(app.cameras().length);
+      syncControls();
+      syncDock([]);
       return false;
     }
-    applied.dummies.forEach((camera, index) => {
+    config.dummies.forEach((camera, index) => {
       let element = dummyElements.get(camera.id);
       if (!element) {
         element = document.createElement("article");
@@ -330,18 +418,19 @@
         ":",
         "/",
       );
-      wall.append(element);
+      if (element.parentNode !== wall) wall.append(element);
     });
-    const visible = display(applied);
+    installCardControls(wall);
+    const visible = display(config);
     const ids = new Set(visible.map((c) => c.id));
-    const featured = ids.has(applied.featured)
-      ? applied.featured
+    const featured = ids.has(config.featured)
+      ? config.featured
       : visible[0]?.id;
     for (const card of wall.querySelectorAll(".camera-card")) {
       card.hidden = !ids.has(card.dataset.id);
       card.classList.toggle(
         "layout-featured",
-        applied.mode === "featured" &&
+        config.mode === "featured" &&
           card.dataset.id === featured &&
           visible.length > 1,
       );
@@ -349,25 +438,39 @@
         ids.has(card.dataset.id) &&
         card.dataset.layoutGeneration !== String(layoutGeneration)
       ) {
-        card.dataset.fit = applied.fit;
+        card.dataset.fit = config.fit;
         card.dataset.layoutGeneration = String(layoutGeneration);
       }
     }
+    const elements = new Map(
+      [...wall.children].map((element) => [element.dataset.id, element]),
+    );
+    let previous = null;
     for (const camera of visible) {
-      const element = [...wall.children].find(
-        (e) => e.dataset.id === camera.id,
-      );
-      if (element) wall.append(element);
+      const element = elements.get(camera.id);
+      if (
+        element &&
+        (previous
+          ? previous.nextElementSibling !== element
+          : wall.firstElementChild !== element)
+      )
+        wall.insertBefore(
+          element,
+          previous ? previous.nextElementSibling : wall.firstElementChild,
+        );
+      if (element) previous = element;
     }
-    applyGeometry(wall, applied, visible.length, !!window.spyderWall?.active());
+    applyGeometry(wall, config, visible.length, !!window.spyderWall?.active());
     $("#empty").hidden = app.cameras().length > 0 || visible.length > 0;
     $("#wall-count").textContent = visible.length + " views";
     $("#wall-hint").textContent =
-      applied.name.toUpperCase() +
+      config.name.toUpperCase() +
       " · " +
       visible.length +
       " VIEWS" +
-      (applied.dummies.length ? " · INCLUDES SIMULATIONS" : "");
+      (config.dummies.length ? " · INCLUDES SIMULATIONS" : "");
+    syncControls();
+    syncDock(visible);
     return true;
   }
   function scheduleRotation(reset = true) {
@@ -389,7 +492,12 @@
       ["", "#control-room"].includes(location.hash)
     )
       timer = setInterval(() => {
-        if (document.hidden || rotationPaused || $("#control-room").hidden)
+        if (
+          document.hidden ||
+          rotationPaused ||
+          reorderDraft ||
+          $("#control-room").hidden
+        )
           return;
         rotation++;
         app.leaveFocus();
@@ -414,6 +522,9 @@
     }
   }
   function activate(id) {
+    reorderDraft = null;
+    activityRanks.clear();
+    ranks = new Map();
     layoutGeneration++;
     const item = layouts.find((l) => l.id === id);
     persist(
@@ -478,6 +589,7 @@
       tile.append(image, label);
       container.append(tile);
     }
+    applyGeometry(container, draft, shown.length, false);
     if (!shown.length)
       container.textContent =
         "Add dummy cameras or show a connected camera to compose this wall.";
@@ -509,6 +621,7 @@
           const next = order.filter((x) => x !== dragging);
           next.splice(next.indexOf(id), 0, dragging);
           draft.order = next;
+          draft.pinned = [...new Set([...draft.pinned, dragging])];
           dragging = null;
           changed();
         }
@@ -519,7 +632,11 @@
       const label = document.createElement("label");
       const check = document.createElement("input");
       check.type = "checkbox";
-      check.checked = !draft.hidden.includes(id);
+      check.checked = !draft.hidden.includes(id) || draft.pinned.includes(id);
+      check.disabled = draft.pinned.includes(id);
+      check.title = check.disabled
+        ? "Unpin this camera before hiding it."
+        : "Show in this wall";
       check.addEventListener("change", () => {
         draft.hidden = draft.hidden.filter((x) => x !== id);
         if (!check.checked) draft.hidden.push(id);
@@ -543,6 +660,7 @@
           if (j < 0 || j >= order.length) return;
           [order[i], order[j]] = [order[j], order[i]];
           draft.order = order;
+          draft.pinned = [...new Set([...draft.pinned, id])];
           changed();
           const destination = [...$("#layout-camera-list", root).children].find(
             (e) => e.dataset.id === id,
@@ -562,6 +680,7 @@
             draft.dummies = draft.dummies.filter((d) => d.id !== id);
             draft.order = order.filter((x) => x !== id);
             draft.hidden = draft.hidden.filter((x) => x !== id);
+            draft.pinned = draft.pinned.filter((value) => value !== id);
             if (draft.featured === id) draft.featured = "";
             changed();
           }),
@@ -586,11 +705,27 @@
               draft.hidden.map((value) => (value === id ? nextId : value)),
             ),
           ];
+          draft.pinned = [
+            ...new Set(
+              draft.pinned.map((value) => (value === id ? nextId : value)),
+            ),
+          ];
           if (draft.featured === id) draft.featured = nextId;
           changed();
         });
         row.append(replacement);
       }
+      const pin = button(draft.pinned.includes(id) ? "Unpin" : "Pin", () => {
+        draft.pinned = draft.pinned.includes(id)
+          ? draft.pinned.filter((value) => value !== id)
+          : [...draft.pinned, id];
+        draft.hidden = draft.hidden.filter((value) => value !== id);
+        draft.order = order;
+        changed();
+      });
+      pin.prepend(svgIcon("pin"));
+      pin.setAttribute("aria-pressed", String(draft.pinned.includes(id)));
+      actions.append(pin);
       row.append(actions);
       list.append(row);
     }
@@ -604,6 +739,11 @@
     $("#layout-name", root).value = draft.name;
     for (const name of ["mode", "columns", "fit", "gap", "interval"])
       $("#layout-" + name, root).value = draft[name];
+    $("#layout-priority-enabled", root).checked = draft.autoPriority;
+    $("#layout-priority-hold", root).value = draft.activityHold;
+    for (const source of ["motion", "cv", "events"])
+      $("#layout-source-" + source, root).checked =
+        draft.activitySources.includes(source);
     preview();
   }
   function save(apply) {
@@ -632,6 +772,8 @@
     savedMenu(id);
     quickMenu();
     if (apply) {
+      activityRanks.clear();
+      ranks = new Map();
       layoutGeneration++;
       app.leaveFocus();
       scheduleRotation();
@@ -663,9 +805,28 @@
     draft = structuredClone(
       layouts.find((l) => l.id === activeId)?.config || applied || defaults(),
     );
-    root.innerHTML = `<div class="layout-studio"><section class="workspace-panel layout-editor"><div class="layout-title"><div><p class="eyebrow">WALL DESIGNER</p><h2>Every angle, in its place.</h2></div><span id="layout-count" class="field-help"></span></div><p class="workspace-description">Arrange real feeds and generated dummy cameras. Save named walls, feature an entrance or rotate through your views. Layouts belong to this browser.</p><div class="layout-fields"><label>Saved arrangements<select id="layout-saved"></select></label><label>Name<input id="layout-name" maxlength="80" required /></label></div><div id="layout-preset-actions" class="layout-actions"></div><div class="layout-fields"><label>Arrangement<select id="layout-mode"><option value="auto">Automatic grid</option><option value="grid">Fixed columns</option><option value="featured">Featured camera</option><option value="sequence">Rotating single view</option></select></label><label>Preferred columns<select id="layout-columns"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label><label>Image fit<select id="layout-fit"><option value="fit">Fit · preserve whole image</option><option value="fill">Fill · crop edges</option></select></label><label>Tile spacing (px)<input id="layout-gap" type="number" min="0" max="32" /></label><label>Rotation interval (seconds)<input id="layout-interval" type="number" min="3" max="120" /></label><label>Featured camera<select id="layout-featured"></select></label></div><div class="layout-preview-heading"><h3>Wall preview</h3><label>Screen shape<select id="layout-viewport"><option value="16 / 9">Desktop · 16:9</option><option value="4 / 3">Monitor · 4:3</option><option value="1 / 1">Square</option><option value="9 / 16">Mobile · portrait</option></select></label></div><div id="layout-preview" class="layout-preview" aria-label="Layout simulation"></div><p class="field-help">Fixed columns adapt on narrow screens. Featured view stacks on mobile. Rotation starts after applying. Hiding a camera changes only the wall; capture, CV and recording keep their own settings.</p><div id="layout-save-actions" class="layout-actions"></div><p id="layout-status" role="status" aria-live="polite"></p></section><aside><section class="workspace-panel"><h2>Camera lineup</h2><p class="field-help">Drag rows to reorder, or use Move up / Move down. Uncheck a camera to hide it from this arrangement.</p><div id="layout-camera-list" class="layout-camera-list"></div></section><section class="workspace-panel"><h2>Simulation cameras</h2><p class="field-help">Generated locally. No permission prompts, camera access, server processing or recordings. Up to 24 per arrangement.</p><div class="layout-fields"><label>Name prefix<input id="dummy-name" value="Demo camera" maxlength="60" /></label><label>Camera shape<select id="dummy-ratio"><option>16:9</option><option>4:3</option><option>1:1</option><option>9:16</option></select></label><label>How many?<input id="dummy-count" type="number" min="1" max="24" value="4" /></label></div><div id="layout-dummy-actions" class="layout-actions"></div><p class="field-help">Save and apply to place dummy cameras in the Control Room. Remove them here or use Automatic wall to return to real cameras.</p></section></aside></div>`;
+    root.innerHTML = `<div class="layout-studio"><section class="workspace-panel layout-editor"><div class="layout-title"><div><p class="eyebrow">WALL DESIGNER</p><h2>Every angle, in its place.</h2></div><span id="layout-count" class="field-help"></span></div><p class="workspace-description">Arrange real feeds and generated dummy cameras. Save named walls, feature an entrance or rotate through your views. Layouts belong to this browser.</p><div class="layout-fields"><label>Saved arrangements<select id="layout-saved"></select></label><label>Name<input id="layout-name" maxlength="80" required /></label></div><div id="layout-preset-actions" class="layout-actions"></div><div class="layout-fields"><label>Arrangement<select id="layout-mode"><option value="auto">Automatic grid</option><option value="grid">Fixed columns</option><option value="featured">Featured camera</option><option value="sequence">Rotating single view</option></select></label><label>Preferred columns<select id="layout-columns"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label><label>Image fit<select id="layout-fit"><option value="fit">Fit · preserve whole image</option><option value="fill">Fill · crop edges</option></select></label><label>Tile spacing (px)<input id="layout-gap" type="number" min="0" max="32" /></label><label>Rotation interval (seconds)<input id="layout-interval" type="number" min="3" max="120" /></label><label>Featured camera<select id="layout-featured"></select></label></div><fieldset class="layout-priority-settings"><legend>Activity priority</legend><label><input id="layout-priority-enabled" type="checkbox" /> Move active unpinned cameras forward</label><div class="layout-priority-sources"><label><input id="layout-source-motion" type="checkbox" /> Movement / motion regions</label><label><input id="layout-source-cv" type="checkbox" /> CV detections</label><label><input id="layout-source-events" type="checkbox" /> Workflow events / notifications</label></div><label>Keep priority after activity ends (seconds)<input id="layout-priority-hold" type="number" min="3" max="120" /></label><p class="field-help">Pinned cameras keep their slots and override hidden/rotation settings. Activity must be fresh; idle cameras return to manual order after the hold period. Pins also appear in a small dock when you scroll past them.</p></fieldset><div class="layout-preview-heading"><h3>Wall preview</h3><label>Screen shape<select id="layout-viewport"><option value="16 / 9">Desktop · 16:9</option><option value="4 / 3">Monitor · 4:3</option><option value="1 / 1">Square</option><option value="9 / 16">Mobile · portrait</option></select></label></div><div id="layout-preview" class="layout-preview" aria-label="Layout simulation"></div><p class="field-help">Fixed columns adapt on narrow screens. Featured view stacks on mobile. Rotation starts after applying. Hiding a camera changes only the wall; capture, CV and recording keep their own settings.</p><div id="layout-save-actions" class="layout-actions"></div><p id="layout-status" role="status" aria-live="polite"></p></section><aside><section class="workspace-panel"><h2>Camera lineup</h2><p class="field-help">Drag rows to reorder, or use Move up / Move down. Uncheck a camera to hide it from this arrangement.</p><div id="layout-camera-list" class="layout-camera-list"></div></section><section class="workspace-panel"><h2>Simulation cameras</h2><p class="field-help">Generated locally. No permission prompts, camera access, server processing or recordings. Up to 24 per arrangement.</p><div class="layout-fields"><label>Name prefix<input id="dummy-name" value="Demo camera" maxlength="60" /></label><label>Camera shape<select id="dummy-ratio"><option>16:9</option><option>4:3</option><option>1:1</option><option>9:16</option></select></label><label>How many?<input id="dummy-count" type="number" min="1" max="24" value="4" /></label></div><div id="layout-dummy-actions" class="layout-actions"></div><p class="field-help">Save and apply to place dummy cameras in the Control Room. Remove them here or use Automatic wall to return to real cameras.</p></section></aside></div>`;
     savedMenu(activeId);
     fill();
+    $("#layout-priority-enabled", root).addEventListener("change", (event) => {
+      draft.autoPriority = event.target.checked;
+      changed();
+    });
+    $("#layout-priority-hold", root).addEventListener("change", (event) => {
+      draft.activityHold = Number(event.target.value);
+      changed();
+    });
+    for (const source of ["motion", "cv", "events"])
+      $("#layout-source-" + source, root).addEventListener(
+        "change",
+        (event) => {
+          draft.activitySources = draft.activitySources.filter(
+            (value) => value !== source,
+          );
+          if (event.target.checked) draft.activitySources.push(source);
+          changed();
+        },
+      );
     $("#layout-saved", root).addEventListener("change", (event) => {
       if (dirty && !confirm("Discard unsaved layout changes?")) {
         event.target.value = editingId;
@@ -887,7 +1048,13 @@
       quickMenu();
     }
   });
-  window.addEventListener("spyder:cameras", () => {
+  window.addEventListener("spyder:cameras", (event) => {
+    wallConnected = event.detail?.connected !== false;
+    if (!wallConnected) {
+      activityRanks.clear();
+      ranks = new Map();
+    } else if (applied?.autoPriority)
+      ranks = activityRanks.update(app.cameras(), applied, Date.now());
     app.reflow();
     if (root?.isConnected) {
       const next = JSON.stringify(
@@ -899,7 +1066,13 @@
       }
     }
   });
-  window.addEventListener("spyder:frame", (event) => {
+  document.addEventListener("spyder:frame", (event) => {
+    const dock = dockTiles.get(event.detail.id);
+    if (dock) {
+      const image = $("img", dock);
+      image.src = event.detail.url;
+      image.hidden = false;
+    }
     if (!root?.isConnected) return;
     for (const tile of $("#layout-preview", root).children)
       if (tile.dataset.camera === event.detail.id) {
@@ -943,12 +1116,508 @@
       pause,
       button("Next view", () => nextRotation.click()),
     );
-    section.append(title, label, controls);
+    const reorder = button("Reorder cameras", beginReorder);
+    reorder.id = "fullscreen-reorder";
+    const priority = document.createElement("label");
+    priority.className = "wall-priority-toggle";
+    const toggle = document.createElement("input");
+    toggle.id = "fullscreen-activity-priority";
+    toggle.type = "checkbox";
+    toggle.addEventListener("change", () => {
+      priorityToggle.checked = toggle.checked;
+      priorityToggle.dispatchEvent(new Event("change"));
+    });
+    priority.append(toggle, document.createTextNode("Activity first"));
+    section.append(title, label, controls, reorder, priority);
     tools.append(section);
     quickMenu();
     syncRotationControls();
   }
   window.addEventListener("spyder:wall-ready", installFullscreen);
+  function liveConfig() {
+    if (applied) return structuredClone(applied);
+    const config = defaults();
+    config.name = "Control Room arrangement";
+    let suffix = 2;
+    while (
+      layouts.some(
+        (item) => item.config.name.toLowerCase() === config.name.toLowerCase(),
+      )
+    )
+      config.name = "Control Room arrangement " + suffix++;
+    config.order = app.cameras().map((camera) => camera.id);
+    return config;
+  }
+  function commitLive(config) {
+    const clean = validate(config),
+      id = activeId || uid("layout");
+    if (!activeId && layouts.length >= 50)
+      throw new Error(
+        "Delete an unused layout before saving wall preferences.",
+      );
+    const existing = layouts.find((item) => item.id === id);
+    let saved = clean;
+    if (existing && applied) {
+      saved = structuredClone(existing.config);
+      for (const key of Object.keys(clean))
+        if (JSON.stringify(clean[key]) !== JSON.stringify(applied[key]))
+          saved[key] = structuredClone(clean[key]);
+      saved = validate(saved);
+    }
+    persist(
+      [...layouts.filter((item) => item.id !== id), { id, config: saved }],
+      id,
+      clean,
+    );
+    layoutGeneration++;
+    quickMenu();
+    scheduleRotation(false);
+    app.reflow();
+  }
+  function pinCamera(id) {
+    const config = reorderDraft || liveConfig();
+    if (!reorderDraft)
+      config.order = [
+        ...new Set([
+          ...policy
+            .order(config, all(config), ranks)
+            .map((camera) => camera.id),
+          ...config.order,
+        ]),
+      ];
+    const pinned = config.pinned.includes(id);
+    config.pinned = pinned
+      ? config.pinned.filter((value) => value !== id)
+      : [...config.pinned, id];
+    config.hidden = config.hidden.filter((value) => value !== id);
+    if (reorderDraft) {
+      app.reflow();
+      app.notify("Pin change is a draft. Apply order & pins to save.");
+    } else {
+      commitLive(config);
+      app.notify(
+        pinned
+          ? "Camera unpinned."
+          : "Camera pinned in this position. Pinned views stay visible during rotation and in the scroll dock.",
+      );
+    }
+  }
+  function beginReorder() {
+    app.leaveFocus();
+    reorderDraft = liveConfig();
+    reorderDraft.order = [
+      ...new Set([
+        ...policy
+          .order(reorderDraft, all(reorderDraft), ranks)
+          .map((camera) => camera.id),
+        ...reorderDraft.order,
+      ]),
+    ];
+    app.reflow();
+    syncControls();
+  }
+  function cancelReorder() {
+    reorderDraft = null;
+    wallDragging = null;
+    clearDropTarget();
+    app.reflow();
+    syncControls();
+  }
+  function applyReorder() {
+    try {
+      const config = reorderDraft;
+      if (!config) return;
+      commitLive(config);
+      reorderDraft = null;
+      wallDragging = null;
+      clearDropTarget();
+      app.reflow();
+      syncControls();
+      app.notify("Camera order and pins saved. Moved cameras are pinned.");
+    } catch (error) {
+      app.notify(error.message);
+    }
+  }
+  function moveCamera(id, targetId, after = false) {
+    if (!reorderDraft) return;
+    reorderDraft = policy.moveAndPin(reorderDraft, id, targetId, after);
+    app.reflow();
+  }
+  function svgIcon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("icon");
+    svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS(svg.namespaceURI, "use");
+    use.setAttribute("href", "/icons.svg#" + name);
+    svg.append(use);
+    return svg;
+  }
+  function clearDropTarget() {
+    if (dragTarget) {
+      dragTarget.removeAttribute("data-drop-side");
+      dragTarget = null;
+    }
+  }
+  function dropPosition(target, event) {
+    const box = target.getBoundingClientRect();
+    return event.clientX > box.left + box.width / 2;
+  }
+  function installCardControls(wall) {
+    const present = new Set();
+    for (const card of wall.querySelectorAll(".camera-card")) {
+      const id = card.dataset.id;
+      present.add(id);
+      card.querySelector(".camera-image")?.setAttribute("draggable", "false");
+      if (registeredCards.has(card)) continue;
+      registeredCards.add(card);
+      const tools = document.createElement("div");
+      tools.className = "tile-priority-tools";
+      const pin = button("", () => pinCamera(id));
+      pin.className = "tile-pin icon-button";
+      pin.append(svgIcon("pin"));
+      tools.append(pin);
+      pinButtons.set(id, { card, pin });
+      const handle = button("", () => {});
+      handle.className = "tile-drag-handle icon-button";
+      handle.dataset.dragHandle = "true";
+      handle.append(svgIcon("reorder"));
+      handle.setAttribute("aria-label", "Drag this camera to reorder");
+      tools.append(handle);
+      for (const [delta, label, glyph] of [
+        [-1, "Move camera earlier", "arrow-left"],
+        [1, "Move camera later", "arrow-right"],
+      ]) {
+        const move = button("", () => {
+          if (!reorderDraft) return;
+          const ids = policy
+            .baseOrder(reorderDraft, all(reorderDraft))
+            .map((camera) => camera.id);
+          const index = ids.indexOf(id);
+          const target = ids[index + delta];
+          if (target) moveCamera(id, target, delta > 0);
+          move.focus();
+        });
+        move.className = "tile-order-step icon-button";
+        move.setAttribute("aria-label", label);
+        move.append(svgIcon(glyph));
+        tools.append(move);
+      }
+      card.querySelector(".video-stage").append(tools);
+      card.addEventListener("dragstart", (event) => {
+        if (
+          !reorderDraft ||
+          (event.target.closest("button,input,select,a") &&
+            !event.target.closest("[data-drag-handle]"))
+        ) {
+          event.preventDefault();
+          return;
+        }
+        wallDragging = id;
+        event.dataTransfer.setData("text/plain", id);
+        event.dataTransfer.effectAllowed = "move";
+        card.classList.add("is-dragging");
+      });
+      card.addEventListener("dragover", (event) => {
+        if (!reorderDraft || !wallDragging || wallDragging === id) return;
+        event.preventDefault();
+        clearDropTarget();
+        dragTarget = card;
+        card.dataset.dropSide = dropPosition(card, event) ? "after" : "before";
+        event.dataTransfer.dropEffect = "move";
+      });
+      card.addEventListener("drop", (event) => {
+        if (!wallDragging || !reorderDraft) return;
+        event.preventDefault();
+        moveCamera(wallDragging, id, dropPosition(card, event));
+        wallDragging = null;
+        clearDropTarget();
+      });
+      card.addEventListener("dragend", () => {
+        wallDragging = null;
+        clearDropTarget();
+        card.classList.remove("is-dragging");
+      });
+      let pointer = null;
+      handle.addEventListener("pointerdown", (event) => {
+        if (!reorderDraft || event.pointerType === "mouse") return;
+        pointer = {
+          id: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+          moved: false,
+        };
+        handle.setPointerCapture(event.pointerId);
+      });
+      handle.addEventListener("pointermove", (event) => {
+        if (!pointer || pointer.id !== event.pointerId) return;
+        if (
+          Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) <
+            8 &&
+          !pointer.moved
+        )
+          return;
+        pointer.moved = true;
+        const target = document
+          .elementFromPoint(event.clientX, event.clientY)
+          ?.closest("#cameras>.camera-card");
+        clearDropTarget();
+        if (target && target !== card) {
+          dragTarget = target;
+          target.dataset.dropSide = dropPosition(target, event)
+            ? "after"
+            : "before";
+        }
+        if (!window.spyderWall?.active()) {
+          if (event.clientY < 100) window.scrollBy(0, -20);
+          else if (event.clientY > innerHeight - 70) window.scrollBy(0, 20);
+        }
+      });
+      handle.addEventListener("pointerup", (event) => {
+        if (pointer?.id !== event.pointerId) return;
+        if (pointer.moved && dragTarget)
+          moveCamera(
+            id,
+            dragTarget.dataset.id,
+            dropPosition(dragTarget, event),
+          );
+        pointer = null;
+        clearDropTarget();
+      });
+      handle.addEventListener("pointercancel", () => {
+        pointer = null;
+        clearDropTarget();
+      });
+    }
+    for (const [id, entry] of pinButtons)
+      if (!present.has(id)) {
+        pinObserver?.unobserve(entry.card);
+        pinButtons.delete(id);
+      }
+  }
+  function syncControls() {
+    const config = reorderDraft || applied;
+    document.body.classList.toggle("wall-reordering", !!reorderDraft);
+    reorderBanner.hidden = !reorderDraft;
+    reorderButton.disabled = !!reorderDraft;
+    priorityToggle.checked = !!config?.autoPriority;
+    priorityToggle.disabled = !!reorderDraft;
+    for (const [id, { card, pin }] of pinButtons) {
+      const pinned = !!config?.pinned.includes(id);
+      card.dataset.pinned = String(pinned);
+      card.draggable = !!reorderDraft;
+      pin.setAttribute("aria-pressed", String(pinned));
+      pin.setAttribute(
+        "aria-label",
+        (pinned ? "Unpin " : "Pin ") +
+          (card.querySelector(".camera-name")?.textContent ||
+            config?.dummies.find((camera) => camera.id === id)?.name ||
+            id),
+      );
+      pin.title = pinned ? "Unpin camera" : "Pin camera in this position";
+      card.dataset.prioritized = String(
+        !!config?.autoPriority && ranks.has(id) && !pinned,
+      );
+    }
+    $("#fullscreen-reorder")?.setAttribute(
+      "aria-pressed",
+      String(!!reorderDraft),
+    );
+    const check = $("#fullscreen-activity-priority");
+    if (check) {
+      check.checked = priorityToggle.checked;
+      check.disabled = priorityToggle.disabled;
+    }
+    updateDockVisibility();
+  }
+  function syncDock(visible) {
+    const config = reorderDraft || applied;
+    const pins = new Set(config?.pinned || []);
+    const cameras = visible.filter((camera) => pins.has(camera.id));
+    const current = new Set(cameras.map((camera) => camera.id));
+    for (const [id, tile] of dockTiles)
+      if (!current.has(id)) {
+        tile.remove();
+        dockTiles.delete(id);
+        pinVisible.delete(id);
+        const card = pinButtons.get(id)?.card;
+        if (card) pinObserver?.unobserve(card);
+      }
+    for (const camera of cameras) {
+      let tile = dockTiles.get(camera.id);
+      if (!tile) {
+        tile = button("", () => {
+          pinButtons.get(camera.id)?.card.scrollIntoView({
+            block: "center",
+            behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+              .matches
+              ? "instant"
+              : "smooth",
+          });
+        });
+        tile.className = "pinned-dock-tile";
+        const image = document.createElement("img");
+        image.alt = "";
+        image.draggable = false;
+        const label = document.createElement("span");
+        tile.append(image, label);
+        dockTiles.set(camera.id, tile);
+        dockGrid.append(tile);
+        const card = pinButtons.get(camera.id)?.card;
+        if (card) pinObserver?.observe(card);
+      }
+      tile.setAttribute("aria-label", "Show pinned camera " + camera.name);
+      $("span", tile).textContent =
+        camera.name +
+        (camera.dummy
+          ? " · DUMMY"
+          : camera.state === "running"
+            ? ""
+            : " · " + camera.state.toUpperCase());
+      let url = camera.dummy
+        ? pinButtons
+            .get(camera.id)
+            ?.card.querySelector(".camera-image")
+            ?.getAttribute("src")
+        : app.frame(camera.id);
+      if (
+        pinButtons.get(camera.id)?.card.querySelector(".camera-image")?.hidden
+      )
+        url = null;
+      const image = $("img", tile);
+      if (url && image.getAttribute("src") !== url) {
+        image.src = url;
+        image.hidden = false;
+      } else if (!url) {
+        image.removeAttribute("src");
+        image.hidden = true;
+      }
+    }
+    dockGrid.style.setProperty(
+      "--dock-columns",
+      Math.max(
+        1,
+        Math.min(cameras.length, Math.ceil(Math.sqrt(cameras.length * 3.5))),
+      ),
+    );
+    updateDockVisibility();
+  }
+  function updateDockVisibility() {
+    pinDock.hidden =
+      !dockTiles.size ||
+      !!reorderDraft ||
+      !!window.spyderWall?.active() ||
+      document.hidden ||
+      $("#control-room").hidden ||
+      document.body.classList.contains("has-focus") ||
+      ![...dockTiles.keys()].some((id) => pinVisible.get(id) === false);
+  }
+  const pinVisible = new Map();
+  const pinObserver =
+    typeof IntersectionObserver !== "undefined"
+      ? new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries)
+              pinVisible.set(
+                entry.target.dataset.id,
+                entry.isIntersecting && entry.intersectionRatio >= 0.65,
+              );
+            updateDockVisibility();
+          },
+          { threshold: [0, 0.65], rootMargin: "-70px 0px -10px 0px" },
+        )
+      : null;
+  const pinDock = document.createElement("section");
+  pinDock.className = "pinned-dock";
+  pinDock.hidden = true;
+  pinDock.setAttribute("aria-label", "Pinned camera views");
+  const dockTitle = document.createElement("strong");
+  dockTitle.textContent = "Pinned views";
+  const dockGrid = document.createElement("div");
+  dockGrid.className = "pinned-dock-grid";
+  pinDock.append(dockTitle, dockGrid);
+  document.body.append(pinDock);
+  const reorderBanner = document.createElement("section");
+  reorderBanner.className = "wall-reorder-banner";
+  reorderBanner.hidden = true;
+  reorderBanner.setAttribute("aria-label", "Reorder camera wall");
+  const reorderHint = document.createElement("span");
+  reorderHint.textContent =
+    "Drag tiles or use their arrow buttons. Moved cameras will be pinned. Activity movement is paused.";
+  reorderBanner.append(
+    reorderHint,
+    button("Apply order & pins", applyReorder, true),
+    button("Cancel", cancelReorder),
+  );
+  document.body.append(reorderBanner);
+  const reorderButton = button("Reorder cameras", beginReorder);
+  reorderButton.id = "wall-reorder";
+  reorderButton.prepend(svgIcon("reorder"));
+  $(".wall-controls").append(reorderButton);
+  const priorityLabel = document.createElement("label");
+  priorityLabel.className = "wall-priority-toggle";
+  const priorityToggle = document.createElement("input");
+  priorityToggle.type = "checkbox";
+  priorityToggle.id = "wall-activity-priority";
+  priorityLabel.append(
+    priorityToggle,
+    document.createTextNode("Activity first"),
+  );
+  $(".wall-controls").append(priorityLabel);
+  priorityToggle.addEventListener("change", () => {
+    try {
+      const config = liveConfig();
+      config.autoPriority = priorityToggle.checked;
+      commitLive(config);
+      app.notify(
+        config.autoPriority
+          ? "Activity priority enabled. Pinned slots stay fixed."
+          : "Activity priority disabled. Manual camera order restored.",
+      );
+    } catch (error) {
+      app.notify(error.message);
+      syncControls();
+    }
+  });
+  const activityFeed = new policy.ActivityFeed();
+  window.addEventListener("spyder:activity-snapshot", (event) => {
+    const fresh = activityFeed.accept(
+      event.detail,
+      Date.now(),
+      (applied?.activityHold || 10) * 1000,
+    );
+    if (
+      !wallConnected ||
+      !applied?.autoPriority ||
+      !applied.activitySources.includes("events")
+    )
+      return;
+    for (const item of fresh)
+      activityRanks.event(item.camera_id, item.created_at * 1000);
+    if (fresh.length) {
+      ranks = activityRanks.update(app.cameras(), applied, Date.now());
+      app.reflow();
+    }
+  });
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (!pinObserver) {
+        for (const [id, { card }] of pinButtons) {
+          const box = card.getBoundingClientRect();
+          pinVisible.set(id, box.top >= 70 && box.bottom <= innerHeight);
+        }
+        updateDockVisibility();
+      }
+    },
+    { passive: true },
+  );
+  window.addEventListener("hashchange", () => {
+    if (reorderDraft && !["", "#control-room"].includes(location.hash))
+      cancelReorder();
+    updateDockVisibility();
+  });
+  document.addEventListener("visibilitychange", updateDockVisibility);
+
   window.spyderLayouts = { mount, unmount, reflow: reflowWall };
   quickMenu();
   scheduleRotation();

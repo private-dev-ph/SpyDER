@@ -518,6 +518,18 @@ class WorkflowService:
                 "notifications": copy.deepcopy(
                     [event for event in self._events if event.get("kind") == "notification"][-100:]
                 ),
+                "activities": [
+                    {
+                        "id": event.get("id")
+                        or (
+                            f"{event.get('workflow_id')}|{event.get('camera_id')}|"
+                            f"{event.get('created_at')}"
+                        ),
+                        "camera_id": event.get("camera_id"),
+                        "created_at": event.get("created_at"),
+                    }
+                    for event in self._events[-100:]
+                ],
             }
 
     @staticmethod

@@ -220,6 +220,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/icons.svg",
                 "/spyder-emblem.png",
                 "/activity.js",
+                "/wall-order.js",
                 "/layouts.js",
                 "/layouts.css",
                 "/workspaces.js",

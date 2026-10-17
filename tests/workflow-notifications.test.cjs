@@ -127,6 +127,10 @@ function harness({
       notify: (message) => notices.push(message),
     },
     addEventListener: (k, fn) => listeners.set(k, fn),
+    dispatchEvent: (event) => {
+      listeners.get(event.type)?.(event);
+      return true;
+    },
     focus() {},
     ...(demo ? { spyderShowcase: {} } : {}),
   };
@@ -134,6 +138,12 @@ function harness({
     window,
     document,
     AbortController,
+    CustomEvent: class {
+      constructor(type, options) {
+        this.type = type;
+        this.detail = options.detail;
+      }
+    },
     location: {},
     localStorage: {
       getItem: (k) => storage.get(k),
@@ -170,8 +180,8 @@ function harness({
     pending,
     flush,
     listeners,
-    async poll(items) {
-      response = { session_id: "test", notifications: items };
+    async poll(items, activities = []) {
+      response = { session_id: "test", notifications: items, activities };
       const entry = [...pending].find(([, p]) => p.ms === 2000);
       assert.ok(entry, "poll scheduled");
       pending.delete(entry[0]);
@@ -284,4 +294,21 @@ test("denied, dismissed, opted-out and showcase states do not repeatedly prompt"
     dismissed.window.spyderNotifications.desktopStatus(),
     /only when adding or using/,
   );
+});
+
+test("notification polling forwards workflow activities without extra requests or permission prompts", async () => {
+  const h = harness();
+  await h.flush();
+  const delivered = [];
+  h.window.addEventListener("spyder:activity-snapshot", (event) =>
+    delivered.push(event.detail),
+  );
+  const activities = [
+    { id: "workflow-event", camera_id: "cam-1", created_at: 100 },
+  ];
+  await h.poll([], activities);
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(delivered[0].activities, activities);
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.permissionCalls(), 0);
 });
