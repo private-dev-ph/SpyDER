@@ -1,6 +1,8 @@
 # Contributing
 
-Use the [README quick start](README.md#development-environment) for setup.
+Use the [getting-started guide](doc-public/getting-started.md) for setup and the
+[development guide](doc-public/development/guide.md) for edit/restart behavior, isolated
+testing, and installed-wheel verification.
 Public documentation belongs in [doc-public/](doc-public/README.md). Keep engineering
 notes and drafts in the local `docs/` directory; it is ignored by Git and excluded
 from source distributions. Public pages must not link to local-only documentation.
@@ -13,7 +15,8 @@ Before committing, run Ruff lint/format checks, the Python suite and `node --tes
 using the existing development environment. Build and check the installed wheel outside the checkout
 for packaging changes. Use the same `.venv` when switching installation modes, stop
 SpyDER first, and restore editable mode afterward. CI also checks the installed wheel
-on Windows and Linux. Report exact checks and outcomes; preserve unrelated changes.
+on Windows and Linux. Include validation results and relevant platform limitations
+with a contribution.
 
 For fullscreen ribbon hit testing, export a fresh showcase with
 `python -m spyder_cctv export-showcase --output dist/ribbon-check`, then run

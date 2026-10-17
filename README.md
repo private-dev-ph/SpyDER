@@ -181,8 +181,11 @@ surveillance service or a guarantee of security or identification accuracy.
 
 ## Public documentation and portfolio
 
-[Public documentation](doc-public/README.md) contains publishable material and presentation
-assets. The root [portfolio-showcase.json](portfolio-showcase.json) follows the companion
+[Documentation](doc-public/README.md) includes [getting started](doc-public/getting-started.md),
+[Vision Lab and workflows](doc-public/user-guide/vision-workflows.md), the
+[development guide](doc-public/development/guide.md), and [Cloudflare hosting](doc-public/deployment/cloudflare.md).
+[Presentation assets](doc-public/portfolio.md) document the portfolio screenshots and emblem.
+The root [portfolio-showcase.json](portfolio-showcase.json) follows the companion
 portfolio's showcase contract. Local `docs/` notes are ignored and excluded from source
 distributions. No distribution license has been selected yet.
 
