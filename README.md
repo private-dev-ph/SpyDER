@@ -126,7 +126,7 @@ preview server does not apply Cloudflare's `_headers` file; verify deployment he
 | Capture | OpenCV-supported devices, streams and files | Generated feeds, permitted webcams and selected local video |
 | CV | Native OpenCV and optional model runtimes | Browser motion demonstration; no native YOLO/InsightFace execution |
 | Workflows/events | Native execution, persistent history and attachments | Native execution controls are unavailable |
-| Recording | Persistent local tiled recordings and captures | Browser recording; download media before closing the tab |
+| Recording | Local H.264 MP4 clips, storage profiles and captures | Browser recording; download media before closing the tab |
 | Hosting | User's computer, bound to loopback | Static assets; camera/video processing stays in the visitor's browser |
 
 ## Engineering decisions
@@ -170,8 +170,9 @@ surveillance service or a guarantee of security or identification accuracy.
   does not prove inference compatibility or model quality.
 - CV concurrency depends on hardware and workload. Capacity estimates are guidance, not
   guaranteed camera counts or frame rates.
-- Composite video currently uses a 1920 × 1080 canvas at 15 fps without audio. Unsupported
-  browser codecs can use a local preview at up to 5 fps; downloads retain the original video.
+- Composite video offers Archive (360p/3 fps), Efficient (720p/8 fps, default) and Detail
+  (1080p/15 fps) storage profiles without audio. Native recordings use H.264 MP4 clips.
+  Unsupported browser codecs can use a local preview at up to 5 fps; downloads retain the original video.
 - The event catalog retains the latest 10,000 records. Event deletion retains its media.
 - Layouts persist per browser and origin. Export arrangements for backup or transfer. Missing
   camera IDs remain unavailable until the original cameras return. Dummy cameras are simulations
@@ -184,3 +185,7 @@ surveillance service or a guarantee of security or identification accuracy.
 assets. The root [portfolio-showcase.json](portfolio-showcase.json) follows the companion
 portfolio's showcase contract. Local `docs/` notes are ignored and excluded from source
 distributions. No distribution license has been selected yet.
+
+Recording storage profiles, daily size estimates and continuous clip behavior are documented in
+[Recording storage](doc-public/recording-storage.md). The Archive preset targets about 0.69 GB/day
+for the entire mosaic at reduced detail; actual size varies.

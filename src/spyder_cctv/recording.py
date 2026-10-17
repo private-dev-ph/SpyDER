@@ -17,6 +17,9 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .recording_profiles import DEFAULT_SETTINGS, PROFILES, describe_settings, validate_settings
+from .video_encoder import H264Writer
+
 logger = logging.getLogger(__name__)
 
 WIDTH = 1920
@@ -44,9 +47,22 @@ class RecordingService:
         self._stop_notice: str | None = None
         self._camera_ids: list[str] = []
         self._started = 0.0
+        self._stopped_at = 0.0
         self._last_elapsed = 0.0
         self._frames = 0
-        self._writer: cv2.VideoWriter | None = None
+        self._settings_path = self.output_dir / "recording-settings.json"
+        self._settings = dict(DEFAULT_SETTINGS)
+        try:
+            self._settings = validate_settings(
+                json.loads(self._settings_path.read_text(encoding="utf-8"))
+            )
+        except (OSError, ValueError, TypeError):
+            pass
+        self._profile = describe_settings(self._settings)
+        self._segment_frames = 0
+        self._segment_index = 0
+        self._segment_id: str | None = None
+        self._writer: H264Writer | None = None
         self._temp_path: Path | None = None
         self._session_id: str | None = None
         self._session_filename: str | None = None
@@ -85,10 +101,15 @@ class RecordingService:
             self._error = None
             self._stop_notice = None
             self._frames = 0
+            self._segment_frames = 0
+            self._segment_index = 0
+            self._profile = describe_settings(self._settings)
             self._started = time.monotonic()
+            self._stopped_at = 0.0
             self._last_elapsed = 0.0
             self._session_id = uuid.uuid4().hex
-            self._session_filename = f"{self._session_id}.mp4"
+            self._segment_id = self._session_id
+            self._session_filename = f"{self._segment_id}.mp4"
             self._temp_path = self.output_dir / f".{self._session_id}.partial.mp4"
             self._state = "recording"
             self._wake.clear()
@@ -128,6 +149,7 @@ class RecordingService:
     def stop(self, timeout: float = 5.0) -> dict[str, Any]:
         with self._lock:
             if self._state == "recording":
+                self._stopped_at = time.monotonic()
                 self._state = "stopping"
                 self._wake.set()
             thread = self._thread
@@ -169,19 +191,38 @@ class RecordingService:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            elapsed = time.monotonic() - self._started if self._started else self._last_elapsed
+            elapsed = (
+                ((self._stopped_at or time.monotonic()) - self._started)
+                if self._started
+                else self._last_elapsed
+            )
             return {
                 "state": self._state,
                 "session_id": self._session_id,
                 "camera_ids": list(self._camera_ids),
                 "elapsed_seconds": round(elapsed, 3),
                 "frames": self._frames,
-                "width": WIDTH,
-                "height": HEIGHT,
-                "fps": FPS,
+                "width": self._profile["width"],
+                "height": self._profile["height"],
+                "fps": self._profile["fps"],
+                "storage": describe_settings(self._settings),
+                "profiles": PROFILES,
+                "segments_saved": self._segment_index,
+                "encoder": "Local FFmpeg · H.264 / MP4",
                 "error": self._error,
                 "items": [dict(item) for item in {**self._archive_items, **self._items}.values()],
             }
+
+    def configure(self, settings: dict[str, Any]) -> dict[str, Any]:
+        validated = validate_settings(settings)
+        with self._lock:
+            self._ensure_open()
+            if self._thread is not None or self._state in ("recording", "stopping"):
+                raise RuntimeError("Stop recording before changing storage settings")
+            self._write_atomic(self._settings_path, json.dumps(validated).encode("utf-8"))
+            self._settings = validated
+            self._profile = describe_settings(validated)
+            return self.status()
 
     def media_path(self, item_id: str) -> Path:
         with self._lock:
@@ -236,87 +277,107 @@ class RecordingService:
                         self._state = "stopping"
                     break
                 samples = self._samples(selected)
-                composite = self._compose(samples, selected)
+                composite = self._compose(
+                    samples, selected, width=self._profile["width"], height=self._profile["height"]
+                )
                 if self._writer is None:
                     self._open_writer()
-                self._writer.write(composite)
-                with self._lock:
-                    self._frames += 1
-                remaining = max(0.0, 1.0 / FPS - (time.monotonic() - frame_started))
+                # Duplicate the latest frame when sampling falls behind, preserving elapsed time.
+                due = max(
+                    1,
+                    int((time.monotonic() - self._started) * self._profile["fps"])
+                    - self._frames
+                    + 1,
+                )
+                for _ in range(due):
+                    with self._lock:
+                        if self._state == "stopping":
+                            break
+                    if self._writer is None:
+                        self._open_writer()
+                    self._writer.write(composite)
+                    with self._lock:
+                        self._frames += 1
+                        self._segment_frames += 1
+                    if self._segment_frames >= self._segment_frame_limit():
+                        self._finish_segment()
+                remaining = max(
+                    0.0, 1.0 / self._profile["fps"] - (time.monotonic() - frame_started)
+                )
                 self._wake.wait(remaining)
                 self._wake.clear()
         except Exception:
             logger.exception("Recording writer failed")
             with self._lock:
-                self._error = "Recording writer failed"
+                self._error = "Recording writer failed. Check local encoder and available storage."
                 self._state = "error"
         finally:
             self._finalize()
 
+    def _segment_frame_limit(self) -> int:
+        return self._profile["fps"] * self._settings["segment_minutes"] * 60
+
     def _open_writer(self) -> None:
-        assert self._temp_path is not None
-        writer = cv2.VideoWriter(
-            str(self._temp_path), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (WIDTH, HEIGHT)
-        )
-        final_name = self._session_filename
-        if not writer.isOpened():
+        self._segment_id = self._session_id if self._segment_index == 0 else uuid.uuid4().hex
+        self._session_filename = f"{self._segment_id}.mp4"
+        self._temp_path = self.output_dir / f".{self._segment_id}.partial.mp4"
+        self._writer = H264Writer(self._temp_path, self._profile)
+
+    def _finish_segment(self) -> None:
+        writer, self._writer = self._writer, None
+        if writer is not None:
             writer.release()
-            self._temp_path.unlink(missing_ok=True)
-            self._temp_path = self.output_dir / f".{self._session_id}.partial.avi"
-            final_name = f"{self._session_id}.avi"
-            writer = cv2.VideoWriter(
-                str(self._temp_path), cv2.VideoWriter_fourcc(*"MJPG"), FPS, (WIDTH, HEIGHT)
+        temp_path = self._temp_path
+        if self._segment_frames and temp_path is not None and temp_path.is_file():
+            final_path = self.output_dir / self._session_filename
+            item = self._new_item(
+                self._segment_id,
+                "recording",
+                self._session_filename,
+                duration_seconds=round(self._segment_frames / self._profile["fps"], 3),
+                size_bytes=temp_path.stat().st_size,
+                session_id=self._session_id,
+                segment_index=self._segment_index + 1,
+                codec="H.264",
+                profile=self._settings["profile"],
+                width=self._profile["width"],
+                height=self._profile["height"],
+                fps=self._profile["fps"],
+                bitrate_kbps=self._profile["bitrate_kbps"],
             )
-        if not writer.isOpened():
-            writer.release()
-            raise RuntimeError("Cannot open video writer")
-        self._writer = writer
-        self._session_filename = final_name
+            # A small recovery journal bridges the video rename and catalog update.
+            journal = self.output_dir / f".{self._segment_id}.recording.json"
+            self._write_atomic(journal, json.dumps(item).encode("utf-8"))
+            os.replace(temp_path, final_path)
+            with self._lock:
+                self._items[self._segment_id] = item
+                self._save_catalog()
+                self._segment_index += 1
+            self._segment_frames = 0
+            self._temp_path = None
 
     def _finalize(self) -> None:
         with self._lock:
-            writer, self._writer = self._writer, None
-            temp_path = self._temp_path
-            session_id = self._session_id
-            filename = self._session_filename
-            camera_ids = self._camera_ids
-        if writer is not None:
-            try:
-                writer.release()
-            except Exception:
-                logger.exception("Video writer release failed")
-                with self._lock:
-                    self._error = "Video writer release failed"
-                    self._state = "error"
+            camera_ids = list(self._camera_ids)
+            self._stopped_at = self._stopped_at or time.monotonic()
         try:
-            with self._lock:
-                publish = self._error is None and self._frames > 0
-            if (
-                publish
-                and temp_path is not None
-                and temp_path.is_file()
-                and session_id
-                and filename
-            ):
-                final_path = self.output_dir / filename
-                os.replace(temp_path, final_path)
-                item = self._new_item(
-                    session_id,
-                    "recording",
-                    filename,
-                    duration_seconds=round(self._frames / FPS, 3),
-                    size_bytes=final_path.stat().st_size,
-                )
-                with self._lock:
-                    self._items[session_id] = item
-                    self._save_catalog()
-            elif temp_path is not None:
-                temp_path.unlink(missing_ok=True)
+            if self._error is None:
+                self._finish_segment()
+            else:
+                writer, self._writer = self._writer, None
+                if writer is not None:
+                    writer.release()
         except Exception:
             logger.exception("Recording finalization failed")
             with self._lock:
-                self._error = "Recording finalization failed"
+                self._error = "Recording finalization failed; earlier completed clips remain saved"
                 self._state = "error"
+        finally:
+            if self._temp_path is not None:
+                try:
+                    self._temp_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.exception("Could not remove incomplete recording")
         for camera_id in camera_ids:
             self._release(camera_id)
         with self._lock:
@@ -325,7 +386,7 @@ class RecordingService:
                 self._error = self._stop_notice
             self._camera_ids = []
             if self._started:
-                self._last_elapsed = time.monotonic() - self._started
+                self._last_elapsed = self._stopped_at - self._started
             self._started = 0.0
             self._thread = None
 
@@ -356,16 +417,22 @@ class RecordingService:
         return encoded.tobytes()
 
     @staticmethod
-    def _compose(images: list[np.ndarray | None], labels: list[str] | None = None) -> np.ndarray:
+    def _compose(
+        images: list[np.ndarray | None],
+        labels: list[str] | None = None,
+        *,
+        width: int = WIDTH,
+        height: int = HEIGHT,
+    ) -> np.ndarray:
         count = max(1, len(images))
         columns = math.ceil(math.sqrt(count))
         rows = math.ceil(count / columns)
-        cell_w, cell_h = WIDTH // columns, HEIGHT // rows
-        canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+        cell_w, cell_h = width // columns, height // rows
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
         for index, image in enumerate(images):
             x, y = (index % columns) * cell_w, (index // columns) * cell_h
-            w = WIDTH - x if index % columns == columns - 1 else cell_w
-            h = HEIGHT - y if index // columns == rows - 1 else cell_h
+            w = width - x if index % columns == columns - 1 else cell_w
+            h = height - y if index // columns == rows - 1 else cell_h
             if image is None:
                 tile = RecordingService._placeholder("Camera unavailable", w, h)
             else:
@@ -394,7 +461,7 @@ class RecordingService:
             cv2.putText(
                 canvas,
                 stamp,
-                (WIDTH - 330, HEIGHT - 12),
+                (max(0, width - 330), height - 12),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
                 (230, 230, 230),
@@ -455,22 +522,29 @@ class RecordingService:
         }
 
     def _load_catalog(self, directory: Path | None = None) -> dict[str, dict[str, Any]]:
+        directory = directory or self.output_dir
         try:
-            data = json.loads(
-                ((directory / _MANIFEST) if directory else self._manifest).read_text(
-                    encoding="utf-8"
-                )
-            )
-            if not isinstance(data, dict) or not isinstance(data.get("items"), list):
-                return {}
-            items: dict[str, dict[str, Any]] = {}
-            for raw in data["items"]:
-                item = self._validated_catalog_item(raw, directory)
-                if item is not None:
-                    items[item["id"]] = item
-            return items
-        except (OSError, ValueError, TypeError, AttributeError):
-            return {}
+            data = json.loads((directory / _MANIFEST).read_text(encoding="utf-8"))
+            raw_items = data.get("items", []) if isinstance(data, dict) else []
+            if not isinstance(raw_items, list):
+                raw_items = []
+        except (OSError, ValueError, TypeError):
+            raw_items = []
+        # Recover finalized clips when the process stopped between file and catalog commits.
+        for journal in directory.glob(".*.recording.json"):
+            try:
+                if journal.stat().st_size <= 16384:
+                    raw = json.loads(journal.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict) and journal.name == f".{raw.get('id')}.recording.json":
+                        raw_items.append(raw)
+            except (OSError, ValueError, TypeError):
+                continue
+        items = {}
+        for raw in raw_items:
+            item = self._validated_catalog_item(raw, directory)
+            if item is not None:
+                items[item["id"]] = item
+        return items
 
     def _validated_catalog_item(
         self, raw: Any, directory: Path | None = None
@@ -543,11 +617,32 @@ class RecordingService:
         }
         if duration is not None:
             item["duration_seconds"] = duration
+            session_id = raw.get("session_id")
+            try:
+                valid_session = (
+                    isinstance(session_id, str) and uuid.UUID(hex=session_id).hex == session_id
+                )
+            except ValueError:
+                valid_session = False
+            if valid_session and type(raw.get("segment_index")) is int and raw["segment_index"] > 0:
+                item.update(session_id=session_id, segment_index=raw["segment_index"])
+            if isinstance(raw.get("profile"), str) and raw["profile"] in PROFILES:
+                profile = PROFILES[raw["profile"]]
+                item.update(
+                    profile=raw["profile"],
+                    codec="H.264",
+                    **{key: profile[key] for key in ("width", "height", "fps", "bitrate_kbps")},
+                )
         return item
 
     def _save_catalog(self) -> None:
         data = json.dumps({"items": list(self._items.values())}, indent=2).encode("utf-8")
         self._write_atomic(self._manifest, data)
+        for item_id in self._items:
+            try:
+                (self.output_dir / f".{item_id}.recording.json").unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove recording recovery journal")
 
     @staticmethod
     def _write_atomic(path: Path, data: bytes) -> None:

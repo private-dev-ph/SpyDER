@@ -12,6 +12,7 @@ class FakeRecorder {
   constructor(stream, options = {}) {
     FakeRecorder.last = this;
     this.stream = stream;
+    this.options = options;
     this.mimeType = options.mimeType || "video/webm";
     this.state = "inactive";
     this.listeners = new Map();
@@ -173,10 +174,10 @@ test("records local tiled canvas with selected cameras and chosen browser MIME",
   });
   assert.equal(status.state, "recording");
   assert.deepEqual(Array.from(status.camera_ids), ["cam-a", "cam-b"]);
-  assert.equal(status.width, 1920);
-  assert.equal(status.height, 1080);
-  assert.equal(status.fps, 15);
-  assert.equal(app.canvas.captureFps, 15);
+  assert.equal(status.width, 1280);
+  assert.equal(status.height, 720);
+  assert.equal(status.fps, 8);
+  assert.equal(app.canvas.captureFps, 8);
   assert.deepEqual(app.showcase.retention, [
     ["cam-a", true],
     ["cam-b", true],
@@ -266,7 +267,7 @@ test("captures raw JPEG on separate canvas without downloading or touching activ
   assert.equal(result.kind, "capture");
   assert.match(result.filename, /\.jpg$/);
   assert.equal(result.size_bytes, 4);
-  assert.equal(app.canvas.width, 1920);
+  assert.equal(app.canvas.width, 1280);
   assert.equal(app.canvases[1].width, 640);
   assert.equal(app.canvases[1].height, 360);
   assert.equal(app.canvas.draws.length, drawsBefore);
@@ -429,11 +430,9 @@ test("an overflowing final chunk is reported even during a requested stop", asyn
   }
   const app = runtime({ recorder: OverflowStop });
   await app.api.request("/api/recordings/start", { camera_ids: ["cam-a"] });
-  app
-    .recorder()
-    .emit("dataavailable", {
-      data: new Blob(["partial"], { type: "video/webm" }),
-    });
+  app.recorder().emit("dataavailable", {
+    data: new Blob(["partial"], { type: "video/webm" }),
+  });
   const result = await app.api.request("/api/recordings/stop");
   assert.equal(result.state, "error");
   assert.match(result.error, /incomplete/);
@@ -469,4 +468,41 @@ test("a late frame from a stopped session cannot overwrite the next recording", 
   assert.equal(app.canvas.draws.length, draws);
   assert.deepEqual(Array.from((await app.api.status()).camera_ids), ["cam-b"]);
   await app.api.request("/api/recordings/stop");
+});
+
+test("storage profiles limit browser encoder bitrate without network access", async () => {
+  const app = runtime();
+  const configured = await app.api.request("/api/recordings/settings", {
+    profile: "archive",
+    segment_minutes: 15,
+  });
+  assert.equal(configured.storage.estimated_day_bytes, 691200000);
+  const started = await app.api.request("/api/recordings/start", {
+    camera_ids: ["cam-a"],
+  });
+  assert.equal(started.width, 640);
+  assert.equal(app.canvas.captureFps, 3);
+  assert.equal(app.recorder().options.videoBitsPerSecond, 64000);
+  await assert.rejects(
+    app.api.request("/api/recordings/settings", {
+      profile: "detail",
+      segment_minutes: 15,
+    }),
+    /Stop recording/,
+  );
+  await app.api.request("/api/recordings/stop");
+  await assert.rejects(
+    app.api.request("/api/recordings/settings", {
+      profile: "__proto__",
+      segment_minutes: 15,
+    }),
+    /Choose a recording/,
+  );
+  await assert.rejects(
+    app.api.request("/api/recordings/settings", {
+      profile: "archive",
+      segment_minutes: 1,
+    }),
+    /Choose a recording/,
+  );
 });

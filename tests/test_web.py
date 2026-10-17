@@ -267,6 +267,11 @@ def test_record_capture_and_download_routes(server, tmp_path):
         ) as response:
             return json.load(response)
 
+    settings = post("/api/recordings/settings", {"profile": "archive", "segment_minutes": 5})
+    assert settings["storage"]["estimated_day_bytes"] == 691200000
+    with pytest.raises(HTTPError) as invalid:
+        post("/api/recordings/settings", {"profile": "invalid", "segment_minutes": 15})
+    assert invalid.value.code == 400
     result = post("/api/recordings/start", {"camera_ids": ["front"]})
     assert result["state"] == "recording"
     assert manager.statuses()[0]["recording"] is True
@@ -330,7 +335,7 @@ def test_record_capture_and_download_routes(server, tmp_path):
     reader = cv2.VideoCapture(str(video_path))
     try:
         ok, frame = reader.read()
-        assert ok and frame.shape[:2] == (1080, 1920)
+        assert ok and frame.shape[:2] == (settings["height"], settings["width"])
     finally:
         reader.release()
 

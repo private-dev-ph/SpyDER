@@ -102,16 +102,17 @@ def test_tiled_recording_reshapes_and_decodes(rig):
         frames.append(frame)
     capture.release()
     assert len(frames) >= 25
-    assert frames[0].shape[:2] == (HEIGHT, WIDTH)
-    center = frames[0][HEIGHT // 3 : HEIGHT * 2 // 3]
+    height, width = service.status()["height"], service.status()["width"]
+    assert frames[0].shape[:2] == (height, width)
+    center = frames[0][height // 3 : height * 2 // 3]
     if center[:, :, 2].mean() < center[:, :, 1].mean() * 2:
-        center = frames[1][HEIGHT // 3 : HEIGHT * 2 // 3]
+        center = frames[1][height // 3 : height * 2 // 3]
     assert center[:, :, 2].mean() > center[:, :, 1].mean() * 2
     two = frames[10]
-    middle = two[HEIGHT // 3 : HEIGHT * 2 // 3]
-    assert middle[:, : WIDTH // 2, 2].mean() > middle[:, : WIDTH // 2, 1].mean() * 2
-    assert middle[:, WIDTH // 2 :, 1].mean() > middle[:, WIDTH // 2 :, 2].mean() * 2
-    middle = frames[-1][HEIGHT // 3 : HEIGHT * 2 // 3]
+    middle = two[height // 3 : height * 2 // 3]
+    assert middle[:, : width // 2, 2].mean() > middle[:, : width // 2, 1].mean() * 2
+    assert middle[:, width // 2 :, 1].mean() > middle[:, width // 2 :, 2].mean() * 2
+    middle = frames[-1][height // 3 : height * 2 // 3]
     assert middle[:, :, 1].mean() > middle[:, :, 2].mean() * 2
     assert item["size_bytes"] == path.stat().st_size
 
@@ -187,26 +188,15 @@ def test_removed_selected_camera_is_dropped_and_empty_selection_finalizes(rig):
     assert service.status()["camera_ids"] == []
 
 
-def test_writer_open_failure_tries_fallback_and_releases_retention(rig, monkeypatch):
+def test_encoder_open_failure_releases_retention_without_large_fallback(rig, monkeypatch):
     manager, service, _ = rig
-    writers = []
 
-    class ClosedWriter:
-        def __init__(self, *args):
-            self.released = False
-            writers.append(self)
+    def fail(*args):
+        raise RuntimeError("missing encoder")
 
-        def isOpened(self):
-            return False
-
-        def release(self):
-            self.released = True
-
-    monkeypatch.setattr(recording_module.cv2, "VideoWriter", ClosedWriter)
+    monkeypatch.setattr(recording_module, "H264Writer", fail)
     service.start(["red"])
-    wait_for(lambda: service.status()["state"] == "error")
-    assert len(writers) == 2
-    assert all(writer.released for writer in writers)
+    wait_for(lambda: service.status()["state"] == "error" and not service._thread)
     assert "red" not in manager._recording
     assert service.status()["items"] == []
 
@@ -230,7 +220,7 @@ def test_hung_write_does_not_hold_service_lock_or_allow_restart(rig, monkeypatch
         def release(self):
             self.opened = False
 
-    monkeypatch.setattr(recording_module.cv2, "VideoWriter", BlockingWriter)
+    monkeypatch.setattr(recording_module, "H264Writer", BlockingWriter)
     service.start(["red"])
     assert entered.wait(3)
     before = time.monotonic()
@@ -238,6 +228,9 @@ def test_hung_write_does_not_hold_service_lock_or_allow_restart(rig, monkeypatch
     assert time.monotonic() - before < 0.5
     assert result["state"] == "stopping"
     assert service.status()["state"] == "stopping"
+    frozen_elapsed = service.status()["elapsed_seconds"]
+    time.sleep(0.05)
+    assert service.status()["elapsed_seconds"] == frozen_elapsed
     with pytest.raises(RuntimeError, match="already active"):
         service.start(["red"])
     with pytest.raises(RuntimeError, match="did not stop"):
@@ -264,7 +257,7 @@ def test_error_state_cannot_restart_before_old_writer_exits(rig, monkeypatch):
             releasing.set()
             release.wait(5)
 
-    monkeypatch.setattr(recording_module.cv2, "VideoWriter", lambda *args: FailingWriter())
+    monkeypatch.setattr(recording_module, "H264Writer", lambda *args: FailingWriter())
     service.start(["red"])
     assert releasing.wait(3)
     assert service.status()["state"] == "error"
@@ -297,3 +290,131 @@ def test_catalog_revalidates_fields_and_rebuilds_media_urls(rig):
     assert restarted.status()["items"] == [item]
     assert restarted.status()["items"][0]["url"] == f"/api/media/{item['id']}"
     manager.set_recording("red", False)
+
+
+def test_storage_settings_validate_persist_and_lock_during_recording(rig):
+    manager, service, folder = rig
+    for value in (
+        {},
+        {"profile": "unknown", "segment_minutes": 15},
+        {"profile": "archive", "segment_minutes": True},
+        {"profile": "archive", "segment_minutes": 0},
+    ):
+        with pytest.raises(ValueError):
+            service.configure(value)
+    result = service.configure({"profile": "archive", "segment_minutes": 5})
+    assert result["storage"]["estimated_day_bytes"] == 691200000
+    assert result["storage"]["estimated_clip_bytes"] == 2400000
+    restored = RecordingService(manager, folder)
+    assert restored.status()["storage"] == result["storage"]
+    restored.close()
+    service.start(["red"])
+    with pytest.raises(RuntimeError, match="Stop recording"):
+        service.configure({"profile": "detail", "segment_minutes": 15})
+    service.stop()
+
+
+def test_rotating_clips_are_decodable_share_session_and_survive_restart(rig, monkeypatch):
+    manager, service, folder = rig
+    service.configure({"profile": "archive", "segment_minutes": 15})
+    # Accelerate clip boundaries without weakening public settings validation.
+    monkeypatch.setattr(service, "_segment_frame_limit", lambda: 3)
+    started = service.start(["red"])
+    wait_for(lambda: len(service.status()["items"]) >= 1)
+    first = service.status()["items"][0]
+    assert service.status()["state"] == "recording"
+    assert manager.statuses()[0]["recording"]
+    service.select(["red", "green"])
+    wait_for(lambda: len(service.status()["items"]) >= 2)
+    done = service.stop()
+    clips = done["items"]
+    assert len(clips) >= 2
+    assert {item["session_id"] for item in clips} == {started["session_id"]}
+    assert [item["segment_index"] for item in clips] == list(range(1, len(clips) + 1))
+    assert first["id"] == started["session_id"]
+    for item in clips:
+        video = cv2.VideoCapture(str(service.media_path(item["id"])))
+        ok, frame = video.read()
+        assert ok and frame.shape[:2] == (360, 640)
+        assert video.get(cv2.CAP_PROP_FPS) == 3
+        video.release()
+    restored = RecordingService(manager, folder)
+    assert restored.status()["items"] == clips
+    restored.close()
+    assert not list(folder.glob("*.partial.*"))
+
+
+def test_completed_clips_survive_later_encoder_failure(rig, monkeypatch):
+    _, service, folder = rig
+    monkeypatch.setattr(service, "_segment_frame_limit", lambda: 2)
+    original = service._open_writer
+
+    def fail_next():
+        if service._segment_index:
+            raise RuntimeError("synthetic encoder failure")
+        original()
+
+    monkeypatch.setattr(service, "_open_writer", fail_next)
+    service.start(["red"])
+    wait_for(lambda: service.status()["state"] == "error" and not service._thread)
+    assert len(service.status()["items"]) == 1
+    assert service.media_path(service.status()["items"][0]["id"]).is_file()
+    assert not list(folder.glob("*.partial.*"))
+
+
+def test_slow_sampling_preserves_elapsed_video_time(rig, monkeypatch):
+    _, service, _ = rig
+    original = service._samples
+
+    def slow(ids):
+        time.sleep(0.35)
+        return original(ids)
+
+    monkeypatch.setattr(service, "_samples", slow)
+    service.start(["red"])
+    wait_for(lambda: service.status()["frames"] >= 10)
+    done = service.stop()
+    duration = sum(item["duration_seconds"] for item in done["items"])
+    assert abs(duration - done["elapsed_seconds"]) < 0.6
+
+
+def test_h264_encoder_is_playable_and_compact_on_noisy_frames(tmp_path):
+    from spyder_cctv.recording_profiles import PROFILES
+    from spyder_cctv.video_encoder import H264Writer
+
+    path = tmp_path / "noise.mp4"
+    writer = H264Writer(path, PROFILES["archive"])
+    random = np.random.default_rng(42)
+    for _ in range(90):
+        writer.write(random.integers(0, 256, (360, 640, 3), dtype=np.uint8))
+    writer.release()
+    video = cv2.VideoCapture(str(path))
+    assert video.isOpened()
+    assert int(video.get(cv2.CAP_PROP_FRAME_COUNT)) == 90
+    assert int(video.get(cv2.CAP_PROP_FOURCC)) in {
+        cv2.VideoWriter_fourcc(*name) for name in ("avc1", "h264", "H264")
+    }
+    assert video.read()[0]
+    video.release()
+    # 30 seconds of high-entropy footage at a 64 kbit/s target, with overhead allowance.
+    assert 1000 < path.stat().st_size < 400000
+
+
+def test_finalized_video_recovers_if_manifest_commit_fails(rig, monkeypatch):
+    manager, service, folder = rig
+
+    def fail_catalog():
+        raise OSError("synthetic disk failure")
+
+    monkeypatch.setattr(service, "_save_catalog", fail_catalog)
+    service.start(["red"])
+    wait_for(lambda: service.status()["frames"] >= 2)
+    assert service.stop()["state"] == "error"
+    items = service.status()["items"]
+    assert len(items) == 1
+    assert list(folder.glob(".*.recording.json"))
+    restored = RecordingService(manager, folder)
+    assert restored.status()["items"] == items
+    restored._save_catalog()
+    assert not list(folder.glob(".*.recording.json"))
+    restored.close()

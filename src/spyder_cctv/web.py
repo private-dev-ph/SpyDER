@@ -800,6 +800,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         )
                     )
                     self.json(200, outcome)
+                elif parts == ["api", "recordings", "settings"]:
+                    self.json(200, recorder.configure(self.body()))
                 elif parts == ["api", "recordings", "stop"]:
                     if self.body() != {}:
                         raise ValueError("Send an empty object")

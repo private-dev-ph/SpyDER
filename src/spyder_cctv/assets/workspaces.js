@@ -6,10 +6,18 @@
     "control-room": ["Control Room", "grid", "Observe / control"],
     "vision-lab": ["Vision Lab", "vision", "Empower your security"],
     "camera-setup": ["Camera Setup", "settings", "Tune your devices"],
-    recordings: ["Recordings", "record", "Capture every activity simultaneously"],
+    recordings: [
+      "Recordings",
+      "record",
+      "Capture every activity simultaneously",
+    ],
     events: ["Events", "events", "Record and log everything you need"],
     layouts: ["Layouts", "grid", "Arrange your perspective"],
-    system: ["System", "system", "Everything stays local, nothing is ever uploaded"],
+    system: [
+      "System",
+      "system",
+      "Everything stays local, nothing is ever uploaded",
+    ],
   };
   const nav = find("#workspace-nav");
   const chooser = find("#workspace-select");
@@ -186,10 +194,10 @@
     cameraSignature = librarySignature = "";
     if (current === "recordings") {
       content.innerHTML =
-        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One 1920 × 1080 video at 15 fps; original proportions preserved. No audio.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><div id="media-library" class="media-library"></div></section>';
+        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><div id="media-library" class="media-library"></div></section>';
       find("#recording-description").textContent = window.spyderShowcase
         ? "Record locally in this browser. Keep this tab visible. Recordings stop when hidden or at the 128 MiB memory limit. Download before closing this tab."
-        : "Recorded on this computer, even while the browser is away. Stop recording to finalize the video. Saved files remain available after restarting.";
+        : "Recorded on this computer, even while the browser is away. Clips save automatically as you record. Stop recording to save the final clip. Saved files remain available after restarting.";
       find("#library-note").textContent = window.spyderShowcase
         ? "Files stay in this tab until downloaded. Nothing is uploaded."
         : "Files are stored in your local media folder. Download a copy here; find the folder in System.";
@@ -200,6 +208,36 @@
             .filter((c) => c.state === "running")
             .map((c) => c.id),
         );
+      function estimateStorage() {
+        const profile = media.profiles?.[find("#recording-profile").value];
+        if (!profile) return;
+        const minutes = Number(find("#recording-segment").value);
+        const rate = (profile.bitrate_kbps * 1000) / 8;
+        find("#recording-estimate").textContent =
+          `${profile.width} × ${profile.height} · ${profile.fps} fps · ${profile.bitrate_kbps} kbit/s target · ≈ ${((rate * 86400) / 1e9).toFixed(2)} GB/day` +
+          (window.spyderShowcase
+            ? " · browser chooses codec; 128 MiB tab limit, no automatic clips. Use the installed app for all-day recording."
+            : ` · ≈ ${((rate * minutes * 60) / 1e6).toFixed(1)} MB/clip · H.264 MP4 · saved locally.`);
+      }
+      find("#recording-profile").addEventListener("change", estimateStorage);
+      find("#recording-segment").addEventListener("change", estimateStorage);
+      find("#recording-storage-save").addEventListener("click", async () => {
+        if (busy || active()) return;
+        busy = true;
+        update();
+        try {
+          media = await request("/api/recordings/settings", {
+            profile: find("#recording-profile").value,
+            segment_minutes: Number(find("#recording-segment").value),
+          });
+          tell("Recording storage settings saved. Applies to new recordings.");
+        } catch (error) {
+          tell(error.message);
+        } finally {
+          busy = false;
+          update();
+        }
+      });
       find("#record-start").addEventListener("click", () =>
         act("/api/recordings/start", [...selected]),
       );
@@ -262,34 +300,116 @@
       let defaultDirectory = "";
       function populateSystem(data) {
         if (!details.isConnected) return;
-        details.textContent = "Media folder: " + data.media_directory + " · Free space: " + (data.free_bytes / 1024 ** 3).toFixed(1) + " GiB";
+        details.textContent =
+          "Media folder: " +
+          data.media_directory +
+          " · Free space: " +
+          (data.free_bytes / 1024 ** 3).toFixed(1) +
+          " GiB";
         output.value = data.configured_media_directory || data.media_directory;
         defaultDirectory = data.default_media_directory || data.media_directory;
-        storageStatus.textContent = data.storage_settings_error || (data.command_line_override ? "The --media-dir command-line option overrides this preference. Remove it to use this folder." : data.restart_required ? "Saved. Restart SpyDER to use the new output folder." : "Current output folder is active.");
-        const metrics = find("#system-metrics"); metrics.replaceChildren();
+        storageStatus.textContent =
+          data.storage_settings_error ||
+          (data.command_line_override
+            ? "The --media-dir command-line option overrides this preference. Remove it to use this folder."
+            : data.restart_required
+              ? "Saved. Restart SpyDER to use the new output folder."
+              : "Current output folder is active.");
+        const metrics = find("#system-metrics");
+        metrics.replaceChildren();
         const fields = [
           ["Application", "SpyDER " + (data.version || "")],
-          ["Runtime", "Python " + (data.python_version || "") + " · " + (data.platform || "")],
-          ["Cameras", (data.running_cameras || 0) + " running / " + (data.camera_count || 0) + " configured"],
+          [
+            "Runtime",
+            "Python " +
+              (data.python_version || "") +
+              " · " +
+              (data.platform || ""),
+          ],
+          [
+            "Cameras",
+            (data.running_cameras || 0) +
+              " running / " +
+              (data.camera_count || 0) +
+              " configured",
+          ],
           ["Recording", data.recording_state || "idle"],
-          ["Event history", (data.event_count || 0) + " records · latest " + (data.event_retention_limit || 10000).toLocaleString() + " retained"],
-          ["Server uptime", Math.floor((data.uptime_seconds || 0) / 60) + " minutes"],
+          [
+            "Event history",
+            (data.event_count || 0) +
+              " records · latest " +
+              (data.event_retention_limit || 10000).toLocaleString() +
+              " retained",
+          ],
+          [
+            "Server uptime",
+            Math.floor((data.uptime_seconds || 0) / 60) + " minutes",
+          ],
         ];
-        for (const [engine, info] of Object.entries(data.engines || {})) fields.push([engine + " dependencies", Object.entries(info.packages || {}).map(([name, version]) => name + ": " + (version || "not installed")).join(" · ")]);
-        for (const [label, value] of fields) { const card = document.createElement("div"); card.className = "system-metric"; const title = document.createElement("strong"); title.textContent = label; const text = document.createElement("span"); text.textContent = value; card.append(title, text); metrics.append(card); }
+        for (const [engine, info] of Object.entries(data.engines || {}))
+          fields.push([
+            engine + " dependencies",
+            Object.entries(info.packages || {})
+              .map(
+                ([name, version]) => name + ": " + (version || "not installed"),
+              )
+              .join(" · "),
+          ]);
+        for (const [label, value] of fields) {
+          const card = document.createElement("div");
+          card.className = "system-metric";
+          const title = document.createElement("strong");
+          title.textContent = label;
+          const text = document.createElement("span");
+          text.textContent = value;
+          card.append(title, text);
+          metrics.append(card);
+        }
       }
       if (window.spyderShowcase) {
-        details.textContent = "Browser showcase · processing and recordings stay on your computer. Native CV requires the installed Python app.";
+        details.textContent =
+          "Browser showcase · processing and recordings stay on your computer. Native CV requires the installed Python app.";
         storageForm.hidden = true;
       } else {
         details.textContent = "Loading local system details…";
-        fetch("/api/system", { signal: AbortSignal.timeout(4000) }).then((response) => { if (!response.ok) throw new Error("System details unavailable"); return response.json(); }).then(populateSystem).catch((error) => { if (details.isConnected) details.textContent = error.message; });
-        find("#system-output-reset").addEventListener("click", () => { output.value = defaultDirectory; output.focus(); });
+        fetch("/api/system", { signal: AbortSignal.timeout(4000) })
+          .then((response) => {
+            if (!response.ok) throw new Error("System details unavailable");
+            return response.json();
+          })
+          .then(populateSystem)
+          .catch((error) => {
+            if (details.isConnected) details.textContent = error.message;
+          });
+        find("#system-output-reset").addEventListener("click", () => {
+          output.value = defaultDirectory;
+          output.focus();
+        });
         storageForm.addEventListener("submit", async (event) => {
-          event.preventDefault(); const buttons = [...storageForm.querySelectorAll("button")]; buttons.forEach((button) => { button.disabled = true; }); storageStatus.textContent = "Checking folder and saving…";
-          try { const data = await app.request("/api/system/storage", { media_directory: output.value }); if (storageStatus.isConnected) storageStatus.textContent = data.command_line_override ? "Saved. Remove --media-dir and restart SpyDER to apply this preference." : data.restart_required ? "Saved. Restart SpyDER to use this output folder. Existing files are kept." : "Output folder is active."; }
-          catch (error) { if (storageStatus.isConnected) storageStatus.textContent = error.message; }
-          finally { buttons.forEach((button) => { button.disabled = false; }); }
+          event.preventDefault();
+          const buttons = [...storageForm.querySelectorAll("button")];
+          buttons.forEach((button) => {
+            button.disabled = true;
+          });
+          storageStatus.textContent = "Checking folder and saving…";
+          try {
+            const data = await app.request("/api/system/storage", {
+              media_directory: output.value,
+            });
+            if (storageStatus.isConnected)
+              storageStatus.textContent = data.command_line_override
+                ? "Saved. Remove --media-dir and restart SpyDER to apply this preference."
+                : data.restart_required
+                  ? "Saved. Restart SpyDER to use this output folder. Existing files are kept."
+                  : "Output folder is active.";
+          } catch (error) {
+            if (storageStatus.isConnected)
+              storageStatus.textContent = error.message;
+          } finally {
+            buttons.forEach((button) => {
+              button.disabled = false;
+            });
+          }
         });
       }
     }
@@ -453,6 +573,21 @@
       image.hidden = !url;
       if (url && image.getAttribute("src") !== url) image.src = url;
     }
+    const profileSelect = find("#recording-profile");
+    if (!profileSelect.options.length && media.profiles) {
+      for (const [value, profile] of Object.entries(media.profiles))
+        profileSelect.append(new Option(profile.label, value));
+      profileSelect.value = media.storage.profile;
+      find("#recording-segment").value = String(media.storage.segment_minutes);
+      profileSelect.dispatchEvent(new Event("change"));
+    }
+    for (const input of find("#recording-storage").querySelectorAll(
+      "select, button",
+    ))
+      input.disabled =
+        busy ||
+        active() ||
+        (window.spyderShowcase && input.id === "recording-segment");
     find("#record-start").disabled = busy || active() || !selected.size;
     find("#record-stop").disabled = busy || media.state !== "recording";
     find("#capture-tiled").disabled = busy || !selected.size;
@@ -469,7 +604,10 @@
         const detail = document.createElement("div");
         const name = document.createElement("strong");
         name.textContent =
-          item.kind === "capture" ? "Frame capture" : "Tiled recording";
+          item.kind === "capture"
+            ? "Frame capture"
+            : "Tiled recording" +
+              (item.segment_index ? ` · clip ${item.segment_index}` : "");
         const note = document.createElement("p");
         note.textContent =
           new Date(item.created_at).toLocaleString() +

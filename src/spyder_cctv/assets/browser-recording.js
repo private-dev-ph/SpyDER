@@ -6,7 +6,60 @@
 
   const WIDTH = 1920;
   const HEIGHT = 1080;
-  const FPS = 15;
+  const profiles = {
+    archive: {
+      label: "Archive · least detail",
+      width: 640,
+      height: 360,
+      fps: 3,
+      bitrate_kbps: 64,
+    },
+    efficient: {
+      label: "Efficient · everyday",
+      width: 1280,
+      height: 720,
+      fps: 8,
+      bitrate_kbps: 256,
+    },
+    detail: {
+      label: "Detail · larger files",
+      width: 1920,
+      height: 1080,
+      fps: 15,
+      bitrate_kbps: 2000,
+    },
+  };
+  let settings = { profile: "efficient", segment_minutes: 15 };
+  function validateSettings(value) {
+    if (
+      !value ||
+      Object.keys(value).sort().join() !== "profile,segment_minutes" ||
+      !Object.hasOwn(profiles, value.profile) ||
+      ![5, 15, 30, 60].includes(value.segment_minutes)
+    )
+      throw new Error(
+        "Choose a recording profile and a supported clip length.",
+      );
+    return { profile: value.profile, segment_minutes: value.segment_minutes };
+  }
+  try {
+    const saved = window.localStorage?.getItem("spyder.recording-storage.v1");
+    if (saved) settings = validateSettings(JSON.parse(saved));
+  } catch {
+    /* Unavailable browser storage uses safe defaults. */
+  }
+  function storageDescription() {
+    const profile = profiles[settings.profile];
+    const bytesPerSecond = (profile.bitrate_kbps * 1000) / 8;
+    return {
+      ...settings,
+      ...profile,
+      codec: "Browser selected",
+      container: "WebM / MP4",
+      estimated_day_bytes: bytesPerSecond * 86400,
+      estimated_clip_bytes: bytesPerSecond * settings.segment_minutes * 60,
+    };
+  }
   const MAX_BYTES = 128 * 1024 * 1024;
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
@@ -17,9 +70,9 @@
     camera_ids: [],
     elapsed_seconds: 0,
     frames: 0,
-    width: WIDTH,
-    height: HEIGHT,
-    fps: FPS,
+    width: profiles[settings.profile].width,
+    height: profiles[settings.profile].height,
+    fps: profiles[settings.profile].fps,
     error: null,
     items: [],
   };
@@ -40,6 +93,9 @@
   function snapshot() {
     return {
       ...state,
+      storage: storageDescription(),
+      profiles,
+      encoder: "Browser MediaRecorder · local tab only",
       camera_ids: [...state.camera_ids],
       items: state.items.map((item) => ({ ...item })),
     };
@@ -330,6 +386,10 @@
     state.elapsed_seconds = 0;
     chunks = [];
     chunkBytes = 0;
+    const chosenProfile = profiles[settings.profile];
+    canvas.width = state.width = chosenProfile.width;
+    canvas.height = state.height = chosenProfile.height;
+    state.fps = chosenProfile.fps;
     startedAt = Date.now();
     generation++;
     currentIds = selected;
@@ -341,12 +401,18 @@
       await drawFrame(selected);
       if (document.hidden)
         throw new Error("Showcase must stay visible while recording.");
-      stream = canvas.captureStream(FPS);
+      const profile = profiles[settings.profile];
+      stream = canvas.captureStream(profile.fps);
       const type = mimeType();
       const Recorder = window.MediaRecorder;
       recorder = type
-        ? new Recorder(stream, { mimeType: type })
-        : new Recorder(stream);
+        ? new Recorder(stream, {
+            mimeType: type,
+            videoBitsPerSecond: profile.bitrate_kbps * 1000,
+          })
+        : new Recorder(stream, {
+            videoBitsPerSecond: profile.bitrate_kbps * 1000,
+          });
       recorder.addEventListener("dataavailable", dataAvailable);
       recorder.addEventListener("error", (event) => {
         stopRecording(event.error?.message || "Browser recording failed.");
@@ -357,7 +423,7 @@
       });
       recorder.start(1000);
       state.state = "recording";
-      timer = setInterval(tick, 1000 / FPS);
+      timer = setInterval(tick, 1000 / profile.fps);
       return snapshot();
     } catch (error) {
       await Promise.all([...retained].map(release));
@@ -439,6 +505,24 @@
     return makeItem(blob, "capture", filename("capture", "jpg"));
   }
   async function dispatch(path, data = {}) {
+    if (path === "/api/recordings/settings") {
+      if (["recording", "stopping"].includes(state.state))
+        throw new Error("Stop recording before changing storage settings.");
+      const validated = validateSettings(data);
+      try {
+        window.localStorage?.setItem(
+          "spyder.recording-storage.v1",
+          JSON.stringify(validated),
+        );
+      } catch {
+        throw new Error("Browser could not save recording settings.");
+      }
+      settings = validated;
+      state.width = profiles[settings.profile].width;
+      state.height = profiles[settings.profile].height;
+      state.fps = profiles[settings.profile].fps;
+      return snapshot();
+    }
     if (path === "/api/recordings/start")
       return startRecording(data.camera_ids);
     if (path === "/api/recordings/cameras") return setCameras(data.camera_ids);

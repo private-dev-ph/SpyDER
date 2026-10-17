@@ -2190,7 +2190,13 @@ class WorkflowService:
                     else []
                 )
             if added:
-                self.event_store.attach_media(event_id, [added[-1]])
+                clips = [
+                    item
+                    for item in added
+                    if item.get("kind") == "recording"
+                    and item.get("session_id", session_id) == session_id
+                ]
+                self.event_store.attach_media(event_id, clips)
             else:
                 self.event_store.set_attachment_status(
                     event_id,
