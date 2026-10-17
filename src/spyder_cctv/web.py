@@ -55,10 +55,13 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
 
     def system_snapshot() -> dict:
         statuses = manager.statuses()
-        disk = shutil.disk_usage(manager.media_dir)
+        try:
+            free_bytes = shutil.disk_usage(manager.media_dir).free
+        except OSError:
+            free_bytes = 0
         return {
             **settings.snapshot(manager.media_dir, overridden=manager.media_dir_overridden),
-            "free_bytes": disk.free,
+            "free_bytes": free_bytes,
             "version": version("spyder-cctv"),
             "python_version": sys.version.split()[0],
             "platform": platform.system(),
@@ -66,6 +69,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             "camera_count": len(statuses),
             "running_cameras": sum(item.get("state") == "running" for item in statuses),
             "recording_state": recorder.status()["state"],
+            "recording_allowance": recorder.allowance.snapshot(),
             "engines": engine_info()["engines"],
             "event_count": len(workflows.event_store.list()["events"]),
             "event_retention_limit": 10000,
@@ -299,7 +303,19 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             elif path == "/api/analysis/capacity":
                 self.json(200, capacity.snapshot())
             elif path == "/api/workflows/notifications":
-                self.json(200, workflows.notifications())
+                snapshot = workflows.notifications()
+                storage = recorder.allowance.snapshot()
+                snapshot["notifications"] = [
+                    *snapshot["notifications"],
+                    *[
+                        {
+                            **item,
+                            "active": storage["blocked"] and index == len(storage["alerts"]) - 1,
+                        }
+                        for index, item in enumerate(storage["alerts"])
+                    ],
+                ]
+                self.json(200, snapshot)
             elif path == "/api/workflows":
                 self.json(200, workflows.list())
             elif path == "/api/vision/detectors":
@@ -832,6 +848,24 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         client_id, data["active"], data["release_when_idle"]
                     )
                     self.json(200, {"accepted": True, "idle_policy": enabled})
+                elif parts == ["api", "system", "recording-allowance"]:
+                    self.json(200, recorder.allowance.configure(self.body()))
+                elif parts == ["api", "system", "recording-allowance", "retry"]:
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(200, recorder.allowance.retry())
+                elif (
+                    len(parts) == 4
+                    and parts[:2] == ["api", "media"]
+                    and parts[3] in ("keep", "delete")
+                ):
+                    data = self.body()
+                    if parts[3] == "keep" and set(data) == {"keep_forever"}:
+                        self.json(200, recorder.allowance.keep(parts[2], data["keep_forever"]))
+                    elif parts[3] == "delete" and data == {}:
+                        self.json(200, recorder.allowance.delete(parts[2]))
+                    else:
+                        raise ValueError("Invalid recording retention fields")
                 elif parts == ["api", "system", "storage"]:
                     data = self.body()
                     if set(data) != {"media_directory"}:

@@ -338,6 +338,22 @@ def test_record_capture_and_download_routes(server, tmp_path):
         assert ok and frame.shape[:2] == (settings["height"], settings["width"])
     finally:
         reader.release()
+    allowance = post("/api/system/recording-allowance", {"max_bytes": 100000000, "action": "stop"})
+    assert allowance["max_bytes"] == 100000000 and not allowance["blocked"]
+    kept = post(f"/api/media/{video['id']}/keep", {"keep_forever": True})
+    assert kept["keep_forever"]
+    with pytest.raises(HTTPError) as protected:
+        post(f"/api/media/{video['id']}/delete", {})
+    assert protected.value.code == 409
+    post(f"/api/media/{video['id']}/keep", {"keep_forever": False})
+    post(f"/api/media/{video['id']}/delete", {})
+    with pytest.raises(HTTPError) as gone:
+        urlopen(url + video["url"], timeout=4)
+    assert gone.value.code == 404
+    post("/api/system/recording-allowance/retry", {})
+    with pytest.raises(HTTPError) as bad:
+        post("/api/system/recording-allowance", {"max_bytes": -1, "action": "delete"})
+    assert bad.value.code == 400
 
 
 @pytest.mark.parametrize(
