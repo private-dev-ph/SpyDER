@@ -431,7 +431,9 @@ def test_finalized_video_recovers_if_manifest_commit_fails(rig, monkeypatch):
     assert len(items) == 1
     assert list(folder.glob(".*.recording.json"))
     restored = RecordingService(manager, folder)
-    assert restored.status()["items"] == items
+    recovered = restored.status()["items"][0]
+    assert recovered["id"] == items[0]["id"]
+    assert recovered["recovered"] and recovered["keep_forever"]
     restored._save_catalog()
     assert not list(folder.glob(".*.recording.json"))
     restored.close()

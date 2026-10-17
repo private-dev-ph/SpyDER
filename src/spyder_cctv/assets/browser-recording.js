@@ -29,13 +29,13 @@
       bitrate_kbps: 2000,
     },
   };
-  let settings = { profile: "efficient", segment_minutes: 15 };
+  let settings = { profile: "efficient", segment_minutes: 360 };
   function validateSettings(value) {
     if (
       !value ||
       Object.keys(value).sort().join() !== "profile,segment_minutes" ||
       !Object.hasOwn(profiles, value.profile) ||
-      ![5, 15, 30, 60].includes(value.segment_minutes)
+      ![5, 15, 30, 60, 180, 360, 720, 1440].includes(value.segment_minutes)
     )
       throw new Error(
         "Choose a recording profile and a supported clip length.",
@@ -112,7 +112,14 @@
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     return `spyder-${kind}-${stamp}.${extension}`;
   }
-  function makeItem(blob, kind, name, duration, createdAt = new Date()) {
+  function makeItem(
+    blob,
+    kind,
+    name,
+    duration,
+    createdAt = new Date(),
+    poster = null,
+  ) {
     const item = {
       id: `recording-${crypto.randomUUID()}`,
       kind,
@@ -122,6 +129,10 @@
       url: URL.createObjectURL(blob),
     };
     if (duration !== undefined) item.duration_seconds = duration;
+    if (poster) {
+      item.thumbnail_url = URL.createObjectURL(poster);
+      item.thumbnail_size_bytes = poster.size;
+    }
     state.items.push(item);
     state.items.sort(
       (a, b) =>
@@ -131,7 +142,10 @@
     return { ...item };
   }
   function storedBytes() {
-    return state.items.reduce((sum, item) => sum + item.size_bytes, 0);
+    return state.items.reduce(
+      (sum, item) => sum + item.size_bytes + (item.thumbnail_size_bytes || 0),
+      0,
+    );
   }
   function release(id) {
     if (!retained.has(id)) return Promise.resolve();
@@ -307,12 +321,27 @@
         const blob = new Blob(chunks, { type });
         const extension = type.includes("mp4") ? "mp4" : "webm";
         const duration = Math.max(0, (Date.now() - startedAt) / 1000);
+        let poster = null;
+        if (storedBytes() + chunkBytes + 320 * 180 * 4 <= MAX_BYTES) {
+          try {
+            const preview = document.createElement("canvas");
+            preview.width = 320;
+            preview.height = 180;
+            preview.getContext("2d").drawImage(canvas, 0, 0, 320, 180);
+            poster = await new Promise((resolve) =>
+              preview.toBlob(resolve, "image/jpeg", 0.75),
+            );
+          } catch {
+            /* A preview failure must not discard the saved video. */
+          }
+        }
         makeItem(
           blob,
           "recording",
           filename("recording", extension),
           duration,
           new Date(startedAt),
+          poster,
         );
       }
       chunks = [];
@@ -544,7 +573,10 @@
   }
   function cleanup() {
     const releaseItems = () => {
-      for (const item of state.items) URL.revokeObjectURL(item.url);
+      for (const item of state.items) {
+        URL.revokeObjectURL(item.url);
+        if (item.thumbnail_url) URL.revokeObjectURL(item.thumbnail_url);
+      }
       state.items = [];
       return Promise.all([...retained].map(release));
     };

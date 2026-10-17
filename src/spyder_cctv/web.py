@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import version
 from importlib.resources import files
@@ -52,6 +53,22 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         model_library=models,
         detector_catalog=detectors,
     )
+
+    @lru_cache(maxsize=128)
+    def thumbnail(path, size, modified, position):
+        video = cv2.VideoCapture(path)
+        try:
+            video.set(cv2.CAP_PROP_POS_MSEC, position * 1000)
+            ok, image = video.read()
+            if not ok:
+                raise cv2.error("Recording thumbnail cannot be decoded")
+            height, width = image.shape[:2]
+            image = cv2.resize(
+                image, (320, max(1, round(height * 320 / width))), interpolation=cv2.INTER_AREA
+            )
+            return encode_jpeg(image)
+        finally:
+            video.release()
 
     def system_snapshot() -> dict:
         statuses = manager.statuses()
@@ -384,7 +401,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 )
             elif path == "/api/system":
                 self.json(200, system_snapshot())
-            elif re.fullmatch(r"/api/media/[0-9a-f]{32}/(info|frame)", path):
+            elif re.fullmatch(r"/api/media/[0-9a-f]{32}/(info|frame|thumbnail)", path):
                 media_id, action = path.split("/")[-2:]
                 capture = None
                 try:
@@ -394,6 +411,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         if item.get("id") == media_id and item.get("kind") == "recording"
                     )
                     media = recorder.media_path(media_id)
+                    if action == "thumbnail":
+                        stats = media.stat()
+                        position = min(3.0, max(0.0, float(item.get("duration_seconds", 0)) / 2))
+                        data = thumbnail(str(media), stats.st_size, stats.st_mtime_ns, position)
+                        self.send(200, data, "image/jpeg")
+                        return
                     capture = cv2.VideoCapture(str(media))
                     if not capture.isOpened():
                         capture.release()

@@ -19,6 +19,14 @@ import numpy as np
 
 from .recording_allowance import RecordingAllowance
 from .recording_profiles import DEFAULT_SETTINGS, PROFILES, describe_settings, validate_settings
+from .recording_recovery import (
+    RecordingLease,
+    encoder_running,
+    process_identity,
+    recover_fragmented_file,
+    sync_directory,
+    sync_file,
+)
 from .video_encoder import H264Writer
 
 logger = logging.getLogger(__name__)
@@ -80,7 +88,12 @@ class RecordingService:
                 self._archive_paths[item_id] = directory
 
         self._closed = False
+        self._lease = RecordingLease(self.output_dir)
+        self._recovery = {"recovered": [], "pending": [], "durability_warning": None}
+        self._active_metadata = None
+        self._last_checkpoint = 0.0
         self.allowance = RecordingAllowance(self)
+        self._recover_interrupted()
 
     def start(self, camera_ids: list[str]) -> dict[str, Any]:
         ids = self._validate_ids(camera_ids)
@@ -90,53 +103,59 @@ class RecordingService:
                 self._thread is not None and self._thread.is_alive()
             ):
                 raise RuntimeError("A recording is already active")
+            self._lease.acquire()
             try:
-                free = shutil.disk_usage(self.output_dir).free
-            except OSError as error:
-                self.allowance.notify_full(
-                    "Recording storage is unavailable. Check the output drive before recording."
+                self._items = self._load_catalog()
+                try:
+                    free = shutil.disk_usage(self.output_dir).free
+                except OSError as error:
+                    self.allowance.notify_full(
+                        "Recording storage is unavailable. Check the output drive before recording."
+                    )
+                    raise RuntimeError("Recording storage is unavailable") from error
+                if free < MIN_FREE_BYTES:
+                    self.allowance.notify_full(
+                        "Disk space is low. Recording requires at least 64 MiB free."
+                    )
+                    raise RuntimeError("Recording needs at least 64 MiB of free local storage")
+                if not self.allowance.permit():
+                    raise RuntimeError(
+                        "Recording storage is full or unavailable. "
+                        "Resolve the allowance in System before recording."
+                    )
+                retained: list[str] = []
+                try:
+                    for camera_id in ids:
+                        self.manager.set_recording(camera_id, True)
+                        retained.append(camera_id)
+                except Exception:
+                    for camera_id in reversed(retained):
+                        self._release(camera_id)
+                    raise
+                self._camera_ids = ids
+                self._error = None
+                self._stop_notice = None
+                self._frames = 0
+                self._segment_frames = 0
+                self._segment_index = 0
+                self._profile = describe_settings(self._settings)
+                self._started = time.monotonic()
+                self._stopped_at = 0.0
+                self._last_elapsed = 0.0
+                self._session_id = uuid.uuid4().hex
+                self._segment_id = self._session_id
+                self._session_filename = f"{self._segment_id}.mp4"
+                self._temp_path = self.output_dir / f".{self._session_id}.partial.mp4"
+                self._state = "recording"
+                self._wake.clear()
+                self._thread = threading.Thread(
+                    target=self._write_loop, name="spyder-recording-writer", daemon=True
                 )
-                raise RuntimeError("Recording storage is unavailable") from error
-            if free < MIN_FREE_BYTES:
-                self.allowance.notify_full(
-                    "Local disk space is low. Recording is blocked until at least 64 MiB is free."
-                )
-                raise RuntimeError("Recording needs at least 64 MiB of free local storage")
-            if not self.allowance.permit():
-                raise RuntimeError(
-                    "Recording storage is full or unavailable. "
-                    "Resolve the allowance in System before recording."
-                )
-            retained: list[str] = []
-            try:
-                for camera_id in ids:
-                    self.manager.set_recording(camera_id, True)
-                    retained.append(camera_id)
+                self._thread.start()
+                return self.status()
             except Exception:
-                for camera_id in reversed(retained):
-                    self._release(camera_id)
+                self._lease.release()
                 raise
-            self._camera_ids = ids
-            self._error = None
-            self._stop_notice = None
-            self._frames = 0
-            self._segment_frames = 0
-            self._segment_index = 0
-            self._profile = describe_settings(self._settings)
-            self._started = time.monotonic()
-            self._stopped_at = 0.0
-            self._last_elapsed = 0.0
-            self._session_id = uuid.uuid4().hex
-            self._segment_id = self._session_id
-            self._session_filename = f"{self._segment_id}.mp4"
-            self._temp_path = self.output_dir / f".{self._session_id}.partial.mp4"
-            self._state = "recording"
-            self._wake.clear()
-            self._thread = threading.Thread(
-                target=self._write_loop, name="spyder-recording-writer", daemon=True
-            )
-            self._thread.start()
-            return self.status()
 
     def select(self, camera_ids: list[str]) -> dict[str, Any]:
         ids = self._validate_ids(camera_ids, allow_empty=True)
@@ -229,6 +248,11 @@ class RecordingService:
                 "profiles": PROFILES,
                 "segments_saved": self._segment_index,
                 "encoder": "Local FFmpeg · H.264 / MP4",
+                "recovery": {
+                    **self._recovery,
+                    "recovered": list(self._recovery["recovered"]),
+                    "pending": list(self._recovery["pending"]),
+                },
                 "error": self._error,
                 "items": [
                     dict(item)
@@ -357,6 +381,19 @@ class RecordingService:
                     with self._lock:
                         self._frames += 1
                         self._segment_frames += 1
+                    if time.monotonic() - self._last_checkpoint >= 5:
+                        checkpoint = getattr(self._writer, "checkpoint", None)
+                        if checkpoint is not None:
+                            try:
+                                checkpoint()
+                            except OSError:
+                                self._recovery["durability_warning"] = (
+                                    "Disk checkpoint failed; check drive permissions and health"
+                                )
+                                logger.warning(
+                                    "Recording durability checkpoint failed", exc_info=True
+                                )
+                        self._last_checkpoint = time.monotonic()
                     if self._segment_frames >= self._segment_frame_limit():
                         self._finish_segment()
                 remaining = max(
@@ -379,7 +416,26 @@ class RecordingService:
         self._segment_id = self._session_id if self._segment_index == 0 else uuid.uuid4().hex
         self._session_filename = f"{self._segment_id}.mp4"
         self._temp_path = self.output_dir / f".{self._segment_id}.partial.mp4"
+        self._active_metadata = self._new_item(
+            self._segment_id,
+            "recording",
+            self._session_filename,
+            session_id=self._session_id,
+            segment_index=self._segment_index + 1,
+            profile=self._settings["profile"],
+            codec="H.264",
+            format_version=1,
+        )
+        active = self.output_dir / f".{self._segment_id}.active.json"
+        self._write_atomic(active, json.dumps(self._active_metadata).encode("utf-8"))
         self._writer = H264Writer(self._temp_path, self._profile)
+        process = getattr(self._writer, "_process", None)
+        if process is not None:
+            self._active_metadata.update(
+                encoder_pid=process.pid, encoder_birth=process_identity(process.pid)[1]
+            )
+            self._write_atomic(active, json.dumps(self._active_metadata).encode("utf-8"))
+        self._last_checkpoint = time.monotonic()
 
     def _finish_segment(self) -> None:
         writer, self._writer = self._writer, None
@@ -387,6 +443,7 @@ class RecordingService:
             writer.release()
         temp_path = self._temp_path
         if self._segment_frames and temp_path is not None and temp_path.is_file():
+            sync_file(temp_path)
             final_path = self.output_dir / self._session_filename
             item = self._new_item(
                 self._segment_id,
@@ -402,6 +459,7 @@ class RecordingService:
                 height=self._profile["height"],
                 fps=self._profile["fps"],
                 bitrate_kbps=self._profile["bitrate_kbps"],
+                created_at=self._active_metadata["created_at"],
             )
             # A small recovery journal bridges the video rename and catalog update.
             journal = self.output_dir / f".{self._segment_id}.recording.json"
@@ -411,6 +469,8 @@ class RecordingService:
                 self._items[self._segment_id] = item
                 self._save_catalog()
                 self._segment_index += 1
+            (self.output_dir / f".{self._segment_id}.active.json").unlink(missing_ok=True)
+            sync_directory(self.output_dir)
             self._segment_frames = 0
             self._temp_path = None
 
@@ -419,23 +479,27 @@ class RecordingService:
             camera_ids = list(self._camera_ids)
             self._stopped_at = self._stopped_at or time.monotonic()
         try:
-            if self._error is None:
-                self._finish_segment()
-            else:
-                writer, self._writer = self._writer, None
-                if writer is not None:
-                    writer.release()
+            self._finish_segment()
         except Exception:
             logger.exception("Recording finalization failed")
             with self._lock:
                 self._error = "Recording finalization failed; earlier completed clips remain saved"
                 self._state = "error"
         finally:
-            if self._temp_path is not None:
-                try:
-                    self._temp_path.unlink(missing_ok=True)
-                except OSError:
-                    logger.exception("Could not remove incomplete recording")
+            try:
+                if self._temp_path is not None:
+                    # A failure must not destroy potentially recoverable footage.
+                    if self._error is None and not self._segment_frames:
+                        self._temp_path.unlink(missing_ok=True)
+                        (self.output_dir / f".{self._segment_id}.active.json").unlink(
+                            missing_ok=True
+                        )
+                    elif self._temp_path.is_file():
+                        self._recovery["pending"].append(self._temp_path.name)
+            except OSError:
+                logger.warning("Interrupted recording retained for later recovery", exc_info=True)
+            finally:
+                self._lease.release()
         for camera_id in camera_ids:
             self._release(camera_id)
         with self._lock:
@@ -447,6 +511,95 @@ class RecordingService:
                 self._last_elapsed = self._stopped_at - self._started
             self._started = 0.0
             self._thread = None
+
+    def _recover_interrupted(self):
+        try:
+            self._lease.acquire()
+        except (OSError, RuntimeError) as error:
+            self._recovery["pending"].append(f"Recovery deferred: {error}")
+            return
+        try:
+            self._items = self._load_catalog()
+            handled = set()
+            for active in list(self.output_dir.glob(".*.active.json"))[:32]:
+                try:
+                    if active.is_symlink() or active.stat().st_size > 16384:
+                        raise ValueError("Oversized recovery journal")
+                    raw = json.loads(active.read_text(encoding="utf-8"))
+                    ident = raw["id"]
+                    if uuid.UUID(hex=ident).hex != ident or active.name != f".{ident}.active.json":
+                        raise ValueError("Invalid recovery identity")
+                    if raw.get("format_version") != 1 or raw.get("kind") != "recording":
+                        raise ValueError("Unsupported recovery metadata")
+                    profile = PROFILES[raw["profile"]]
+                    if uuid.UUID(hex=raw["session_id"]).hex != raw["session_id"]:
+                        raise ValueError("Invalid recording session")
+                    if type(raw.get("segment_index")) is not int or raw["segment_index"] < 1:
+                        raise ValueError("Invalid clip index")
+                    if datetime.fromisoformat(raw["created_at"]).tzinfo is None:
+                        raise ValueError("Invalid recording date")
+                    if ident in self._items:
+                        self._items[ident].update(recovered=True, keep_forever=True)
+                        self._save_catalog()
+                        self._recovery["recovered"].append(ident)
+                        active.unlink(missing_ok=True)
+                        continue
+                    source = self.output_dir / f".{ident}.partial.mp4"
+                    handled.add(source.name)
+                    if source.resolve().parent != self.output_dir.resolve() or source.is_symlink():
+                        raise ValueError("Invalid interrupted recording path")
+                    if type(raw.get("encoder_pid")) is not int or raw["encoder_pid"] <= 0:
+                        raise RuntimeError("Encoder launch was not confirmed; source retained")
+                    if encoder_running(raw):
+                        raise RuntimeError("Encoder is still closing; recovery deferred")
+                    final_path = self.output_dir / f"{ident}.mp4"
+                    if final_path.exists():
+                        raise RuntimeError(
+                            "Final filename already exists; interrupted source retained"
+                        )
+                    metadata = recover_fragmented_file(source)
+                    sync_file(source)
+                    item = self._new_item(
+                        ident,
+                        "recording",
+                        final_path.name,
+                        **metadata,
+                        created_at=raw["created_at"],
+                        session_id=raw["session_id"],
+                        segment_index=raw["segment_index"],
+                        profile=raw["profile"],
+                        bitrate_kbps=profile["bitrate_kbps"],
+                        codec="H.264",
+                        size_bytes=source.stat().st_size,
+                        recovered=True,
+                        keep_forever=True,
+                    )
+                    journal = self.output_dir / f".{ident}.recording.json"
+                    self._write_atomic(journal, json.dumps(item).encode("utf-8"))
+                    os.replace(source, final_path)
+                    self._items[ident] = item
+                    self._save_catalog()
+                    active.unlink(missing_ok=True)
+                    sync_directory(self.output_dir)
+                    self._recovery["recovered"].append(ident)
+                except (
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    RuntimeError,
+                    AttributeError,
+                    cv2.error,
+                ) as error:
+                    self._recovery["pending"].append(f"{active.name}: {error}")
+                    logger.warning("Interrupted recording retained: %s", error)
+            for partial in list(self.output_dir.glob(".*.partial.mp4"))[:32]:
+                if partial.name not in handled:
+                    self._recovery["pending"].append(
+                        f"{partial.name}: no recovery journal; original retained"
+                    )
+        finally:
+            self._lease.release()
 
     def _samples(self, ids: list[str]) -> list[np.ndarray | None]:
         images = []
@@ -678,7 +831,7 @@ class RecordingService:
             item["duration_seconds"] = duration
             if type(raw.get("keep_forever")) is bool:
                 item["keep_forever"] = raw["keep_forever"]
-            for flag in ("compression_attempted", "compressed"):
+            for flag in ("compression_attempted", "compressed", "recovered"):
                 if type(raw.get(flag)) is bool:
                     item[flag] = raw[flag]
             session_id = raw.get("session_id")
@@ -724,7 +877,11 @@ class RecordingService:
     def _write_atomic(path: Path, data: bytes) -> None:
         temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
-            temp.write_bytes(data)
+            with temp.open("wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
             os.replace(temp, path)
+            sync_directory(path.parent)
         finally:
             temp.unlink(missing_ok=True)

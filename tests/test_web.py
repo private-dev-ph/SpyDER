@@ -297,6 +297,14 @@ def test_record_capture_and_download_routes(server, tmp_path):
     assert result["state"] == "idle"
     assert manager.statuses()[0]["recording"] is False
     video = next(item for item in result["items"] if item["kind"] == "recording")
+    thumbnail_url = url + f"/api/media/{video['id']}/thumbnail?v={video['size_bytes']}"
+    with urlopen(thumbnail_url, timeout=4) as response:
+        thumbnail = response.read()
+        assert response.headers["Content-Type"] == "image/jpeg"
+    image = cv2.imdecode(np.frombuffer(thumbnail, np.uint8), cv2.IMREAD_COLOR)
+    assert image.shape[1] == 320
+    with urlopen(thumbnail_url, timeout=4) as response:
+        assert response.read() == thumbnail
     with urlopen(url + f"/api/media/{video['id']}/info", timeout=4) as response:
         info = json.load(response)
     assert info["duration_seconds"] > 0
