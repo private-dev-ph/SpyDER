@@ -194,7 +194,7 @@
     cameraSignature = librarySignature = "";
     if (current === "recordings") {
       content.innerHTML =
-        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><p id="recording-allowance-notice" class="field-help" role="status" hidden></p><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><div id="media-library" class="media-library"></div></section>';
+        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="180">3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option><option value="1440">24 hours</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><p id="recording-allowance-notice" class="field-help" role="status" hidden></p><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><p id="recording-recovery-status" class="field-help" role="status"></p><div id="media-library" class="media-library"></div></section>';
       find("#recording-description").textContent = window.spyderShowcase
         ? "Record locally in this browser. Keep this tab visible. Recordings stop when hidden or at the 128 MiB memory limit. Download before closing this tab."
         : "Recorded on this computer, even while the browser is away. Clips save automatically as you record. Stop recording to save the final clip. Saved files remain available after restarting.";
@@ -708,6 +708,18 @@
       busy || active() || !selected.size || quotaBlocked;
     find("#record-stop").disabled = busy || media.state !== "recording";
     find("#capture-tiled").disabled = busy || !selected.size;
+    const recovery = media.recovery;
+    const recoveryStatus = find("#recording-recovery-status");
+    recoveryStatus.textContent =
+      recovery?.durability_warning ||
+      (recovery?.pending?.length
+        ? `${recovery.pending.length} interrupted recording(s) retained for recovery. Check the local media folder; no source footage was discarded.`
+        : recovery?.recovered?.length
+          ? `${recovery.recovered.length} recording(s) recovered after interruption and marked Keep forever.`
+          : "Installed recordings use crash-resilient fragments and periodic disk checkpoints. The newest buffered seconds may still be lost on power failure.");
+    if (window.spyderShowcase)
+      recoveryStatus.textContent =
+        "Browser demo recordings stay in memory; a crashed or closed tab cannot be recovered. Download before closing.";
     const library = find("#media-library");
     const signatureItems = JSON.stringify(media.items || []);
     if (signatureItems !== librarySignature) {
@@ -717,7 +729,7 @@
         library.textContent = "Your recordings and captures will appear here.";
       for (const item of [...(media.items || [])].reverse()) {
         const row = document.createElement("article");
-        row.className = "media-item";
+        row.className = "media-item recording-library-item";
         const detail = document.createElement("div");
         const name = document.createElement("strong");
         name.textContent =
@@ -740,18 +752,45 @@
         download.textContent = "Download";
         download.href = item.url;
         download.download = item.filename;
-        row.append(
-          window.spyderEventLibrary.mediaButton(item),
-          detail,
-          download,
-        );
+        const preview = window.spyderEventLibrary.mediaButton(item);
+        preview.classList.add("recording-thumbnail");
+        const image = document.createElement("img");
+        image.alt = "";
+        image.loading = "lazy";
+        image.decoding = "async";
+        const thumbnailUrl =
+          item.kind === "capture"
+            ? item.url
+            : window.spyderShowcase
+              ? item.thumbnail_url || ""
+              : `/api/media/${encodeURIComponent(item.id)}/thumbnail?v=${item.size_bytes}`;
+        const play = icon(item.kind === "capture" ? "capture" : "play");
+        play.classList.add("recording-thumbnail-overlay");
+        const missing = document.createElement("span");
+        missing.className = "recording-thumbnail-missing";
+        missing.textContent = "Preview unavailable";
+        missing.hidden = Boolean(thumbnailUrl);
+        image.hidden = !thumbnailUrl;
+        if (thumbnailUrl) image.src = thumbnailUrl;
+        image.addEventListener("error", () => {
+          image.hidden = true;
+          missing.hidden = false;
+        });
+        preview.replaceChildren(image, play, missing);
+        const actions = document.createElement("div");
+        actions.className = "recording-item-actions";
+        actions.append(download);
+        row.append(preview, detail, actions);
+        if (item.recovered) {
+          const recovered = document.createElement("small");
+          recovered.textContent = "Recovered after interruption";
+          detail.append(recovered);
+        }
         if (
           item.kind === "recording" &&
           !item.archived &&
           !window.spyderShowcase
         ) {
-          const actions = document.createElement("div");
-          actions.className = "recording-item-actions";
           const keep = button(
             item.keep_forever ? "Kept forever · allow cleanup" : "Keep forever",
             async () => {
@@ -805,7 +844,6 @@
             badge.textContent = "Recompressed · reduced detail";
             actions.append(badge);
           }
-          row.append(actions);
         }
         library.append(row);
       }

@@ -1,6 +1,7 @@
 """Bounded local H.264 encoder. No shell, uploads or runtime downloads."""
 
 import math
+import os
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ import imageio_ffmpeg
 
 class H264Writer:
     def __init__(self, path: Path, profile: dict):
+        self.path = path
         self._errors = tempfile.TemporaryFile()
         self._process = None
         fps = profile["fps"]
@@ -40,6 +42,10 @@ class H264Writer:
             "veryfast",
             "-threads",
             "2",
+            "-tune",
+            "zerolatency",
+            "-bf",
+            "0",
             "-pix_fmt",
             "yuv420p",
             "-b:v",
@@ -51,7 +57,11 @@ class H264Writer:
             "-g",
             str(fps * 2),
             "-movflags",
-            "+faststart",
+            "+frag_keyframe+empty_moov+default_base_moof",
+            "-frag_duration",
+            "2000000",
+            "-flush_packets",
+            "1",
             str(path),
         ]
         try:
@@ -70,6 +80,11 @@ class H264Writer:
         if self._process is None or self._process.poll() is not None:
             raise RuntimeError("Local H.264 encoder stopped unexpectedly")
         self._process.stdin.write(frame.tobytes())
+
+    def checkpoint(self):
+        if self.path.is_file():
+            with self.path.open("r+b") as stream:
+                os.fsync(stream.fileno())
 
     def release(self):
         process, self._process = self._process, None

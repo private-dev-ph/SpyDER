@@ -506,3 +506,27 @@ test("storage profiles limit browser encoder bitrate without network access", as
     /Choose a recording/,
   );
 });
+
+test("six-hour default and extended lengths persist in browser settings", async () => {
+  const app = runtime();
+  assert.equal((await app.api.status()).storage.segment_minutes, 360);
+  for (const minutes of [180, 360, 720, 1440]) {
+    const result = await app.api.request("/api/recordings/settings", {
+      profile: "archive",
+      segment_minutes: minutes,
+    });
+    assert.equal(result.storage.segment_minutes, minutes);
+  }
+});
+
+test("recording posters are local and revoked with their video", async () => {
+  const app = runtime();
+  await app.api.request("/api/recordings/start", { camera_ids: ["cam-a"] });
+  const done = await app.api.request("/api/recordings/stop");
+  const item = done.items[0];
+  assert.match(item.thumbnail_url, /^blob:/);
+  assert.ok(item.thumbnail_size_bytes > 0);
+  app.listeners["win:pagehide"]({ persisted: false });
+  assert.ok(app.revoked.includes(item.thumbnail_url));
+  assert.ok(app.revoked.includes(item.url));
+});

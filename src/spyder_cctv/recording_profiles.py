@@ -23,7 +23,7 @@ PROFILES = {
         "bitrate_kbps": 2000,
     },
 }
-DEFAULT_SETTINGS = {"profile": "efficient", "segment_minutes": 15}
+DEFAULT_SETTINGS = {"profile": "efficient", "segment_minutes": 360}
 
 
 def validate_settings(value):
@@ -31,8 +31,17 @@ def validate_settings(value):
         raise ValueError("Send profile and segment_minutes")
     if not isinstance(value["profile"], str) or value["profile"] not in PROFILES:
         raise ValueError("Unknown recording profile")
-    if type(value["segment_minutes"]) is not int or value["segment_minutes"] not in (5, 15, 30, 60):
-        raise ValueError("Clip length must be 5, 15, 30 or 60 minutes")
+    if type(value["segment_minutes"]) is not int or value["segment_minutes"] not in (
+        5,
+        15,
+        30,
+        60,
+        180,
+        360,
+        720,
+        1440,
+    ):
+        raise ValueError("Choose a supported clip length (5 minutes to 24 hours)")
     return dict(value)
 
 

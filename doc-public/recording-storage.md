@@ -35,21 +35,54 @@ later after capability testing on each supported platform.
 
 ## Continuous sessions, manageable files
 
-Choose 5, 15 (default), 30 or 60 minutes per clip. A continuous session produces
-sequential, independently playable MP4 files. Camera selection can change without
-stopping the session. Completed clips appear in the library while recording
-continues. Clip numbering and session IDs persist in the media catalog. Rotating
-files reduces each file's size and limits the unfinished portion after a crash;
-it does **not** reduce total daily storage. A crash can lose the current unfinished
-clip; earlier finalized clips remain available. There is a small processing cost
-at each file boundary, and stale sampling uses repeated frames to preserve timing.
+Choose **5, 15, 30 or 60 minutes, or 3, 6, 12 or 24 hours** per clip.
+The default for new settings is **6 hours**; existing saved preferences are retained.
+A continuous session produces sequential, independently playable MP4 files. Camera
+selection can change without stopping the session. Completed clips appear in the
+library while recording continues. Clip numbering and session IDs persist.
+Rotating files changes individual file sizes, not total daily storage. A six-hour
+clip is approximately 173 MB in Archive, 691 MB in Efficient, or 5.4 GB in Detail,
+before container overhead. Choose a storage allowance larger than a normal clip
+and shorten clips if continuous cleanup needs to reclaim space sooner.
 
-Files are written to temporary names, finalized with MP4 playback metadata, renamed
-and added to the catalog atomically. A failed encoder stops recording rather than
-silently falling back to a much larger MJPEG file. The recorder stops when free
-space drops below 64 MiB and attempts to save the current clip. Automatic cleanup is off by default. You can opt into a recording allowance policy
-in System, described below. Keep sufficient free space and an external backup plan.
-The recording library can play or download each completed clip.
+## Unexpected stops and recovery
+
+New native recordings use **fragmented MP4**, with a two-second fragment target,
+zero encoder lookahead and no B frames. Unlike a conventional MP4 that needs its
+final playback index, complete fragments can be read after the encoder is killed.
+The recorder requests a filesystem flush every five seconds and durably journals
+the active clip and encoder identity before sending frames. Completed clips are
+flushed, renamed and added to the catalog using recoverable atomic updates.
+
+On startup, SpyDER checks interrupted clips, verifies that their encoder has
+exited, and restores decodable footage to Recordings. Recovered clips are marked
+**Recovered after interruption** and **Keep forever** automatically, so retention
+policies cannot immediately discard them. An OS lock excludes competing recorders
+and recovery in the same folder. Run one application instance per output folder;
+the lock is not a general multi-instance media-library synchronization service.
+
+Recovery scans MP4 box headers without loading an entire multi-hour clip into
+memory. If the last fragment is incomplete, its tail is preserved separately
+before trimming. Failed decoding restores the original bytes. Corrupt, legacy,
+unconfirmed-launch or unusually large uncertain files remain on disk for review;
+they are never silently deleted. Pending recovery is shown in Recordings and
+retried on a later restart. Only up to 32 active journals are processed per startup.
+
+This reduces loss; it cannot guarantee every frame survives a power cut. The
+newest incomplete fragment and buffered writes may be lost. Five-second flushes
+are requests to the filesystem, not proof of hardware power-loss protection. A
+flush failure produces a durability warning and is retried; the loss window can
+then grow. An unavailable/full drive or damaged filesystem can prevent saving.
+Older conventional MP4 partial files cannot always be repaired automatically.
+
+Normal stop, low disk space and storage-allowance stops still attempt to finalize
+the current clip, including encoder failures where usable frames remain. The
+recorder stops below 64 MiB free instead of silently switching to larger MJPEG.
+Automatic cleanup remains off by default. Keep sufficient free space and backups.
+
+The library shows real frame thumbnails spanning each clip's details and action
+rows. Select a thumbnail to play the video inline, or download it. Thumbnails are
+generated locally on demand and kept in a bounded memory cache.
 
 ## Cloudflare showcase
 
@@ -58,7 +91,9 @@ and requested bitrate profiles. The browser selects a supported WebM/MP4 codec;
 bitrate is a browser hint. Profile choices persist in browser storage. The demo
 retains its 128 MiB in-memory limit, requires a visible tab, and has no automatic
 clip rotation or persistent recording files. Download recordings before closing
-the tab. Use the installed Python application for full-day recording. Cloudflare
+the tab. A closed or crashed tab loses these in-memory recordings; native crash
+recovery does not apply to the showcase. Long clip choices do not remove the demo
+memory/visibility limits. Use the installed Python application for full-day recording. Cloudflare
 never receives or encodes video.
 
 ## Updating an existing installation
