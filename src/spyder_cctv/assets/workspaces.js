@@ -194,7 +194,7 @@
     cameraSignature = librarySignature = "";
     if (current === "recordings") {
       content.innerHTML =
-        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><div id="media-library" class="media-library"></div></section>';
+        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><p id="recording-allowance-notice" class="field-help" role="status" hidden></p><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><div id="media-library" class="media-library"></div></section>';
       find("#recording-description").textContent = window.spyderShowcase
         ? "Record locally in this browser. Keep this tab visible. Recordings stop when hidden or at the 128 MiB memory limit. Download before closing this tab."
         : "Recorded on this computer, even while the browser is away. Clips save automatically as you record. Stop recording to save the final clip. Saved files remain available after restarting.";
@@ -292,6 +292,60 @@
     } else {
       content.innerHTML =
         '<section class="workspace-panel"><h2>Local system</h2><div id="system-details" class="system-details"></div><div id="system-metrics" class="system-metrics"></div><fieldset class="activity-policy"><legend>Camera focus preference</legend><label class="release-toggle"><input id="system-pause-unfocused" type="checkbox" checked /><span>Pause cameras when unfocused</span></label><p id="system-pause-status" class="field-help" role="status" aria-live="polite"></p><p class="field-help">When off, cameras keep running while the local server runs, even if you close this browser. Browser desktop notifications require this page to stay open.</p></fieldset><form id="system-storage" class="system-storage"><label for="system-output">Recordings and captures folder</label><input id="system-output" type="text" required maxlength="4096" placeholder="Absolute local folder path" /><div class="recording-actions"><button class="button primary" type="submit">Save output folder</button><button id="system-output-reset" class="button secondary" type="button">Use default folder</button></div><p class="field-help">A dedicated folder on a local drive is recommended. Keep enough free space for video. Changes apply after restarting SpyDER; files stay in their original folders, and previous folders remain available for playback. Models and configuration stay in their current locations.</p><p id="system-storage-status" class="field-help" role="status"></p></form></section>';
+      const allowancePanel = document.createElement("section");
+      allowancePanel.className = "workspace-panel";
+      allowancePanel.innerHTML =
+        '<h2>Recording storage allowance</h2><p class="field-help">Applies to videos in the active output folder. Captures, models and previous folders are excluded.</p><p id="allowance-usage" role="status">Loading recording usage…</p><progress id="allowance-meter" max="1" value="0" aria-label="Recording storage used"></progress><p id="allowance-status" class="field-help" role="status"></p><form id="allowance-form"><fieldset disabled><div class="recording-storage-fields"><label>Maximum storage (GB)<input id="allowance-limit" type="number" min="0" max="17592" step="any" value="0" required aria-describedby="allowance-limit-help" /></label><label>When the allowance fills<select id="allowance-action"><option value="stop">Stop &amp; save · block new recordings</option><option value="compress">Recompress oldest · stop if insufficient</option><option value="delete">Delete oldest unprotected recordings</option></select></label></div><p id="allowance-limit-help" class="field-help">0 means unlimited. Decimal GB. A 4 MiB safety margin is reserved to finish the current clip. The limit is a software allowance; encoder buffers can cause small overshoots.</p><p class="field-help">Recompression is lossy, runs once per eligible MP4, and replaces the original only after playback validation and at least 5% savings. If it cannot free enough space, recording stops. Delete permanently removes oldest eligible clips, including event attachments. Mark important videos “Keep forever” in Recordings to exclude them from both policies. The current clip is preserved.</p><div class="recording-actions"><button class="button primary" type="submit">Save allowance</button><button id="allowance-retry" class="button secondary" type="button">Check space / retry cleanup</button></div></fieldset></form><p id="allowance-feedback" class="field-help" role="status"></p><div class="recording-actions"><button type="button" class="button secondary" data-notification-permission>Enable desktop alerts</button><span class="field-help" data-notification-status>In-app storage alerts are automatic. Desktop alerts need browser permission and an open SpyDER page.</span></div><details><summary>Recent storage alerts</summary><ul id="allowance-alerts"></ul></details>';
+      content.append(allowancePanel);
+      window.spyderNotifications?.refresh?.();
+      if (window.spyderShowcase) {
+        find("#allowance-form").hidden = true;
+        find("#allowance-usage").textContent =
+          "Browser showcase: a fixed 128 MiB tab buffer. Use the installed app for persistent storage allowances and keep-forever protection.";
+        find("#allowance-meter").hidden = true;
+      } else {
+        const saveAllowance = async (retry = false) => {
+          const form = find("#allowance-form");
+          if (form.dataset.saving === "true") return;
+          form.dataset.saving = "true";
+          form.querySelector("fieldset").disabled = true;
+          const feedback = find("#allowance-feedback");
+          feedback.textContent = retry
+            ? "Checking storage…"
+            : "Saving allowance…";
+          try {
+            const data = retry
+              ? {}
+              : {
+                  max_bytes: Math.round(
+                    Number(find("#allowance-limit").value) * 1e9,
+                  ),
+                  action: find("#allowance-action").value,
+                };
+            media.allowance = await app.request(
+              retry
+                ? "/api/system/recording-allowance/retry"
+                : "/api/system/recording-allowance",
+              data,
+            );
+            feedback.textContent =
+              "Allowance saved. Resolved storage permits new recordings; stopped sessions do not resume automatically.";
+          } catch (error) {
+            feedback.textContent = error.message;
+          } finally {
+            form.dataset.saving = "false";
+            form.querySelector("fieldset").disabled = false;
+            updateAllowance();
+          }
+        };
+        find("#allowance-form").addEventListener("submit", (event) => {
+          event.preventDefault();
+          saveAllowance();
+        });
+        find("#allowance-retry").addEventListener("click", () =>
+          saveAllowance(true),
+        );
+      }
       updateActivityPreference();
       const details = find("#system-details");
       const output = find("#system-output");
@@ -300,6 +354,8 @@
       let defaultDirectory = "";
       function populateSystem(data) {
         if (!details.isConnected) return;
+        media.allowance = data.recording_allowance;
+        updateAllowance();
         details.textContent =
           "Media folder: " +
           data.media_directory +
@@ -456,7 +512,50 @@
       } else find(".toggle-camera", card).title = "";
     }
   }
+  function updateAllowance() {
+    const quota = media.allowance;
+    const form = find("#allowance-form");
+    if (window.spyderShowcase || !form || !quota) return;
+    if (form.dataset.ready !== "true") {
+      find("#allowance-limit").value = String(quota.max_bytes / 1e9);
+      find("#allowance-action").value = quota.action;
+      form.dataset.ready = "true";
+      form.querySelector("fieldset").disabled = false;
+    }
+    const used = (quota.used_bytes / 1e9).toFixed(3);
+    find("#allowance-usage").textContent =
+      `${used} GB used` +
+      (quota.max_bytes
+        ? ` / ${(quota.max_bytes / 1e9).toFixed(2)} GB allocated`
+        : " · unlimited") +
+      ` · ${(quota.protected_bytes / 1e9).toFixed(3)} GB kept forever`;
+    const meter = find("#allowance-meter");
+    meter.value = quota.max_bytes
+      ? Math.min(1, quota.used_bytes / quota.max_bytes)
+      : 0;
+    find("#allowance-status").textContent =
+      quota.error ||
+      (quota.phase === "compressing"
+        ? "Recompressing old footage locally. Current recordings may stop while space is recovered. Originals stay intact until a smaller replacement is validated."
+        : quota.blocked
+          ? "Recording blocked: storage is full or below the safety reserve. Increase the allowance, free space, or retry cleanup. Kept, current and unmanaged files cannot be automatically removed. The stopped clip remains saved."
+          : "Storage available. New recordings are allowed. Stopped sessions require a new start.");
+    const list = find("#allowance-alerts");
+    const signature = JSON.stringify(quota.alerts || []);
+    if (list.dataset.signature !== signature) {
+      list.dataset.signature = signature;
+      list.replaceChildren();
+      for (const alert of [...(quota.alerts || [])].reverse().slice(0, 5)) {
+        const row = document.createElement("li");
+        row.textContent =
+          new Date(alert.created_at).toLocaleString() + " · " + alert.message;
+        list.append(row);
+      }
+      if (!list.childElementCount) list.textContent = "No storage alerts.";
+    }
+  }
   function update() {
+    updateAllowance();
     window.dispatchEvent(new CustomEvent("spyder:media", { detail: media }));
     addCardActions();
     if (current === "camera-setup") {
@@ -588,7 +687,25 @@
         busy ||
         active() ||
         (window.spyderShowcase && input.id === "recording-segment");
-    find("#record-start").disabled = busy || active() || !selected.size;
+    const quotaBlocked = !!media.allowance?.blocked;
+    const quotaNotice = find("#recording-allowance-notice");
+    quotaNotice.hidden = !quotaBlocked;
+    quotaNotice.replaceChildren();
+    if (quotaBlocked) {
+      quotaNotice.append(
+        document.createTextNode(
+          active()
+            ? "Storage full: stopping and saving the current clip. "
+            : "Recording blocked until storage is resolved. ",
+        ),
+      );
+      const link = document.createElement("a");
+      link.href = "#system";
+      link.textContent = "Review storage in System";
+      quotaNotice.append(link);
+    }
+    find("#record-start").disabled =
+      busy || active() || !selected.size || quotaBlocked;
     find("#record-stop").disabled = busy || media.state !== "recording";
     find("#capture-tiled").disabled = busy || !selected.size;
     const library = find("#media-library");
@@ -628,6 +745,68 @@
           detail,
           download,
         );
+        if (
+          item.kind === "recording" &&
+          !item.archived &&
+          !window.spyderShowcase
+        ) {
+          const actions = document.createElement("div");
+          actions.className = "recording-item-actions";
+          const keep = button(
+            item.keep_forever ? "Kept forever · allow cleanup" : "Keep forever",
+            async () => {
+              keep.disabled = true;
+              try {
+                await request(
+                  `/api/media/${encodeURIComponent(item.id)}/keep`,
+                  { keep_forever: !item.keep_forever },
+                );
+                media = await readStatus();
+                update();
+              } catch (error) {
+                tell(error.message);
+                keep.disabled = false;
+              }
+            },
+          );
+          keep.setAttribute("aria-pressed", String(!!item.keep_forever));
+          actions.append(keep);
+          if (!item.keep_forever) {
+            const remove = button("Delete recording", () => {
+              remove.hidden = true;
+              const confirmation = document.createElement("span");
+              confirmation.textContent =
+                "Permanently delete this clip? Event attachments will also become unavailable. ";
+              const confirm = button("Delete permanently", async () => {
+                confirm.disabled = true;
+                try {
+                  await request(
+                    `/api/media/${encodeURIComponent(item.id)}/delete`,
+                  );
+                  media = await readStatus();
+                  update();
+                } catch (error) {
+                  tell(error.message);
+                  confirm.disabled = false;
+                }
+              });
+              const cancel = button("Cancel", () => {
+                confirmation.remove();
+                confirm.remove();
+                cancel.remove();
+                remove.hidden = false;
+              });
+              actions.append(confirmation, confirm, cancel);
+            });
+            actions.append(remove);
+          }
+          if (item.compressed) {
+            const badge = document.createElement("small");
+            badge.textContent = "Recompressed · reduced detail";
+            actions.append(badge);
+          }
+          row.append(actions);
+        }
         library.append(row);
       }
     }

@@ -319,3 +319,41 @@
 .recording-storage-fields button {
   flex: 0 1 auto;
 }
+
+#allowance-meter {
+  width: 100%;
+  height: 0.75rem;
+  accent-color: var(--accent, #be1a1a);
+}
+#allowance-form fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+#allowance-alerts {
+  max-height: 12rem;
+  overflow: auto;
+  padding-inline-start: 1.3rem;
+}
+#allowance-alerts li {
+  margin-block: 0.6rem;
+  overflow-wrap: anywhere;
+}
+.recording-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  grid-column: 1 / -1;
+}
+.recording-item-actions small {
+  color: var(--muted);
+}
+
+.media-item {
+  flex-wrap: wrap;
+}
+.media-item > .recording-item-actions {
+  flex: 1 0 100%;
+}

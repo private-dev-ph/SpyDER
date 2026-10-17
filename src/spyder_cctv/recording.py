@@ -17,6 +17,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .recording_allowance import RecordingAllowance
 from .recording_profiles import DEFAULT_SETTINGS, PROFILES, describe_settings, validate_settings
 from .video_encoder import H264Writer
 
@@ -50,6 +51,8 @@ class RecordingService:
         self._stopped_at = 0.0
         self._last_elapsed = 0.0
         self._frames = 0
+        self._disk_checked_at = 0.0
+        self._disk_free = None
         self._settings_path = self.output_dir / "recording-settings.json"
         self._settings = dict(DEFAULT_SETTINGS)
         try:
@@ -77,6 +80,7 @@ class RecordingService:
                 self._archive_paths[item_id] = directory
 
         self._closed = False
+        self.allowance = RecordingAllowance(self)
 
     def start(self, camera_ids: list[str]) -> dict[str, Any]:
         ids = self._validate_ids(camera_ids)
@@ -86,8 +90,23 @@ class RecordingService:
                 self._thread is not None and self._thread.is_alive()
             ):
                 raise RuntimeError("A recording is already active")
-            if shutil.disk_usage(self.output_dir).free < MIN_FREE_BYTES:
+            try:
+                free = shutil.disk_usage(self.output_dir).free
+            except OSError as error:
+                self.allowance.notify_full(
+                    "Recording storage is unavailable. Check the output drive before recording."
+                )
+                raise RuntimeError("Recording storage is unavailable") from error
+            if free < MIN_FREE_BYTES:
+                self.allowance.notify_full(
+                    "Local disk space is low. Recording is blocked until at least 64 MiB is free."
+                )
                 raise RuntimeError("Recording needs at least 64 MiB of free local storage")
+            if not self.allowance.permit():
+                raise RuntimeError(
+                    "Recording storage is full or unavailable. "
+                    "Resolve the allowance in System before recording."
+                )
             retained: list[str] = []
             try:
                 for camera_id in ids:
@@ -206,11 +225,21 @@ class RecordingService:
                 "height": self._profile["height"],
                 "fps": self._profile["fps"],
                 "storage": describe_settings(self._settings),
+                "allowance": self.allowance.snapshot(),
                 "profiles": PROFILES,
                 "segments_saved": self._segment_index,
                 "encoder": "Local FFmpeg · H.264 / MP4",
                 "error": self._error,
-                "items": [dict(item) for item in {**self._archive_items, **self._items}.values()],
+                "items": [
+                    dict(item)
+                    for item in {
+                        **{
+                            key: {**item, "archived": True}
+                            for key, item in self._archive_items.items()
+                        },
+                        **self._items,
+                    }.values()
+                ],
             }
 
     def configure(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -241,11 +270,44 @@ class RecordingService:
     def close(self, timeout: float = 10.0) -> None:
         with self._lock:
             self._closed = True
+        self.allowance.cancel()
         result = self.stop(timeout)
+        self.allowance.close()
         with self._lock:
             still_alive = self._thread is not None and self._thread.is_alive()
         if result["state"] == "stopping" or still_alive:
             raise RuntimeError("Recording writer did not stop within timeout")
+
+    def _recording_space_available(self) -> bool:
+        """Also check within catch-up batches after laptop sleep or a slow sampler."""
+        with self._lock:
+            if self._state != "recording":
+                return False
+        notice = None
+        try:
+            now = time.monotonic()
+            if self._disk_free is None or now - self._disk_checked_at >= 0.5:
+                self._disk_free = shutil.disk_usage(self.output_dir).free
+                self._disk_checked_at = now
+            free = self._disk_free
+        except OSError:
+            self.allowance.notify_full("Storage unavailable; attempting to save the current clip.")
+            notice = "Recording stopped: output storage unavailable; saving current clip"
+        else:
+            if free < MIN_FREE_BYTES:
+                self.allowance.notify_full(
+                    "Disk space is low. Saving the current clip. Free space to record again."
+                )
+                notice = "Recording saved and stopped: less than 64 MiB free"
+            elif not self.allowance.permit():
+                notice = "Recording saved and stopped: storage allowance is full or unavailable"
+        if notice is not None:
+            with self._lock:
+                self._stop_notice = notice
+                self._stopped_at = self._stopped_at or time.monotonic()
+                self._state = "stopping"
+            return False
+        return True
 
     def _write_loop(self) -> None:
         try:
@@ -271,10 +333,7 @@ class RecordingService:
                     self._release(camera_id)
                 if should_stop:
                     break
-                if shutil.disk_usage(self.output_dir).free < MIN_FREE_BYTES:
-                    with self._lock:
-                        self._stop_notice = "Recording saved and stopped: less than 64 MiB free"
-                        self._state = "stopping"
+                if not self._recording_space_available():
                     break
                 samples = self._samples(selected)
                 composite = self._compose(
@@ -290,9 +349,8 @@ class RecordingService:
                     + 1,
                 )
                 for _ in range(due):
-                    with self._lock:
-                        if self._state == "stopping":
-                            break
+                    if not self._recording_space_available():
+                        break
                     if self._writer is None:
                         self._open_writer()
                     self._writer.write(composite)
@@ -542,7 +600,8 @@ class RecordingService:
         items = {}
         for raw in raw_items:
             item = self._validated_catalog_item(raw, directory)
-            if item is not None:
+            if item is not None and item["id"] not in items:
+                # A valid committed catalog wins over a stale recovery journal.
                 items[item["id"]] = item
         return items
 
@@ -617,6 +676,11 @@ class RecordingService:
         }
         if duration is not None:
             item["duration_seconds"] = duration
+            if type(raw.get("keep_forever")) is bool:
+                item["keep_forever"] = raw["keep_forever"]
+            for flag in ("compression_attempted", "compressed"):
+                if type(raw.get(flag)) is bool:
+                    item[flag] = raw[flag]
             session_id = raw.get("session_id")
             try:
                 valid_session = (
@@ -633,11 +697,23 @@ class RecordingService:
                     codec="H.264",
                     **{key: profile[key] for key in ("width", "height", "fps", "bitrate_kbps")},
                 )
+        if item.get("compressed"):
+            for key, maximum in (
+                ("width", 1920),
+                ("height", 1080),
+                ("fps", 60),
+                ("bitrate_kbps", 2000),
+            ):
+                value = raw.get(key)
+                if type(value) in (int, float) and math.isfinite(value) and 0 < value <= maximum:
+                    item[key] = value
         return item
 
     def _save_catalog(self) -> None:
         data = json.dumps({"items": list(self._items.values())}, indent=2).encode("utf-8")
         self._write_atomic(self._manifest, data)
+        if hasattr(self, "allowance"):
+            self.allowance.invalidate_usage()
         for item_id in self._items:
             try:
                 (self.output_dir / f".{item_id}.recording.json").unlink(missing_ok=True)

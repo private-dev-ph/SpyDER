@@ -292,7 +292,7 @@ test("denied, dismissed, opted-out and showcase states do not repeatedly prompt"
   assert.equal(dismissed.window.spyderNotifications.desktopEnabled(), false);
   assert.match(
     dismissed.window.spyderNotifications.desktopStatus(),
-    /only when adding or using/,
+    /never prompt for permission automatically/,
   );
 });
 
@@ -311,4 +311,29 @@ test("notification polling forwards workflow activities without extra requests o
   assert.deepEqual(delivered[0].activities, activities);
   assert.equal(h.requests.length, 2);
   assert.equal(h.permissionCalls(), 0);
+});
+
+test("an active storage-full alert survives reload and is delivered once without permission prompts", async () => {
+  const delivered = [],
+    feed = createFeed((item) => delivered.push(item.id));
+  const alert = item("quota", {
+    source: "storage",
+    active: true,
+    camera_id: "system",
+  });
+  assert.equal(
+    feed.accept({
+      session_id: "server",
+      notifications: [item("history"), alert],
+    }).length,
+    1,
+  );
+  feed.accept({ session_id: "server", notifications: [alert] });
+  assert.deepEqual(delivered, ["quota"]);
+  const h = harness();
+  await h.flush();
+  await h.poll([alert]);
+  assert.equal(h.permissionCalls(), 0);
+  assert.equal(h.desktop.length, 0);
+  assert.equal(h.body.children[0].children.length, 1);
 });

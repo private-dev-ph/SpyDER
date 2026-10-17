@@ -47,8 +47,8 @@ at each file boundary, and stale sampling uses repeated frames to preserve timin
 Files are written to temporary names, finalized with MP4 playback metadata, renamed
 and added to the catalog atomically. A failed encoder stops recording rather than
 silently falling back to a much larger MJPEG file. The recorder stops when free
-space drops below 64 MiB and attempts to save the current clip. Nothing is deleted
-automatically. Keep sufficient free space and an external retention/backup plan.
+space drops below 64 MiB and attempts to save the current clip. Automatic cleanup is off by default. You can opt into a recording allowance policy
+in System, described below. Keep sufficient free space and an external backup plan.
 The recording library can play or download each completed clip.
 
 ## Cloudflare showcase
@@ -85,3 +85,57 @@ See [FFmpeg H.264 options](https://ffmpeg.org/ffmpeg-codecs.html#libx264),
 [MP4 muxing](https://ffmpeg.org/ffmpeg-formats.html#mov_002c-mp4_002c-ismv),
 [the bundled local executable](https://github.com/imageio/imageio-ffmpeg), and
 [the browser recording specification](https://www.w3.org/TR/mediastream-recording/).
+
+
+## Recording storage allowance
+
+In **System → Recording storage allowance**, enter a maximum in decimal GB and
+choose what happens when it fills. Zero means unlimited (the default); a finite
+allowance must be at least 64 MiB. Saving a policy applies it immediately, including
+its selected cleanup action. The allowance counts MP4, AVI and WebM files in the
+**active** output folder, including unfinished and unmanaged video files. JPEG
+captures, models and previous output folders are excluded. Policies are saved per
+active output folder. A corrupt policy blocks recording until repaired in System.
+
+- **Stop & save:** stop the current recording and save its final clip. New manual
+  and workflow starts are refused until space becomes available or the allowance
+  is raised. Freeing space never automatically restarts a stopped session.
+- **Recompress oldest:** try each eligible finalized MP4 once, oldest first, using
+  local H.264 at up to 640 × 360, 3 fps and 64 kbit/s (32 kbit/s for Archive clips).
+  This is lossy and reduces evidence detail. Recompression uses one encoder thread,
+  requires temporary disk space, and can take time. The original is replaced only
+  after playback/duration validation and at least 5% size savings. A failed,
+  cancelled or unhelpful conversion leaves the original intact. If space remains
+  insufficient, recording stays stopped. It never falls back to deleting files.
+- **Delete oldest:** permanently remove oldest eligible finalized recordings until
+  the allowance has room. Event records remain, but deleted clip attachments become
+  unavailable. Choose this policy only if automatic rotation is intended.
+
+In **Recordings**, mark a clip **Keep forever** to exclude it from both automatic
+recompression and deletion. This flag persists after restart and also blocks manual
+deletion until you choose **allow cleanup**. Protection applies to that clip, not
+all past/future clips in its recording session. Previously configured output folders
+are read-only in this library and are never cleaned automatically. Unknown video
+files count toward usage but are never automatically altered. The current or most
+recent clip is excluded from automatic cleanup to preserve the stopped footage.
+
+The recorder keeps a 4 MiB allowance margin for finalization and checks physical
+free space independently (64 MiB reserve). This is a software allowance rather
+than a filesystem hard quota: buffered encoding, metadata and concurrent external
+writes can cause small overshoots. Choose a budget larger than a normal clip for
+continuous recycling; shorten clip length in Recordings if needed. Removing a drive,
+power loss or external software filling all physical space can prevent a final
+save; no application can guarantee persistence when its disk is unavailable.
+
+**Check space / retry cleanup** reevaluates space and retries failed maintenance.
+Use it after freeing disk space or repairing permissions. Kept clips are never
+unprotected by retry. Completed successful/unhelpful recompression is not repeated.
+The System page shows usage, protection totals, maintenance state and recent alerts.
+
+Storage-full notifications are generated automatically and saved locally. An open
+SpyDER page displays them in-app; desktop/browser delivery additionally requires
+**Enable desktop alerts**, browser permission and an open page. A storage event
+never opens a permission prompt. If the page was closed, the pending full alert is
+shown on reconnection. Desktop alerts cannot be delivered by a closed browser page.
+The Cloudflare showcase retains its separate 128 MiB tab buffer and does not expose
+Python filesystem retention controls.

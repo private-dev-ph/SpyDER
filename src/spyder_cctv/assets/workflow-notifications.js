@@ -30,7 +30,11 @@
           session = data.session_id;
           seen.clear();
           items.forEach((item) => seen.add(item.id));
-          return [];
+          const storage = items.filter(
+            (item) => item.source === "storage" && item.active === true,
+          );
+          storage.forEach(deliver);
+          return storage;
         }
         const fresh = [];
         for (const item of items) {
@@ -73,7 +77,7 @@
   stack.className = "workflow-alerts";
   stack.setAttribute("role", "log");
   stack.setAttribute("aria-live", "polite");
-  stack.setAttribute("aria-label", "Workflow notifications");
+  stack.setAttribute("aria-label", "SpyDER notifications");
   document.body.append(stack);
   function show(item) {
     const card = document.createElement("article"),
@@ -112,7 +116,8 @@
         });
         alert.onclick = () => {
           window.focus();
-          location.hash = "#control-room";
+          location.hash =
+            item.source === "storage" ? "#system" : "#control-room";
           alert.close();
         };
       } catch {
@@ -157,7 +162,7 @@
       return "Desktop notifications enabled for this browser. Keep a SpyDER page open to receive alerts.";
     return window.Notification.permission === "granted"
       ? "Browser permission granted; desktop notifications are switched off."
-      : "Notification permission is requested only when adding or using a Notification node.";
+      : "Enable desktop alerts here or through a Notification node. Storage limits never prompt for permission automatically.";
   }
   function refreshControls() {
     for (const button of document.querySelectorAll?.(
@@ -296,6 +301,12 @@
       poll();
     }
   });
-  window.spyderNotifications = { desktopEnabled, desktopStatus, useNode };
+  window.spyderNotifications = {
+    desktopEnabled,
+    desktopStatus,
+    useNode,
+    refresh: refreshControls,
+  };
+  refreshControls();
   poll();
 })();

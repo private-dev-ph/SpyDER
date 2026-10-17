@@ -85,9 +85,12 @@ def test_tiled_recording_reshapes_and_decodes(rig):
     service.start(["red"])
     wait_for(lambda: service.status()["frames"] >= 5)
     service.select(["red", "green"])
-    wait_for(lambda: service.status()["frames"] >= 15)
+    wait_for(lambda: service.manager.get_worker("green").jpeg() is not None)
+    two_start = service.status()["frames"]
+    wait_for(lambda: service.status()["frames"] >= two_start + 10)
     service.select(["green"])
-    wait_for(lambda: service.status()["frames"] >= 25)
+    single_start = service.status()["frames"]
+    wait_for(lambda: service.status()["frames"] >= single_start + 10)
     assert service.stop()["state"] == "idle"
 
     item = service.status()["items"][-1]
@@ -95,7 +98,7 @@ def test_tiled_recording_reshapes_and_decodes(rig):
     capture = cv2.VideoCapture(str(path))
     assert capture.isOpened()
     frames = []
-    while len(frames) < 30:
+    while len(frames) < 500:
         ok, frame = capture.read()
         if not ok:
             break
@@ -108,10 +111,17 @@ def test_tiled_recording_reshapes_and_decodes(rig):
     if center[:, :, 2].mean() < center[:, :, 1].mean() * 2:
         center = frames[1][height // 3 : height * 2 // 3]
     assert center[:, :, 2].mean() > center[:, :, 1].mean() * 2
-    two = frames[10]
-    middle = two[height // 3 : height * 2 // 3]
-    assert middle[:, : width // 2, 2].mean() > middle[:, : width // 2, 1].mean() * 2
-    assert middle[:, width // 2 :, 1].mean() > middle[:, width // 2 :, 2].mean() * 2
+
+    # Encoder startup/catch-up can repeat frames; verify a real two-camera stage,
+    # rather than assuming that it always occupies frame 10 on every machine.
+    def has_both(frame):
+        middle = frame[height // 3 : height * 2 // 3]
+        return (
+            middle[:, : width // 2, 2].mean() > middle[:, : width // 2, 1].mean() * 2
+            and middle[:, width // 2 :, 1].mean() > middle[:, width // 2 :, 2].mean() * 2
+        )
+
+    assert any(has_both(frame) for frame in frames)
     middle = frames[-1][height // 3 : height * 2 // 3]
     assert middle[:, :, 1].mean() > middle[:, :, 2].mean() * 2
     assert item["size_bytes"] == path.stat().st_size
@@ -363,11 +373,18 @@ def test_completed_clips_survive_later_encoder_failure(rig, monkeypatch):
 
 
 def test_slow_sampling_preserves_elapsed_video_time(rig, monkeypatch):
+    from types import SimpleNamespace
+
     _, service, _ = rig
     original = service._samples
+    clock = [100.0]
+    # Advance capture time deterministically; host disk/encoder load must not
+    # decide whether the catch-up algorithm preserves the sampled timeline.
+    monkeypatch.setattr(recording_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
     def slow(ids):
-        time.sleep(0.35)
+        clock[0] += 0.35
+        time.sleep(0.01)
         return original(ids)
 
     monkeypatch.setattr(service, "_samples", slow)
