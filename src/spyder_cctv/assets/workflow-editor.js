@@ -298,6 +298,12 @@
       if (n.bindings && !Object.keys(n.bindings).length) delete n.bindings;
     return removed;
   }
+  function formatNodeStatus(status) {
+    const timestamp = status.last_run_at ? ` · ${status.last_run_at}` : "";
+    if (status.state === "error") return `Last run: error · ${status.error || "Unknown error"}${timestamp}`;
+    if (status.state === "skipped") return `Last run: skipped · ${status.input_count || 0} in / ${status.output_count || 0} out${timestamp}`;
+    return `Last run: OK · ${status.input_count || 0} in / ${status.output_count || 0} out${timestamp}`;
+  }
   const clamp = (v) =>
     Math.max(0, Math.min(5000, Number.isFinite(+v) ? +v : 0));
   const VIEW_MIN = 0.25,
@@ -326,6 +332,22 @@
           : "detections";
   const inputType = (e, nodes) =>
     e.input || outputType(nodes.find((n) => n.id === e.from));
+  function duplicateNode(graph, selectedId, offset = 36) {
+    const source = graph.nodes.find((item) => item.id === selectedId);
+    if (!source || graph.nodes.length >= 64) return null;
+    const copy = clone(source), ids = new Set(graph.nodes.map((item) => item.id));
+    const stem = `${source.id}-copy`.slice(0, 54);
+    copy.id = stem;
+    for (let index = 1; ids.has(copy.id); index++) copy.id = `${stem}-${index}`;
+    copy.x = clamp(source.x + offset);
+    copy.y = clamp(source.y + offset);
+    if (copy.bindings)
+      for (const binding of Object.values(copy.bindings))
+        if (binding?.node === source.id) binding.node = copy.id;
+    graph.nodes.push(copy);
+    pruneBindings(graph);
+    return copy;
+  }
   function edgeFor(from, to, nodes) {
     const input = outputType(nodes.find((n) => n.id === from));
     return input === "detections" ? { from, to } : { from, to, input };
@@ -437,14 +459,19 @@
         throw Error("Invalid workflow node or parameter.");
       ids.add(n.id);
     }
-    for (const e of graph.edges)
-      if (
-        !e ||
-        !["from,to", "from,input,to"].includes(Object.keys(e).sort().join()) ||
-        typeof e.from !== "string" ||
-        typeof e.to !== "string"
-      )
+    for (let index = 0; index < graph.edges.length; index++) {
+      const edge = graph.edges[index];
+      if (!edge || typeof edge.from !== "string" || typeof edge.to !== "string" ||
+          (edge.input !== undefined && typeof edge.input !== "string") ||
+          (edge.label !== undefined && (typeof edge.label !== "string" || edge.label.length > 80)))
         throw Error("Invalid workflow connection.");
+      graph.edges[index] = {
+        from: edge.from,
+        to: edge.to,
+        ...(edge.input ? { input: edge.input } : {}),
+        ...(edge.label ? { label: edge.label } : {}),
+      };
+    }
     for (const n of graph.nodes)
       if (n.type === "event")
         n.params = { ...clone(TYPES.event.params), ...n.params };
@@ -490,7 +517,9 @@
       if (!TYPES[n.type]) errors.push(`Unknown node type: ${n.type}`);
     const out = new Map(nodes.map((n) => [n.id, []]));
     for (const e of graph?.edges || [])
-      if (!ids.has(e.from) || !ids.has(e.to))
+      if (e.label !== undefined && (typeof e.label !== "string" || e.label.length > 80))
+        errors.push("Connection labels must be plain text up to 80 characters.");
+      else if (!ids.has(e.from) || !ids.has(e.to))
         errors.push(`Edge references missing node: ${e.from} → ${e.to}`);
       else if (e.from === e.to) errors.push("A node cannot connect to itself.");
       else if (
@@ -700,6 +729,7 @@
       canvasDelta,
       canvasPoint,
       node,
+      duplicateNode,
       validate,
       faceTemplate,
       insightfaceTemplate,
@@ -780,6 +810,11 @@
         detectorMessage = "",
         detectorBusy = "",
         detectorController,
+        debugTimer = 0,
+        debugController = null,
+        debugStates = {},
+        copiedNode = null,
+        pasteCount = 0,
         importGeneration = 0;
       let activationReview = null,
         activationBusy = false,
@@ -887,7 +922,7 @@
           edges
             .map(
               (e) =>
-                `<li>${esc(TYPES[graph.nodes.find((x) => x.id === (e.to === n.id ? e.from : e.to))?.type]?.label)} | ${esc(inputType(e, graph.nodes))}<button class="button secondary" data-delete-edge="${esc(e.from)}|${esc(e.to)}">Disconnect</button></li>`,
+                `<li>${esc(TYPES[graph.nodes.find((x) => x.id === (e.to === n.id ? e.from : e.to))?.type]?.label)} | ${esc(inputType(e, graph.nodes))}<button class="button secondary" data-delete-edge="${esc(e.from)}|${esc(e.to)}">Disconnect</button><label>Label<input data-edge-label="${esc(e.from)}|${esc(e.to)}" maxlength="80" value="${esc(e.label || "")}" placeholder="Optional label"></label></li>`,
             )
             .join("") || "<li>No connections</li>";
         const options = (direction) =>
@@ -1474,7 +1509,7 @@
         candidate.edges = candidate.edges.filter(
           (e) => e.from !== original.from || e.to !== original.to,
         );
-        const moved = edgeFor(from, to, candidate.nodes),
+        const moved = { ...edgeFor(from, to, candidate.nodes), ...(original.label ? { label: original.label } : {}) },
           candidateTarget = candidate.nodes.find((n) => n.id === to);
         if (
           candidateTarget?.type === "detections" &&
@@ -1675,7 +1710,7 @@
                   : ["camera", "model", "classifier"].includes(n.type)
                     ? ""
                     : `<button class="we-port we-port-in" data-port="in" data-input="detections" aria-label="Connect to ${esc(TYPES[n.type]?.label || n.type)} input"></button>`;
-            return `<article data-node="${esc(n.id)}" tabindex="0" aria-label="${esc(TYPES[n.type]?.label || n.type)} node. Double-click to edit settings." class="we-node we-node-${esc(n.type)} ${n.id === selected ? "selected" : ""}">${ports}<b>${esc(TYPES[n.type]?.label || n.type)}</b><small>${esc(nodeSummary(n))}</small>${n.type === "preview" ? `<section class="we-preview" data-preview="${esc(n.id)}" aria-label="Live workflow preview"><div class="we-preview-screen"><canvas width="640" height="360" aria-label="Camera feed with workflow overlays"></canvas><span class="we-preview-placeholder">Preview paused</span></div><div class="we-preview-controls"><button type="button" data-preview-toggle aria-pressed="false">Start preview</button><label>Camera<select data-preview-camera aria-label="Preview camera"></select></label></div><p class="we-preview-status" role="status">Connect a Camera or detection branch.</p></section>` : `<button class="we-port we-port-out we-port-${outputType(n)}" data-port="out" aria-label="Connect from ${esc(TYPES[n.type]?.label || n.type)} output"></button>`}</article>`;
+            return `<article data-node="${esc(n.id)}" tabindex="0" aria-label="${esc(TYPES[n.type]?.label || n.type)} node. Double-click to edit settings." class="we-node we-node-${esc(n.type)} ${n.id === selected ? "selected" : ""}">${ports}<b>${esc(TYPES[n.type]?.label || n.type)}</b><small>${esc(nodeSummary(n))}</small>${debugStates[graph.id]?.nodes?.[n.id] ? `<small class="we-node-status">${esc(formatNodeStatus(debugStates[graph.id].nodes[n.id]))}</small>` : ""}${n.type === "preview" ? `<section class="we-preview" data-preview="${esc(n.id)}" aria-label="Live workflow preview"><div class="we-preview-screen"><canvas width="640" height="360" aria-label="Camera feed with workflow overlays"></canvas><span class="we-preview-placeholder">Preview paused</span></div><div class="we-preview-controls"><button type="button" data-preview-toggle aria-pressed="false">Start preview</button><label>Camera<select data-preview-camera aria-label="Preview camera"></select></label></div><p class="we-preview-status" role="status">Connect a Camera or detection branch.</p></section>` : `<button class="we-port we-port-out we-port-${outputType(n)}" data-port="out" aria-label="Connect from ${esc(TYPES[n.type]?.label || n.type)} output"></button>`}</article>`;
           })
           .join("");
         const canvasWidth = Math.max(
@@ -1693,7 +1728,7 @@
         const paths = graph.edges
           .map(
             (e) =>
-              `<g class="we-edge ${selectedEdge === `${e.from}|${e.to}` ? "selected" : ""}"><path class="we-wire-${esc(inputType(e, graph.nodes))}" data-wire="${esc(e.from)}|${esc(e.to)}" d="${wirePath(e)}"/><path class="we-wire-hit" data-wire="${esc(e.from)}|${esc(e.to)}" d="${wirePath(e)}"/>${wireActions(e)}</g>`,
+              `<g class="we-edge ${selectedEdge === `${e.from}|${e.to}` ? "selected" : ""}"><path class="we-wire-${esc(inputType(e, graph.nodes))}" data-wire="${esc(e.from)}|${esc(e.to)}" d="${wirePath(e)}"/><path class="we-wire-hit" data-wire="${esc(e.from)}|${esc(e.to)}" d="${wirePath(e)}"/>${e.label ? `<text class="we-wire-label" x="${canvasPadding + (clamp(graph.nodes.find((n) => n.id === e.from)?.x) + nodeSize(graph.nodes.find((n) => n.id === e.from)).width + clamp(graph.nodes.find((n) => n.id === e.to)?.x)) / 2}" y="${canvasPadding + (clamp(graph.nodes.find((n) => n.id === e.from)?.y) + 38 + clamp(graph.nodes.find((n) => n.id === e.to)?.y) + 38) / 2 - 8}">${esc(e.label)}</text>` : ""}${wireActions(e)}</g>`,
           )
           .join("");
         const params = mappedFields(selectedNode);
@@ -1708,7 +1743,7 @@
                 "",
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
-        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><div class="we-toolbar-identity"><label>Workflow<select data-workflow>${workflows.map((w) => `<option value="${esc(w.id)}" ${w.id === graph.id ? "selected" : ""}>${esc(w.name)}</option>`).join("")}<option value="__new">New workflow</option></select></label><label>Name<input data-name value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button class="button secondary" data-insightface-template>InsightFace notification template</button><button class="button secondary" data-template>Use Face event template</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${demo || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
+        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><div class="we-toolbar-identity"><label>Workflow<select data-workflow>${workflows.map((w) => `<option value="${esc(w.id)}" ${w.id === graph.id ? "selected" : ""}>${esc(w.name)}</option>`).join("")}<option value="__new">New workflow</option></select></label><label>Name<input data-name value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button class="button secondary" data-insightface-template>InsightFace notification template</button><button class="button secondary" data-template>Use Face event template</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${demo || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
           events
             .slice(-5)
             .reverse()
@@ -1733,15 +1768,21 @@
                   "",
                 )}<button class="button secondary" data-cancel-reconnect>Cancel</button></div>`
             : ""
-        }<div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div><div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3>${settingsNode ? "<p>Settings open in dialog.</p>" : params}<button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || errors.map(esc).join(" ")}</p><p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
+        }<div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div><div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3>${settingsNode ? "<p>Settings open in dialog.</p>" : params}<button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy selected node</button><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || (errors.length ? `Workflow has ${errors.length} validation issue(s). Review highlighted nodes before activation.` : "")}</p>${errors.length ? `<ul class="we-validation-summary">${errors.map((error) => { const id = graph.nodes.find((item) => item.id && error.includes(item.id))?.id; return `<li>${esc(error)}${id ? ` <button type="button" data-focus-node="${esc(id)}">Review ${esc(TYPES[graph.nodes.find((item) => item.id === id)?.type]?.label || "node")} ${esc(id)}</button>` : ""}</li>`; }).join("")}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>` : ""}<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
         if (retainedCanvas) {
           const replacement = root.querySelector("[data-canvas]");
           replacement?.replaceWith?.(retainedCanvas);
-          retainedCanvas
-            .querySelectorAll?.("[data-node]")
-            .forEach((card) =>
-              card.classList.toggle("selected", card.dataset.node === selected),
-            );
+          retainedCanvas.querySelectorAll?.("[data-node]").forEach((card) => {
+            card.classList.toggle("selected", card.dataset.node === selected);
+            const status = statusFor(card.dataset.node),
+              existing = card.querySelector(".we-node-status");
+            if (status) {
+              const line = existing || document.createElement("small");
+              line.className = "we-node-status";
+              line.textContent = formatNodeStatus(status);
+              if (!existing) card.appendChild(line);
+            } else existing?.remove?.();
+          });
         }
         const positionedCanvas = root.querySelector("[data-canvas]");
         if (positionedCanvas) {
@@ -1775,7 +1816,7 @@
         if (settings)
           root.insertAdjacentHTML(
             "beforeend",
-            `<div class="we-modal-backdrop" data-settings-modal><section class="we-modal we-node-modal" role="dialog" aria-modal="true" aria-labelledby="we-settings-title"><header><h3 id="we-settings-title">${esc(TYPES[settings.type]?.label || settings.type)} settings</h3><button data-close-settings aria-label="Close settings">Close</button></header><p data-signal-status role="status">${esc(notice)}</p><div class="we-node-layout">${signalPanel(settings, "in")}<section class="we-node-settings" aria-label="Node settings">${selected === settings.id ? params : ""}${nodeConnections(settings)}${settings.type === "code" ? `<div class="we-code-actions"><button class="button secondary" data-code-test ${demo ? "disabled" : ""}>Test code locally</button><span role="status">${esc(codeError)}</span></div>${testPane ? `<section data-test-pane><p>Runs locally. Sample detections are editable.</p><label>Sample detections JSON<textarea data-test-input>${esc(JSON.stringify([{ label: "person", confidence: 0.93, bbox: [20, 30, 90, 180] }], null, 2))}</textarea></label><button class="button primary" data-run-test ${testRunning ? "disabled" : ""}>${testRunning ? "Running…" : "Run test"}</button><pre data-test-result role="status"></pre></section>` : ""}` : ""}</section>${signalPanel(settings, "out")}</div><button class="button secondary" data-close-settings>Done</button></section></div>`,
+            `<div class="we-modal-backdrop" data-settings-modal><section class="we-modal we-node-modal" role="dialog" aria-modal="true" aria-labelledby="we-settings-title"><header><h3 id="we-settings-title">${esc(TYPES[settings.type]?.label || settings.type)} settings</h3><button data-close-settings aria-label="Close settings">Close</button></header>${demo ? '<p class="we-debug-unavailable" role="status">Latest node status unavailable in showcase.</p>' : statusFor(settings.id) ? `<p class="we-node-latest-status" role="status">${esc(formatNodeStatus(statusFor(settings.id)))} · ${esc(statusFor(settings.id).last_run_at || "")}</p>` : '<p class="we-node-latest-status" role="status">No recent run status available.</p>'}<p data-signal-status role="status">${esc(notice)}</p><div class="we-node-layout">${signalPanel(settings, "in")}<section class="we-node-settings" aria-label="Node settings">${selected === settings.id ? params : ""}${nodeConnections(settings)}${settings.type === "code" ? `<div class="we-code-actions"><button class="button secondary" data-code-test ${demo ? "disabled" : ""}>Test code locally</button><span role="status">${esc(codeError)}</span></div>${testPane ? `<section data-test-pane><p>Runs locally. Sample detections are editable.</p><label>Sample detections JSON<textarea data-test-input>${esc(JSON.stringify([{ label: "person", confidence: 0.93, bbox: [20, 30, 90, 180] }], null, 2))}</textarea></label><button class="button primary" data-run-test ${testRunning ? "disabled" : ""}>${testRunning ? "Running…" : "Run test"}</button><pre data-test-result role="status"></pre></section>` : ""}` : ""}</section>${signalPanel(settings, "out")}</div><button class="button secondary" data-close-settings>Done</button></section></div>`,
           );
         previewController?.sync();
         if (wireDrag) {
@@ -2183,6 +2224,41 @@
               )
               .join("") || "<p>No recent events.</p>";
       }
+      function visibleForStatus() {
+        return mounted && !demo && document.visibilityState !== "hidden" && !container.hidden;
+      }
+      async function pollDebug() {
+        if (!visibleForStatus()) return;
+        const request = new AbortController();
+        debugController = request;
+        try {
+          const response = await fetch("/api/workflows/debug", {
+            cache: "no-store",
+            signal: request.signal,
+          });
+          if (!response.ok) throw Error("Workflow debug data unavailable.");
+          const data = await response.json();
+          if (!visibleForStatus()) return;
+          const nextStates = data.workflows || {};
+          if (JSON.stringify(nextStates) !== JSON.stringify(debugStates)) {
+            debugStates = nextStates;
+            render(true);
+          }
+        } catch {
+          // Debug status is optional and does not affect workflow editing.
+        } finally {
+          if (debugController === request) debugController = null;
+          if (visibleForStatus()) debugTimer = setTimeout(pollDebug, 5000);
+        }
+      }
+      const visibilityChanged = () => {
+        clearTimeout(debugTimer);
+        debugTimer = 0;
+        debugController?.abort();
+        debugController = null;
+        if (visibleForStatus()) pollDebug();
+      };
+      function statusFor(id) { return debugStates[graph.id]?.nodes?.[id]; }
       async function poll(schedule = true) {
         if (!mounted || demo) return;
         controller?.abort();
@@ -2232,6 +2308,19 @@
       }
       const input = (e) => {
         const t = e.target;
+        if (t.matches?.("[data-edge-label]")) {
+          const [from, to] = t.dataset.edgeLabel.split("|");
+          const edge = graph.edges.find((item) => item.from === from && item.to === to);
+          if (edge) {
+            const label = String(t.value).slice(0, 80);
+            if (label) edge.label = label;
+            else delete edge.label;
+            mark();
+            const summary = root.querySelector(`.we-edge[data-edge="${from}|${to}"]`);
+            if (summary) summary.textContent = label;
+          }
+          return;
+        }
         if (t.matches("[data-palette-search]")) {
           paletteQuery = t.value;
           const palette = root.querySelector(".we-palette");
@@ -2350,6 +2439,10 @@
           libraryPageNumber = 0;
           removingModel = "";
           refreshLibraryResults();
+          return;
+        }
+        if (t.matches("[data-edge-label]")) {
+          render(true);
           return;
         }
         if (t.matches("[data-import-file]")) {
@@ -2692,7 +2785,20 @@
           setViewScale(viewScale - 0.1);
         else if (b.dataset.zoomReset !== undefined) setViewScale(1);
         else if (b.dataset.center !== undefined) centerCanvas();
-        else if (b.dataset.undo !== undefined) restore(undoStack, redoStack);
+        else if (b.dataset.copyNode !== undefined) {
+          copiedNode = graph.nodes.find((item) => item.id === selected) ? clone(graph.nodes.find((item) => item.id === selected)) : null;
+          render(true);
+        } else if (b.dataset.pasteNode !== undefined) {
+          if (!copiedNode || graph.nodes.length >= 64) return;
+          remember();
+          const fragment = { nodes: [clone(copiedNode)], edges: [] };
+          const pasted = duplicateNode(fragment, copiedNode.id, 36 * (pasteCount + 1));
+          pasteCount++;
+          if (!pasted) return;
+          graph.nodes.push(pasted); pruneBindings(graph); selected = pasted.id; mark(); render(true);
+        } else if (b.dataset.focusNode !== undefined) {
+          selected = b.dataset.focusNode; render(true); root.querySelector(`[data-node="${selected}"]`)?.focus?.();
+        } else if (b.dataset.undo !== undefined) restore(undoStack, redoStack);
         else if (b.dataset.redo !== undefined) restore(redoStack, undoStack);
         else if (b.dataset.add) add(b.dataset.add);
         else if (b.dataset.codeTest !== undefined) {
@@ -2839,7 +2945,7 @@
       const focusin = (e) => {
         if (
           e.target.matches?.(
-            "[data-param],[data-rule],[data-camera],[data-name]",
+            "[data-param],[data-rule],[data-camera],[data-name],[data-edge-label]",
           )
         )
           remember();
@@ -2943,7 +3049,18 @@
           (e.ctrlKey || e.metaKey) &&
           !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName || "")
         ) {
-          if (e.key.toLowerCase() === "z") {
+          if (e.key.toLowerCase() === "c" && selected) {
+            copiedNode = clone(graph.nodes.find((item) => item.id === selected));
+            pasteCount = 0;
+            return;
+          } else if (e.key.toLowerCase() === "v" && copiedNode && graph.nodes.length < 64) {
+            e.preventDefault();
+            const fragment = { nodes: [clone(copiedNode)], edges: [] };
+            const copy = duplicateNode(fragment, copiedNode.id, 36 * (pasteCount + 1));
+            pasteCount++;
+            if (!copy) return;
+            remember(); graph.nodes.push(copy); pruneBindings(graph); selected = copy.id; mark(); render(true);
+          } else if (e.key.toLowerCase() === "z") {
             e.preventDefault();
             restore(undoStack, redoStack);
           } else if (e.key.toLowerCase() === "y") {
@@ -3362,6 +3479,7 @@
           else openModelDetails.delete(e.target.dataset.modelDetails);
         }
       };
+      document.addEventListener("visibilitychange", visibilityChanged);
       root.addEventListener("toggle", toggleDetails, true);
       root.addEventListener("input", input);
       root.addEventListener("change", change);
@@ -3394,8 +3512,13 @@
         loadDetectorCatalog();
       }
       poll();
+      pollDebug();
       dispose = () => {
         mounted = false;
+        clearTimeout(debugTimer);
+        debugController?.abort();
+        debugController = null;
+        document.removeEventListener("visibilitychange", visibilityChanged);
         previewController?.destroy();
         const activePointer =
           pointerDrag?.pointerId ?? wireDrag?.pointerId ?? panDrag?.pointerId;

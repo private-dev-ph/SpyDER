@@ -8,6 +8,7 @@ const {
   insightfaceTemplate,
   validate,
   node,
+  duplicateNode,
   clamp,
   edgeFor,
   accepts,
@@ -95,6 +96,32 @@ test("new node parameters are independent and coordinates stay bounded", () => {
   assert.equal(clamp(NaN), 0);
 });
 
+
+test("copying a node creates independent bounded draft without connections", () => {
+  const original = node("filter", 4990, 4990);
+  original.params.label = "person";
+  const graph = { nodes: [original, node("cooldown")], edges: [{ from: original.id, to: "other" }] };
+  const copy = duplicateNode(graph, original.id);
+  assert.ok(copy);
+  assert.notEqual(copy.id, original.id);
+  assert.deepEqual([copy.x, copy.y], [5000, 5000]);
+  assert.notEqual(copy.params, original.params);
+  assert.deepEqual(graph.edges, [{ from: original.id, to: "other" }]);
+  assert.equal(duplicateNode(graph, "missing"), null);
+});
+
+test("connection labels survive export and import, while unsupported edge fields are stripped", () => {
+  const graph = faceTemplate();
+  graph.edges[0].label = "Primary detection branch";
+  graph.edges[0].internal_debug = "discard me";
+  const restored = decodeWorkflow(encodeWorkflow(graph));
+  assert.equal(restored.edges[0].label, "Primary detection branch");
+  assert.equal(restored.edges[0].internal_debug, undefined);
+  const invalid = faceTemplate();
+  invalid.edges[0].label = "x".repeat(81);
+  assert.throws(() => decodeWorkflow(encodeWorkflow(invalid)), /Invalid workflow connection/);
+});
+
 test("workflow viewport clamps zoom and converts pointer coordinates to canvas units", () => {
   assert.equal(clampViewScale(0.01), 0.25);
   assert.equal(clampViewScale(3), 2);
@@ -109,6 +136,34 @@ test("event nodes expose safe default naming, attachment and duration settings",
   assert.match(source, /\{workflow\}, \{camera\}, \{date\}, \{time\}, \{node\}, \{kind\}, \{label\}/);
   assert.match(source, /data-param="attachment"/);
   assert.match(source, /data-param="duration_seconds" type="number" min="1" max="300"/);
+});
+
+
+test("toolbar node copy and paste stays a disabled draft", async () => {
+  const h = mountHarness();
+  await h.flush();
+  addNode(h, "filter");
+  const before = (h.root.innerHTML.match(/data-node="/g) || []).length;
+  h.root.dispatch("click", h.target("button", { copyNode: "" }));
+  h.root.dispatch("click", h.target("button", { pasteNode: "" }));
+  assert.equal((h.root.innerHTML.match(/data-node="/g) || []).length, before + 1);
+  assert.match(h.root.innerHTML, /Workflow disabled/);
+  assert.equal(h.calls.some((call) => call.options?.method === "POST"), false);
+  h.window.spyderWorkflows.unmount();
+});
+
+test("latest status endpoint polls in editor and showcase explains status is unavailable", async () => {
+  const editor = mountHarness();
+  await editor.flush();
+  assert.ok(editor.calls.some((call) => call.url === "/api/workflows/debug"));
+  editor.window.spyderWorkflows.unmount();
+  const showcase = mountHarness({ showcase: true });
+  await showcase.flush();
+  const showcaseNode = addNode(showcase, "filter");
+  showcase.root.dispatch("dblclick", showcase.target("[data-node]", { node: showcaseNode }));
+  assert.match(showcase.root.innerHTML, /Latest node status unavailable in showcase/);
+  assert.equal(showcase.calls.some((call) => call.url === "/api/workflows/debug"), false);
+  showcase.window.spyderWorkflows.unmount();
 });
 
 test("zoom controls change canvas scale in place and clamp supported range", async () => {
@@ -2629,6 +2684,8 @@ test("toolbar rows, grouped scrollable palette and camera section render indepen
     h.root.innerHTML,
     /we-toolbar-identity[\s\S]*data-workflow[\s\S]*data-name[\s\S]*we-toolbar-actions[\s\S]*we-activation-main[\s\S]*data-activate[\s\S]*data-workflow-state/,
   );
+  assert.match(h.root.innerHTML, /data-copy-node/);
+  assert.match(h.root.innerHTML, /data-paste-node/);
   assert.match(h.root.innerHTML, /data-palette-search/);
   assert.match(h.root.innerHTML, /data-palette-group="Inputs &amp; models"/);
   assert.match(
