@@ -1417,3 +1417,36 @@
     gap: 7px;
   }
 }
+
+.we-wire-label {
+  fill: var(--text-muted, #687085);
+  font-size: 12px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--surface, #fff);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.we-node-status,
+.we-node-latest-status,
+.we-debug-unavailable {
+  display: block;
+  max-width: 260px;
+  color: var(--text-muted, #687085);
+  overflow-wrap: anywhere;
+}
+.we-validation-summary {
+  padding-left: 18px;
+  color: var(--danger, #a32626);
+}
+.we-validation-summary button {
+  color: inherit;
+  text-align: left;
+}
+.we-node-connections li {
+  flex-wrap: wrap;
+}
+.we-node-connections li label {
+  flex: 1 1 100%;
+}
