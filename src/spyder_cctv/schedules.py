@@ -7,10 +7,11 @@ import os
 import re
 import tempfile
 import threading
-import uuid
-from datetime import datetime, time as clock_time
+from collections.abc import Callable
+from datetime import datetime
+from datetime import time as clock_time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 MAX_RULES = 64
 _TIME = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")

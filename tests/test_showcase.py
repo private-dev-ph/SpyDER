@@ -29,6 +29,8 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "layouts.css",
         "workspaces.js",
         "workspaces.css",
+        "operations.js",
+        "operations.css",
         "browser-recording.js",
         "fullscreen.js",
         "fullscreen.css",

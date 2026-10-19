@@ -300,17 +300,21 @@
   }
   function formatNodeStatus(status) {
     const timestamp = status.last_run_at ? ` · ${status.last_run_at}` : "";
-    if (status.state === "error") return `Last run: error · ${status.error || "Unknown error"}${timestamp}`;
-    if (status.state === "skipped") return `Last run: skipped · ${status.input_count || 0} in / ${status.output_count || 0} out${timestamp}`;
+    if (status.state === "error")
+      return `Last run: error · ${status.error || "Unknown error"}${timestamp}`;
+    if (status.state === "skipped")
+      return `Last run: skipped · ${status.input_count || 0} in / ${status.output_count || 0} out${timestamp}`;
     return `Last run: OK · ${status.input_count || 0} in / ${status.output_count || 0} out${timestamp}`;
   }
   const clamp = (v) =>
     Math.max(0, Math.min(5000, Number.isFinite(+v) ? +v : 0));
   const VIEW_MIN = 0.25,
     VIEW_MAX = 2,
-    clampViewScale = (value) => Math.max(VIEW_MIN, Math.min(VIEW_MAX, +value || 1)),
+    clampViewScale = (value) =>
+      Math.max(VIEW_MIN, Math.min(VIEW_MAX, +value || 1)),
     canvasDelta = (delta, scale = 1) => delta / clampViewScale(scale),
-    canvasPoint = (client, origin, scale = 1) => canvasDelta(client - origin, scale);
+    canvasPoint = (client, origin, scale = 1) =>
+      canvasDelta(client - origin, scale);
   const node = (type, x = 40, y = 40) => ({
     id: `node-${Math.random().toString(36).slice(2, 10)}`,
     type,
@@ -335,7 +339,8 @@
   function duplicateNode(graph, selectedId, offset = 36) {
     const source = graph.nodes.find((item) => item.id === selectedId);
     if (!source || graph.nodes.length >= 64) return null;
-    const copy = clone(source), ids = new Set(graph.nodes.map((item) => item.id));
+    const copy = clone(source),
+      ids = new Set(graph.nodes.map((item) => item.id));
     const stem = `${source.id}-copy`.slice(0, 54);
     copy.id = stem;
     for (let index = 1; ids.has(copy.id); index++) copy.id = `${stem}-${index}`;
@@ -461,9 +466,14 @@
     }
     for (let index = 0; index < graph.edges.length; index++) {
       const edge = graph.edges[index];
-      if (!edge || typeof edge.from !== "string" || typeof edge.to !== "string" ||
-          (edge.input !== undefined && typeof edge.input !== "string") ||
-          (edge.label !== undefined && (typeof edge.label !== "string" || edge.label.length > 80)))
+      if (
+        !edge ||
+        typeof edge.from !== "string" ||
+        typeof edge.to !== "string" ||
+        (edge.input !== undefined && typeof edge.input !== "string") ||
+        (edge.label !== undefined &&
+          (typeof edge.label !== "string" || edge.label.length > 80))
+      )
         throw Error("Invalid workflow connection.");
       graph.edges[index] = {
         from: edge.from,
@@ -517,8 +527,13 @@
       if (!TYPES[n.type]) errors.push(`Unknown node type: ${n.type}`);
     const out = new Map(nodes.map((n) => [n.id, []]));
     for (const e of graph?.edges || [])
-      if (e.label !== undefined && (typeof e.label !== "string" || e.label.length > 80))
-        errors.push("Connection labels must be plain text up to 80 characters.");
+      if (
+        e.label !== undefined &&
+        (typeof e.label !== "string" || e.label.length > 80)
+      )
+        errors.push(
+          "Connection labels must be plain text up to 80 characters.",
+        );
       else if (!ids.has(e.from) || !ids.has(e.to))
         errors.push(`Edge references missing node: ${e.from} → ${e.to}`);
       else if (e.from === e.to) errors.push("A node cannot connect to itself.");
@@ -1402,8 +1417,12 @@
       function setViewScale(value) {
         const previousScale = viewScale;
         const wrap = root.querySelector(".we-canvas-wrap");
-        const centerX = wrap ? (wrap.scrollLeft + wrap.clientWidth / 2) / previousScale : 0;
-        const centerY = wrap ? (wrap.scrollTop + wrap.clientHeight / 2) / previousScale : 0;
+        const centerX = wrap
+          ? (wrap.scrollLeft + wrap.clientWidth / 2) / previousScale
+          : 0;
+        const centerY = wrap
+          ? (wrap.scrollTop + wrap.clientHeight / 2) / previousScale
+          : 0;
         viewScale = clampViewScale(value);
         const canvas = root.querySelector("[data-canvas]");
         if (canvas) canvas.style.zoom = String(viewScale);
@@ -1509,7 +1528,10 @@
         candidate.edges = candidate.edges.filter(
           (e) => e.from !== original.from || e.to !== original.to,
         );
-        const moved = { ...edgeFor(from, to, candidate.nodes), ...(original.label ? { label: original.label } : {}) },
+        const moved = {
+            ...edgeFor(from, to, candidate.nodes),
+            ...(original.label ? { label: original.label } : {}),
+          },
           candidateTarget = candidate.nodes.find((n) => n.id === to);
         if (
           candidateTarget?.type === "detections" &&
@@ -1768,7 +1790,20 @@
                   "",
                 )}<button class="button secondary" data-cancel-reconnect>Cancel</button></div>`
             : ""
-        }<div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div><div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3>${settingsNode ? "<p>Settings open in dialog.</p>" : params}<button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy selected node</button><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || (errors.length ? `Workflow has ${errors.length} validation issue(s). Review highlighted nodes before activation.` : "")}</p>${errors.length ? `<ul class="we-validation-summary">${errors.map((error) => { const id = graph.nodes.find((item) => item.id && error.includes(item.id))?.id; return `<li>${esc(error)}${id ? ` <button type="button" data-focus-node="${esc(id)}">Review ${esc(TYPES[graph.nodes.find((item) => item.id === id)?.type]?.label || "node")} ${esc(id)}</button>` : ""}</li>`; }).join("")}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>` : ""}<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
+        }<div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div><div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3>${settingsNode ? "<p>Settings open in dialog.</p>" : params}<button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy selected node</button><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || (errors.length ? `Workflow has ${errors.length} validation issue(s). Review highlighted nodes before activation.` : "")}</p>${
+          errors.length
+            ? `<ul class="we-validation-summary">${errors
+                .map((error) => {
+                  const id = graph.nodes.find(
+                    (item) => item.id && error.includes(item.id),
+                  )?.id;
+                  return `<li>${esc(error)}${id ? ` <button type="button" data-focus-node="${esc(id)}">Review ${esc(TYPES[graph.nodes.find((item) => item.id === id)?.type]?.label || "node")} ${esc(id)}</button>` : ""}</li>`;
+                })
+                .join(
+                  "",
+                )}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>`
+            : ""
+        }<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
         if (retainedCanvas) {
           const replacement = root.querySelector("[data-canvas]");
           replacement?.replaceWith?.(retainedCanvas);
@@ -2225,7 +2260,12 @@
               .join("") || "<p>No recent events.</p>";
       }
       function visibleForStatus() {
-        return mounted && !demo && document.visibilityState !== "hidden" && !container.hidden;
+        return (
+          mounted &&
+          !demo &&
+          document.visibilityState !== "hidden" &&
+          !container.hidden
+        );
       }
       async function pollDebug() {
         if (!visibleForStatus()) return;
@@ -2258,7 +2298,9 @@
         debugController = null;
         if (visibleForStatus()) pollDebug();
       };
-      function statusFor(id) { return debugStates[graph.id]?.nodes?.[id]; }
+      function statusFor(id) {
+        return debugStates[graph.id]?.nodes?.[id];
+      }
       async function poll(schedule = true) {
         if (!mounted || demo) return;
         controller?.abort();
@@ -2310,13 +2352,17 @@
         const t = e.target;
         if (t.matches?.("[data-edge-label]")) {
           const [from, to] = t.dataset.edgeLabel.split("|");
-          const edge = graph.edges.find((item) => item.from === from && item.to === to);
+          const edge = graph.edges.find(
+            (item) => item.from === from && item.to === to,
+          );
           if (edge) {
             const label = String(t.value).slice(0, 80);
             if (label) edge.label = label;
             else delete edge.label;
             mark();
-            const summary = root.querySelector(`.we-edge[data-edge="${from}|${to}"]`);
+            const summary = root.querySelector(
+              `.we-edge[data-edge="${from}|${to}"]`,
+            );
             if (summary) summary.textContent = label;
           }
           return;
@@ -2779,25 +2825,35 @@
             selected,
             root.querySelector("[data-node-output]").value,
           );
-        else if (b.dataset.zoomIn !== undefined)
-          setViewScale(viewScale + 0.1);
-        else if (b.dataset.zoomOut !== undefined)
-          setViewScale(viewScale - 0.1);
+        else if (b.dataset.zoomIn !== undefined) setViewScale(viewScale + 0.1);
+        else if (b.dataset.zoomOut !== undefined) setViewScale(viewScale - 0.1);
         else if (b.dataset.zoomReset !== undefined) setViewScale(1);
         else if (b.dataset.center !== undefined) centerCanvas();
         else if (b.dataset.copyNode !== undefined) {
-          copiedNode = graph.nodes.find((item) => item.id === selected) ? clone(graph.nodes.find((item) => item.id === selected)) : null;
+          copiedNode = graph.nodes.find((item) => item.id === selected)
+            ? clone(graph.nodes.find((item) => item.id === selected))
+            : null;
           render(true);
         } else if (b.dataset.pasteNode !== undefined) {
           if (!copiedNode || graph.nodes.length >= 64) return;
           remember();
           const fragment = { nodes: [clone(copiedNode)], edges: [] };
-          const pasted = duplicateNode(fragment, copiedNode.id, 36 * (pasteCount + 1));
+          const pasted = duplicateNode(
+            fragment,
+            copiedNode.id,
+            36 * (pasteCount + 1),
+          );
           pasteCount++;
           if (!pasted) return;
-          graph.nodes.push(pasted); pruneBindings(graph); selected = pasted.id; mark(); render(true);
+          graph.nodes.push(pasted);
+          pruneBindings(graph);
+          selected = pasted.id;
+          mark();
+          render(true);
         } else if (b.dataset.focusNode !== undefined) {
-          selected = b.dataset.focusNode; render(true); root.querySelector(`[data-node="${selected}"]`)?.focus?.();
+          selected = b.dataset.focusNode;
+          render(true);
+          root.querySelector(`[data-node="${selected}"]`)?.focus?.();
         } else if (b.dataset.undo !== undefined) restore(undoStack, redoStack);
         else if (b.dataset.redo !== undefined) restore(redoStack, undoStack);
         else if (b.dataset.add) add(b.dataset.add);
@@ -3050,16 +3106,31 @@
           !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName || "")
         ) {
           if (e.key.toLowerCase() === "c" && selected) {
-            copiedNode = clone(graph.nodes.find((item) => item.id === selected));
+            copiedNode = clone(
+              graph.nodes.find((item) => item.id === selected),
+            );
             pasteCount = 0;
             return;
-          } else if (e.key.toLowerCase() === "v" && copiedNode && graph.nodes.length < 64) {
+          } else if (
+            e.key.toLowerCase() === "v" &&
+            copiedNode &&
+            graph.nodes.length < 64
+          ) {
             e.preventDefault();
             const fragment = { nodes: [clone(copiedNode)], edges: [] };
-            const copy = duplicateNode(fragment, copiedNode.id, 36 * (pasteCount + 1));
+            const copy = duplicateNode(
+              fragment,
+              copiedNode.id,
+              36 * (pasteCount + 1),
+            );
             pasteCount++;
             if (!copy) return;
-            remember(); graph.nodes.push(copy); pruneBindings(graph); selected = copy.id; mark(); render(true);
+            remember();
+            graph.nodes.push(copy);
+            pruneBindings(graph);
+            selected = copy.id;
+            mark();
+            render(true);
           } else if (e.key.toLowerCase() === "z") {
             e.preventDefault();
             restore(undoStack, redoStack);
@@ -3322,8 +3393,14 @@
           if (pointerDrag.moved) e.preventDefault();
           const n = graph.nodes.find((x) => x.id === pointerDrag.id);
           if (n) {
-            n.x = clamp(pointerDrag.x + canvasDelta(e.clientX - pointerDrag.sx, viewScale));
-            n.y = clamp(pointerDrag.y + canvasDelta(e.clientY - pointerDrag.sy, viewScale));
+            n.x = clamp(
+              pointerDrag.x +
+                canvasDelta(e.clientX - pointerDrag.sx, viewScale),
+            );
+            n.y = clamp(
+              pointerDrag.y +
+                canvasDelta(e.clientY - pointerDrag.sy, viewScale),
+            );
           }
           if (pointerDrag.moved) updateCanvas();
         }

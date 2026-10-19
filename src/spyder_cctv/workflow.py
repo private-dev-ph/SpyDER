@@ -302,8 +302,14 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
         by_id[nid] = normalized
     clean_edges, seen, indegree, outgoing = [], set(), {n: 0 for n in by_id}, {n: [] for n in by_id}
     for edge in edges:
-        if not isinstance(edge, dict) or set(edge) not in ({"from", "to"}, {"from", "to", "input"}):
+        if (
+            not isinstance(edge, dict)
+            or not {"from", "to"}.issubset(edge)
+            or set(edge) - {"from", "to", "input", "label"}
+        ):
             raise ValueError("Invalid workflow edge")
+        if "label" in edge and (not isinstance(edge["label"], str) or len(edge["label"]) > 80):
+            raise ValueError("Connection label must be text with at most 80 characters")
         source, target = edge["from"], edge["to"]
         input_name = edge.get("input", "detections")
         pair = (source, target, input_name)
@@ -334,7 +340,12 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
             raise ValueError("Invalid workflow edge types")
         seen.add(pair)
         clean_edges.append(
-            {"from": source, "to": target, **({"input": input_name} if "input" in edge else {})}
+            {
+                "from": source,
+                "to": target,
+                **({"input": input_name} if "input" in edge else {}),
+                **({"label": edge["label"]} if "label" in edge else {}),
+            }
         )
         outgoing[source].append(target)
         indegree[target] += 1
@@ -459,6 +470,7 @@ class WorkflowService:
         self._session_id = uuid.uuid4().hex
         self._errors: list[dict[str, Any]] = []
         self._runtime: dict[str, Any] = {}
+        self._debug: dict[str, Any] = {}
         self._seen: dict[str, tuple[Any, int]] = {}
         self._last_action: dict[tuple[str, str, str], float] = {}
         self._global_actions: deque[float] = deque()
@@ -483,6 +495,20 @@ class WorkflowService:
                 "errors": copy.deepcopy(self._errors[-100:]),
                 "storage_error": self._storage_error,
             }
+
+    def debug(self) -> dict[str, Any]:
+        """Latest execution counters only; never store frames or detection payloads."""
+        with self._lock:
+            result = {}
+            for ident, graph in self._graphs.items():
+                entry = copy.deepcopy(self._debug.get(ident, {"nodes": {}, "updated_at": None}))
+                current = {node["id"] for node in graph["nodes"]}
+                entry["nodes"] = {
+                    key: value for key, value in entry["nodes"].items() if key in current
+                }
+                entry["enabled"] = graph["enabled"]
+                result[ident] = entry
+            return {"workflows": result}
 
     def model_usage(self) -> dict[str, list[str]]:
         """Read one consistent usage snapshot for a whole model-library request."""
@@ -822,6 +848,10 @@ class WorkflowService:
                 self._graphs = snapshot
                 self._restore_activation_settings(old_settings, old_analysis)
                 raise
+            if previous is None or any(
+                previous.get(key) != normalized.get(key) for key in ("nodes", "edges", "camera_ids")
+            ):
+                self._debug.pop(normalized["id"], None)
             for camera_id in options:
                 self._seen.pop(camera_id, None)
             if previous and previous["enabled"] and not normalized["enabled"]:
@@ -1211,6 +1241,7 @@ class WorkflowService:
                 raise
             self._release_workflow_recordings(workflow_id)
             self._clear_graph_state(workflow_id)
+            self._debug.pop(workflow_id, None)
 
     def relinquish_recording(self, camera_ids: list[str]) -> None:
         """Transfer selected recording memberships to manual recorder control."""
@@ -1567,6 +1598,9 @@ class WorkflowService:
             node = nodes[nid]
             kind = node["type"]
             p = node["params"]
+            node_error = None
+            previous_error = self._errors[-1] if self._errors else None
+            action_ran = False
             upstream, upstream_keys = [], set()
             for parent, input_name in edge_inputs[nid]:
                 if input_name != "detections":
@@ -1731,6 +1765,7 @@ class WorkflowService:
                     result = run_code(p["source"], upstream, context, language=p["language"])
                 except (ValueError, RuntimeError) as exc:
                     result = []
+                    node_error = str(exc)[:200]
                     if preview_node_id is None:
                         with self._lock:
                             self._errors.append(
@@ -1781,6 +1816,7 @@ class WorkflowService:
                 and result
                 and self._action_allowed(graph["id"], camera_id, nid, now)
             ):
+                action_ran = True
                 self._act(
                     kind,
                     runtime_params,
@@ -1791,6 +1827,29 @@ class WorkflowService:
                     camera_name=(status or {}).get("name") or camera_id,
                     detections=result,
                 )
+            if preview_node_id is None:
+                latest_error = self._errors[-1] if self._errors else None
+                if latest_error is not previous_error and latest_error.get("node_id") == nid:
+                    node_error = latest_error.get("message", "Node execution failed")[:200]
+                stamp = datetime.now().astimezone().isoformat()
+                skipped = (
+                    missing_binding
+                    or (kind in ("event", "notification", "capture", "record") and not action_ran)
+                    or (not result and kind not in ("camera", "model", "classifier", "detections"))
+                )
+                with self._lock:
+                    entry = self._debug.setdefault(graph["id"], {"nodes": {}, "updated_at": stamp})
+                    entry["updated_at"] = stamp
+                    entry["nodes"][nid] = {
+                        "state": "error" if node_error else "skipped" if skipped else "ok",
+                        "last_run_at": stamp,
+                        "input_count": len(upstream)
+                        if incoming[nid]
+                        else len(cv.get("detections", [])),
+                        "output_count": len(result),
+                        "error": node_error,
+                        "camera_id": camera_id,
+                    }
             for target in outgoing[nid]:
                 if all(parent in values for parent in incoming[target]) and target not in queue:
                     queue.append(target)

@@ -2436,3 +2436,52 @@ def test_event_clip_attaches_all_rotated_parts_without_unrelated_captures(servic
     # The fixture stops the worker; its stop event makes this timed clip deterministic.
     service._record_event_clip("event", "cam1", 1)
     assert [item["id"] for item in attached] == ["part-1", "part-2"]
+
+
+def test_connection_labels_roundtrip_and_reject_invalid_values(service):
+    item = graph(enabled=False)
+    item["edges"][0]["label"] = "People only"
+    saved = service.save(item)
+    assert saved["edges"][0]["label"] == "People only"
+    for label in (None, 12, "x" * 81):
+        item["edges"][0]["label"] = label
+        with pytest.raises(ValueError, match="Connection label"):
+            service.save(item)
+
+
+def test_debug_records_latest_counts_without_detection_payload(service):
+    service.save(graph())
+    service._tick(now=10)
+    entry = service.debug()["workflows"]["people"]
+    assert entry["nodes"]["detect"]["state"] == "ok"
+    assert entry["nodes"]["detect"]["output_count"] == 1
+    assert entry["nodes"]["event"]["input_count"] == 1
+    assert "detections" not in json.dumps(entry)
+    snapshot = service.debug()
+    snapshot["workflows"]["people"]["nodes"].clear()
+    assert service.debug()["workflows"]["people"]["nodes"]
+
+
+def test_debug_reports_code_errors_and_preview_does_not_override(service):
+    item = graph(
+        nodes=[
+            {"id": "detect", "type": "detections", "x": 0, "y": 0, "params": {}},
+            {
+                "id": "code",
+                "type": "code",
+                "x": 100,
+                "y": 0,
+                "params": {"language": "python", "source": "output = 1 / 0"},
+            },
+        ],
+        edges=[{"from": "detect", "to": "code"}],
+    )
+    service.save(item)
+    service._tick(now=20)
+    before = service.debug()
+    error = before["workflows"]["people"]["nodes"]["code"]
+    assert error["state"] == "error" and error["error"]
+    service._evaluate(
+        service.list()["workflows"][0], "cam1", service.manager.cv, 21, preview_node_id="detect"
+    )
+    assert service.debug() == before

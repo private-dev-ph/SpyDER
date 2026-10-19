@@ -11,8 +11,10 @@ from pathlib import Path
 
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import default_config_path, load_app_config, save_config
+from spyder_cctv.configuration_backup import ConfigurationBackup
 from spyder_cctv.cv.diagnostics import engine_info
 from spyder_cctv.showcase import export_showcase
+from spyder_cctv.storage import StorageSettings
 from spyder_cctv.web import create_server
 
 
@@ -51,6 +53,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Created {args.config}")
             return 0
         args.config = args.config.resolve()
+        if args.command in ("gui", "serve"):
+            media_dir = (
+                args.media_dir
+                or StorageSettings(
+                    args.config.parent / "storage.json", args.config.parent / "media"
+                ).directory
+            )
+            ConfigurationBackup.recover_interrupted(args.config, media_dir)
+            ConfigurationBackup.apply_pending(args.config, media_dir)
         if args.command == "gui" and not args.config.exists():
             save_config(args.config, [])
         config = load_app_config(args.config)
