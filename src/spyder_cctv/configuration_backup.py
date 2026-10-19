@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from base64 import b64decode, b64encode
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from .recording_profiles import DEFAULT_SETTINGS, validate_settings
 from .workflow import _validate_graph
 
 MAX_BACKUP_BYTES = 2 * 1024 * 1024
+MAX_JOURNAL_BYTES = 9 * MAX_BACKUP_BYTES
 _VERSION = 1
 _PENDING = ".configuration-restore.json"
 _JOURNAL = ".configuration-restore-journal.json"
@@ -35,34 +38,47 @@ class ConfigurationBackup:
 
     @property
     def pending(self) -> bool:
-        return self.pending_path.exists()
+        return self.pending_path.exists() or self.pending_path.is_symlink()
 
     def export(self) -> str:
-        cameras = [asdict(worker.config) for worker in self.manager._snapshot()]
-        warnings = []
+        mutation_lock = getattr(self.manager, "_mutations", None)
+        with mutation_lock if mutation_lock is not None else nullcontext():
+            cameras = [asdict(worker.config) for worker in self.manager._snapshot()]
+            profiles = [asdict(profile) for profile in self.manager._profiles.values()]
         for camera in cameras:
             vision = camera.get("vision")
             if vision:
-                if any(vision.get(key) for key in ("model", "recognition_model", "identity_gallery", "classifier_model")):
-                    warnings.append("Camera model paths are omitted; reconfigure local models after restore.")
                 for key in ("model", "recognition_model", "identity_gallery", "classifier_model"):
                     vision[key] = None
+                vision["classifier_labels"] = []
                 if vision.get("engine") != "opencv":
                     camera["pipeline"] = "motion"
                     camera["vision"] = None
-        workflows = self.workflows.list().get("workflows", [])
+        preferences = self.manager._preferences.snapshot()
+        if preferences.get("storage_error"):
+            raise ValueError("Cannot export because preferences storage is invalid")
+        workflow_data = self.workflows.list()
+        if workflow_data.get("storage_error"):
+            raise ValueError("Cannot export because workflow storage is invalid")
+        workflows = workflow_data.get("workflows", [])
         for graph in workflows:
             graph["enabled"] = False
+        recorder_lock = getattr(self.recorder, "_lock", None)
+        with recorder_lock if recorder_lock is not None else nullcontext():
+            recording_settings = dict(getattr(self.recorder, "_settings", DEFAULT_SETTINGS))
         payload = {
             "version": _VERSION,
             "config": {
                 "version": 1,
                 "cameras": cameras,
-                "profiles": [asdict(profile) for profile in self.manager._profiles.values()],
+                "profiles": profiles,
             },
-            "preferences": {"version": 1, "pause_when_unfocused": bool(self.manager._preferences.snapshot()["pause_when_unfocused"])},
+            "preferences": {
+                "version": 1,
+                "pause_when_unfocused": preferences["pause_when_unfocused"],
+            },
             "workflows": {"workflows": workflows},
-            "recording_settings": dict(getattr(self.recorder, "_settings", DEFAULT_SETTINGS)),
+            "recording_settings": recording_settings,
         }
         result = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         if len(result.encode("utf-8")) > MAX_BACKUP_BYTES:
@@ -72,29 +88,64 @@ class ConfigurationBackup:
     def preview(self, raw: str | bytes) -> dict[str, Any]:
         data = self._validate(raw)
         camera_ids = {item["id"] for item in data["config"]["cameras"]}
-        missing = sorted({camera for graph in data["workflows"]["workflows"] for camera in graph["camera_ids"] if camera not in camera_ids})
+        workflow_list = data["workflows"]["workflows"]
+        referenced_cameras = {camera for graph in workflow_list for camera in graph["camera_ids"]}
+        referenced_cameras.update(
+            node["params"]["camera_id"]
+            for graph in workflow_list
+            for node in graph["nodes"]
+            if node["type"] == "camera" and node["params"].get("camera_id")
+        )
+        missing = sorted(referenced_cameras - camera_ids)
+        builtin_models = {"builtin-scrfd-500mf", "builtin-scrfd-2-5gf", "builtin-scrfd-10gf"}
+        library = getattr(self.workflows, "model_library", None)
+        local_models = {item["id"] for item in library.list()} if library is not None else set()
+        model_refs = {
+            node["params"]["model_id"]
+            for graph in workflow_list
+            for node in graph["nodes"]
+            if node["type"] in ("model", "classifier") and node["params"].get("model_id")
+        }
+        missing_models = sorted(model_refs - builtin_models - local_models)
         warnings = []
+        warnings.append("Model weights and model registry entries are not included in backups.")
         if missing:
             warnings.append(f"{len(missing)} workflow camera reference(s) are missing.")
         if data["workflows"]["workflows"]:
             warnings.append("Workflows will be restored disabled.")
+        if missing_models:
+            warnings.append(
+                f"{len(missing_models)} workflow model reference(s) are unavailable "
+                "on this computer."
+            )
         if any(camera.get("pipeline") == "vision" for camera in data["config"]["cameras"]):
             warnings.append("Local vision model paths may require reconfiguration.")
         return {
             "valid": True,
-            "counts": {"cameras": len(data["config"]["cameras"]), "profiles": len(data["config"]["profiles"]), "workflows": len(data["workflows"]["workflows"])},
+            "counts": {
+                "cameras": len(data["config"]["cameras"]),
+                "profiles": len(data["config"]["profiles"]),
+                "workflows": len(data["workflows"]["workflows"]),
+            },
             "warnings": warnings,
             "missing_camera_references": missing,
+            "missing_model_references": missing_models,
             "restart_required": True,
         }
 
     def restore(self, raw: str | bytes) -> dict[str, Any]:
         data = self._validate(raw)
-        if self.pending:
+        if self.pending or self.pending_path.is_symlink():
             raise RuntimeError("A configuration restore is already pending restart")
-        self.pending_path.parent.mkdir(parents=True, exist_ok=True)
-        self._atomic_write(self.pending_path, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+        if (self.config_path.parent / _JOURNAL).exists() or (
+            self.config_path.parent / _JOURNAL
+        ).is_symlink():
+            raise RuntimeError("A restore journal needs recovery before staging another restore")
         result = self.preview(raw)
+        self.pending_path.parent.mkdir(parents=True, exist_ok=True)
+        self._atomic_write(
+            self.pending_path, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        )
         result["pending"] = True
         return result
 
@@ -105,53 +156,112 @@ class ConfigurationBackup:
         root = config_path.parent
         pending = root / _PENDING
         journal = root / _JOURNAL
+        if pending.is_symlink() or journal.is_symlink():
+            raise RuntimeError("Restore control files cannot be symbolic links")
         if not pending.exists():
             if journal.exists():
-                raise RuntimeError("Restore journal exists without pending configuration; preserve files for recovery")
+                raise RuntimeError(
+                    "Restore journal exists without pending configuration; "
+                    "preserve files for recovery"
+                )
             return False
-        raw = pending.read_bytes()
+        raw = ConfigurationBackup._read_bounded(pending, MAX_BACKUP_BYTES)
         data = ConfigurationBackup._validate_payload(raw)
         target_media = Path(media_dir).resolve() if media_dir is not None else root / "media"
-        targets = {
-            config_path: json.dumps(data["config"], ensure_ascii=False, indent=2).encode() + b"\n",
-            root / "preferences.json": json.dumps(data["preferences"], ensure_ascii=False, indent=2).encode() + b"\n",
-            root / "workflows.json": json.dumps(data["workflows"], ensure_ascii=False, indent=2).encode() + b"\n",
-            target_media / "recording-settings.json": json.dumps(data["recording_settings"], ensure_ascii=False, indent=2).encode() + b"\n",
+        target_paths = ConfigurationBackup._target_paths(config_path, target_media)
+        if journal.exists():
+            raise RuntimeError(
+                "Restore journal needs recovery before applying pending configuration"
+            )
+        targets = [
+            json.dumps(data["config"], ensure_ascii=False, indent=2).encode() + b"\n",
+            json.dumps(data["preferences"], ensure_ascii=False, indent=2).encode() + b"\n",
+            json.dumps(data["workflows"], ensure_ascii=False, indent=2).encode() + b"\n",
+            json.dumps(data["recording_settings"], ensure_ascii=False, indent=2).encode() + b"\n",
+        ]
+        old = []
+        for path in target_paths:
+            if path.is_symlink():
+                raise RuntimeError("Restore target cannot be a symbolic link")
+            old.append(
+                b64encode(ConfigurationBackup._read_bounded(path, MAX_BACKUP_BYTES)).decode("ascii")
+                if path.exists()
+                else None
+            )
+        journal_data = {
+            "version": 1,
+            "config_path": str(config_path),
+            "config_filename": config_path.name,
+            "media_dir": str(target_media),
+            "old": old,
         }
-        old = [path.read_bytes().decode("latin1") if path.exists() else None for path in targets]
-        ConfigurationBackup._atomic_write(journal, json.dumps({"version": 1, "old": old}).encode("utf-8"))
+        ConfigurationBackup._atomic_write(journal, json.dumps(journal_data).encode("utf-8"))
         try:
-            for path, contents in targets.items():
+            for path, contents in zip(target_paths, targets, strict=True):
                 ConfigurationBackup._atomic_write(path, contents)
-            pending.unlink()
             journal.unlink()
+            pending.unlink()
             return True
         except Exception:
-            ConfigurationBackup._restore_journal(journal, list(targets))
-            raise
+            if journal.exists():
+                ConfigurationBackup._restore_journal(journal, config_path, target_media)
+                raise
+            # All target writes completed before journal removal. Reapplying staged
+            # settings is safe if removing the pending marker itself failed.
+            return True
 
     @staticmethod
     def recover_interrupted(config_path: Path, media_dir: Path | None = None) -> bool:
         """Roll back an interrupted apply before normal configuration loads."""
-        journal = Path(config_path).resolve().parent / _JOURNAL
+        config_path = Path(config_path).resolve()
+        journal = config_path.parent / _JOURNAL
         if not journal.exists():
             return False
-        root = Path(config_path).resolve().parent
-        targets = [
-            Path(config_path).resolve(),
-            root / "preferences.json",
-            root / "workflows.json",
-            (Path(media_dir).resolve() if media_dir is not None else root / "media") / "recording-settings.json",
-        ]
-        ConfigurationBackup._restore_journal(journal, targets)
+        if journal.is_symlink():
+            raise RuntimeError("Restore journal cannot be a symbolic link")
+        raw = ConfigurationBackup._read_bounded(journal, MAX_JOURNAL_BYTES)
+        try:
+            journal_data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("Invalid restore journal; preserve files for recovery") from error
+        expected_media = (
+            Path(media_dir).resolve() if media_dir is not None else config_path.parent / "media"
+        )
+        if (
+            not isinstance(journal_data, dict)
+            or journal_data.get("config_path") != str(config_path)
+            or journal_data.get("config_filename") != config_path.name
+            or journal_data.get("media_dir") != str(expected_media)
+        ):
+            raise RuntimeError("Restore journal target identity does not match startup paths")
+        ConfigurationBackup._restore_journal(journal, config_path, expected_media, journal_data)
         return True
 
     @staticmethod
-    def _restore_journal(journal: Path, targets: list[Path]) -> None:
-        data = json.loads(journal.read_text(encoding="utf-8"))
+    def _restore_journal(
+        journal: Path,
+        config_path: Path,
+        media_dir: Path,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        if data is None:
+            raw = ConfigurationBackup._read_bounded(journal, MAX_JOURNAL_BYTES)
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RuntimeError(
+                    "Invalid restore journal; preserve files for recovery"
+                ) from error
         if (
             not isinstance(data, dict)
-            or set(data) != {"version", "old"}
+            or data.get("config_path") != str(config_path)
+            or data.get("config_filename") != config_path.name
+            or data.get("media_dir") != str(media_dir)
+        ):
+            raise RuntimeError("Restore journal target identity does not match startup paths")
+        targets = ConfigurationBackup._target_paths(config_path, media_dir)
+        if (
+            set(data) != {"version", "config_path", "config_filename", "media_dir", "old"}
             or type(data["version"]) is not int
             or data["version"] != 1
             or not isinstance(data["old"], list)
@@ -159,12 +269,58 @@ class ConfigurationBackup:
             or any(value is not None and not isinstance(value, str) for value in data["old"])
         ):
             raise RuntimeError("Invalid restore journal; preserve files for recovery")
-        for path, value in zip(targets, data["old"]):
+        for path, value in zip(targets, data["old"], strict=True):
+            if path.is_symlink():
+                raise RuntimeError("Restore target cannot be a symbolic link")
             if value is None:
                 path.unlink(missing_ok=True)
             else:
-                ConfigurationBackup._atomic_write(path, value.encode("latin1"))
+                try:
+                    previous = b64decode(value, validate=True)
+                except (ValueError, TypeError) as error:
+                    raise RuntimeError(
+                        "Invalid restore journal; preserve files for recovery"
+                    ) from error
+                if len(previous) > MAX_BACKUP_BYTES:
+                    raise RuntimeError("Restore journal target exceeds its recovery limit")
+                ConfigurationBackup._atomic_write(path, previous)
         journal.unlink()
+
+    @staticmethod
+    def _target_paths(config_path: Path, media_dir: Path) -> list[Path]:
+        root = config_path.parent
+        paths = [
+            config_path,
+            root / "preferences.json",
+            root / "workflows.json",
+            media_dir / "recording-settings.json",
+        ]
+        if any(path.is_symlink() for path in paths):
+            raise RuntimeError("Restore targets cannot be symbolic links")
+        control_paths = {root / _PENDING, root / _JOURNAL}
+        resolved_controls = {control.resolve() for control in control_paths}
+        if any(path.resolve() in resolved_controls for path in paths):
+            raise ValueError("Configuration path conflicts with restore control files")
+        canonical = [path.resolve() for path in paths]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("Configuration and restore target paths must be distinct")
+        return canonical
+
+    @staticmethod
+    def _read_bounded(path: Path, limit: int) -> bytes:
+        if path.is_symlink():
+            raise RuntimeError("Restore control and target files cannot be symbolic links")
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            raise
+        if size > limit:
+            raise ValueError(f"Restore file exceeds {limit} bytes")
+        with path.open("rb") as stream:
+            contents = stream.read(limit + 1)
+        if len(contents) > limit:
+            raise ValueError(f"Restore file exceeds {limit} bytes")
+        return contents
 
     @staticmethod
     def _validate(raw: str | bytes) -> dict[str, Any]:
@@ -181,14 +337,26 @@ class ConfigurationBackup:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ValueError("Invalid configuration backup JSON") from error
-        if not isinstance(data, dict) or set(data) != _SECTIONS or type(data["version"]) is not int or data["version"] != _VERSION:
+        if (
+            not isinstance(data, dict)
+            or set(data) != _SECTIONS
+            or type(data["version"]) is not int
+            or data["version"] != _VERSION
+        ):
             raise ValueError("Unknown configuration backup fields or version")
         config = data["config"]
-        if not isinstance(config, dict) or set(config) != {"version", "cameras", "profiles"} or type(config["version"]) is not int or config["version"] != 1:
+        if (
+            not isinstance(config, dict)
+            or set(config) != {"version", "cameras", "profiles"}
+            or type(config["version"]) is not int
+            or config["version"] != 1
+        ):
             raise ValueError("Invalid camera configuration section")
         # Parse isolated in-memory documents; never resolve or copy referenced files.
         if not isinstance(config["cameras"], list) or not isinstance(config["profiles"], list):
             raise ValueError("Invalid cameras or profiles")
+        if len(config["cameras"]) > 64 or len(config["profiles"]) > 64:
+            raise ValueError("Backups support at most 64 cameras and profiles")
         camera_rows = []
         for raw_camera in config["cameras"]:
             if not isinstance(raw_camera, dict):
@@ -202,6 +370,7 @@ class ConfigurationBackup:
                 vision = dict(vision)
                 for key in ("model", "recognition_model", "identity_gallery", "classifier_model"):
                     vision[key] = None
+                vision["classifier_labels"] = []
                 if vision.get("engine") != "opencv":
                     item["pipeline"] = "motion"
                     item["vision"] = None
@@ -212,16 +381,32 @@ class ConfigurationBackup:
             cameras = [CameraConfig(**item) for item in camera_rows]
         except TypeError as error:
             raise ValueError("Camera contains missing or unknown fields") from error
-        profiles = [SettingsProfile(**item) for item in config["profiles"]]
+        try:
+            profiles = [SettingsProfile(**item) for item in config["profiles"]]
+        except TypeError as error:
+            raise ValueError("Profile contains missing or unknown fields") from error
         ids = {profile.id for profile in profiles}
         if len(ids) != len(profiles) or len({p.name.casefold() for p in profiles}) != len(profiles):
             raise ValueError("Profile ids and names must be unique")
-        if len({camera.id for camera in cameras}) != len(cameras) or any(camera.profile_id and camera.profile_id not in ids for camera in cameras):
+        if len({camera.id for camera in cameras}) != len(cameras) or any(
+            camera.profile_id and camera.profile_id not in ids for camera in cameras
+        ):
             raise ValueError("Camera ids must be unique and profile references valid")
-        if not isinstance(data["preferences"], dict) or set(data["preferences"]) != {"version", "pause_when_unfocused"} or type(data["preferences"]["version"]) is not int or data["preferences"]["version"] != 1 or type(data["preferences"]["pause_when_unfocused"]) is not bool:
+        if (
+            not isinstance(data["preferences"], dict)
+            or set(data["preferences"]) != {"version", "pause_when_unfocused"}
+            or type(data["preferences"]["version"]) is not int
+            or data["preferences"]["version"] != 1
+            or type(data["preferences"]["pause_when_unfocused"]) is not bool
+        ):
             raise ValueError("Invalid preferences section")
         wf = data["workflows"]
-        if not isinstance(wf, dict) or set(wf) != {"workflows"} or not isinstance(wf["workflows"], list) or len(wf["workflows"]) > 32:
+        if (
+            not isinstance(wf, dict)
+            or set(wf) != {"workflows"}
+            or not isinstance(wf["workflows"], list)
+            or len(wf["workflows"]) > 32
+        ):
             raise ValueError("Invalid workflows section")
         graphs = [_validate_graph(g) for g in wf["workflows"]]
         if len({g["id"] for g in graphs}) != len(graphs):
