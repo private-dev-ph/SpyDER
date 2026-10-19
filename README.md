@@ -126,8 +126,12 @@ preview server does not apply Cloudflare's `_headers` file; verify deployment he
 | Capture | OpenCV-supported devices, streams and files | Generated feeds, permitted webcams and selected local video |
 | CV | Native OpenCV and optional model runtimes | Browser motion demonstration; no native YOLO/InsightFace execution |
 | Workflows/events | Native execution, persistent history and attachments | Native execution controls are unavailable |
-| Recording | Local H.264 MP4 clips, storage profiles and captures | Browser recording; download media before closing the tab |
+| Recording | Local H.264 MP4 clips, storage profiles, schedules and captures | Browser recording; download media before closing the tab |
 | Hosting | User's computer, bound to loopback | Static assets; camera/video processing stays in the visitor's browser |
+
+System includes current health diagnostics and configuration backup/restore. The workflow
+editor offers node copy/paste, connection labels, validation review, and latest execution
+counts. See the [public documentation](doc-public/README.md) for setup and limitations.
 
 ## Engineering decisions
 

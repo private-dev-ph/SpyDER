@@ -13,6 +13,13 @@ Start with [Getting started](getting-started.md) for a working local installatio
 - [Layouts](layouts.md): saved walls, pins, activity priority, and simulated cameras.
 - [Recordings and storage](recording-storage.md): quality, long clips, recovery,
   storage allowances, and protected recordings.
+- [Recording schedules](user-guide/schedules.md): daily/weekly windows, overlapping
+  rules, and manual ownership.
+- [System health](user-guide/system-health.md): current capture, inference, recording,
+  and storage issues.
+- [Configuration backups](user-guide/backups.md): reviewed export/import and safe restart-time restore.
+- [Workflow editor tools](user-guide/workflow-tools.md): copy/paste, connection labels,
+  validation, and latest node results.
 - [Events and notifications](user-guide/events.md): searchable activity, attachments,
   naming patterns, and desktop notification permissions.
 - [Troubleshooting](troubleshooting.md): connection resets, stale changes, cameras,
