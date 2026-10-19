@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,7 +8,8 @@ from spyder_cctv.schedules import RecordingSchedules
 
 
 class Manager:
-    workers = {"a": object(), "b": object(), "c": object()}
+    def __init__(self):
+        self.workers = {"a": object(), "b": object(), "c": object()}
 
 
 class Recorder:
@@ -20,8 +22,12 @@ class Recorder:
         self.stops = 0
 
     def status(self):
-        return {"state": self.state, "session_id": self.session_id,
-                "camera_ids": list(self.camera_ids), "control_revision": self.revision}
+        return {
+            "state": self.state,
+            "session_id": self.session_id,
+            "camera_ids": list(self.camera_ids),
+            "control_revision": self.revision,
+        }
 
     def start(self, camera_ids):
         if self.state != "idle":
@@ -47,8 +53,15 @@ class Recorder:
 
 
 def rule(ident, cameras, days=(0,), start="09:00", end="10:00", enabled=True):
-    return {"id": ident, "name": ident, "enabled": enabled, "camera_ids": list(cameras),
-            "days": list(days), "start": start, "end": end}
+    return {
+        "id": ident,
+        "name": ident,
+        "enabled": enabled,
+        "camera_ids": list(cameras),
+        "days": list(days),
+        "start": start,
+        "end": end,
+    }
 
 
 def controller(tmp_path):
@@ -56,8 +69,9 @@ def controller(tmp_path):
 
 
 def make_schedules(manager, recorder, path):
-    return RecordingSchedules(manager, recorder, path, autostart=False,
-                              clock=lambda: datetime(2026, 10, 19, 12, 0))
+    return RecordingSchedules(
+        manager, recorder, path, autostart=False, clock=lambda: datetime(2026, 10, 19, 12, 0)
+    )
 
 
 def test_union_overlapping_rules_start_once_and_stop_owned_session(tmp_path):
@@ -102,6 +116,99 @@ def test_manual_takeover_revision_is_relinquished_until_window_ends(tmp_path):
     assert len(recorder.starts) == 2
 
 
+def test_overnight_manual_takeover_stays_relinquished_until_tuesday_end(tmp_path):
+    manager, recorder, path = controller(tmp_path)
+    schedules = make_schedules(manager, recorder, path)
+    schedules.save([rule("night", ["a"], start="23:00", end="02:00")])
+    assert (
+        schedules._window_key(datetime(2026, 10, 20, 1, 0), schedules._rules) == "night@2026-10-19"
+    )
+    schedules.tick(datetime(2026, 10, 19, 23, 30))
+    recorder.revision += 1
+    schedules.tick(datetime(2026, 10, 20, 1, 0))
+    recorder.stop()
+    schedules.tick(datetime(2026, 10, 20, 1, 30))
+    assert len(recorder.starts) == 1
+    schedules.tick(datetime(2026, 10, 20, 2, 0))
+    schedules.tick(datetime(2026, 10, 26, 23, 30))
+    assert len(recorder.starts) == 2
+
+
+def test_owned_session_stopped_by_quota_is_not_restarted_in_same_window(tmp_path):
+    manager, recorder, path = controller(tmp_path)
+    schedules = make_schedules(manager, recorder, path)
+    schedules.save([rule("daily", ["a"])])
+    now = datetime(2026, 10, 19, 9, 30)
+    schedules.tick(now)
+    recorder.stop()  # Recorder allowance or writer stopped session.
+    schedules.tick(now)
+    schedules.tick(datetime(2026, 10, 19, 9, 45))
+    assert len(recorder.starts) == 1
+    assert schedules.snapshot()["state"] == "waiting"
+
+
+def test_missing_camera_does_not_extend_owned_recording_past_window(tmp_path):
+    manager, recorder, path = controller(tmp_path)
+    schedules = make_schedules(manager, recorder, path)
+    schedules.save([rule("daily", ["a"])])
+    schedules.tick(datetime(2026, 10, 19, 9, 30))
+    manager.workers.pop("a")
+    schedules.tick(datetime(2026, 10, 19, 9, 45))
+    assert recorder.state == "recording"
+    assert recorder.stops == 0
+    schedules.tick(datetime(2026, 10, 19, 10, 0))
+    assert recorder.state == "idle"
+    assert recorder.stops == 1
+
+
+def test_snapshot_is_deep_copy_and_warnings_are_bounded(tmp_path):
+    manager, recorder, path = controller(tmp_path)
+    manager.workers = {}
+    schedules = make_schedules(manager, recorder, path)
+    schedules.save([rule(f"missing-{index}", [f"cam-{index}"]) for index in range(64)])
+    snapshot = schedules.snapshot()
+    snapshot["schedules"][0]["camera_ids"].append("mutated")
+    assert len(schedules.snapshot()["schedules"][0]["camera_ids"]) == 1
+    assert len(schedules.snapshot()["warnings"]) <= 20
+
+
+def test_schema_size_and_corrupt_save_fail_closed(tmp_path):
+    manager, recorder, path = controller(tmp_path)
+    schedules = make_schedules(manager, recorder, path)
+    with pytest.raises(ValueError, match="fields"):
+        schedules.save([dict(rule("extra", ["a"]), surprise=True)])
+    with pytest.raises(ValueError, match="fields"):
+        schedules.save({"schedules": [], "surprise": True})
+    for payload in (
+        {"version": True, "schedules": []},
+        {"version": 1, "schedules": [], "surprise": True},
+    ):
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        invalid = RecordingSchedules(manager, recorder, path, autostart=False)
+        original = path.read_text(encoding="utf-8")
+        with pytest.raises(RuntimeError, match="corrupt"):
+            invalid.save([])
+        assert path.read_text(encoding="utf-8") == original
+    path.write_bytes(b" " * (256 * 1024 + 1))
+    oversized = RecordingSchedules(manager, recorder, path, autostart=False)
+    original = path.read_bytes()
+    with pytest.raises(RuntimeError, match="corrupt"):
+        oversized.save([])
+    assert path.read_bytes() == original
+
+
+def test_close_prevents_future_tick_and_save(tmp_path):
+    manager, recorder, path = controller(tmp_path)
+    schedules = make_schedules(manager, recorder, path)
+    schedules.save([rule("daily", ["a"])])
+    schedules.close()
+    schedules.tick(datetime(2026, 10, 19, 9, 30))
+    assert recorder.starts == []
+    assert schedules.snapshot()["state"] == "closed"
+    with pytest.raises(RuntimeError, match="closed"):
+        schedules.save([])
+
+
 def test_manual_session_is_never_stopped_or_replaced(tmp_path):
     manager, recorder, path = controller(tmp_path)
     recorder.start(["c"])
@@ -115,18 +222,27 @@ def test_manual_session_is_never_stopped_or_replaced(tmp_path):
 
 def test_quota_failure_retries_at_bounded_interval(tmp_path, monkeypatch):
     manager, recorder, path = controller(tmp_path)
+    attempts = []
+
     def fail(_):
+        attempts.append("quota")
         raise RuntimeError("quota")
+
     recorder.start = fail
     schedules = make_schedules(manager, recorder, path)
     schedules.save([rule("daily", ["a"])])
     now = datetime(2026, 10, 19, 9, 30)
-    times = iter([100.0, 110.0, 160.0])
-    monkeypatch.setattr("time.monotonic", lambda: next(times))
+    monotonic = [100.0]
+    monkeypatch.setattr(
+        "spyder_cctv.schedules.time",
+        SimpleNamespace(monotonic=lambda: monotonic[0]),
+    )
     schedules.tick(now)
     schedules.tick(now)
+    assert len(attempts) == 1
+    monotonic[0] = 160.0
     schedules.tick(now)
-    assert len([warning for warning in schedules.snapshot()["warnings"] if "quota" in warning]) == 1
+    assert len(attempts) == 2
 
 
 def test_persistence_corrupt_data_fails_closed_and_missing_camera_waits(tmp_path):
