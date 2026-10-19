@@ -67,14 +67,16 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         if getattr(manager, "_config_path", None)
         else None
     )
+    mutation_gate = threading.RLock()
     schedule_stop = threading.Event()
     schedule_error = {"error": None}
 
     def schedule_loop():
         while not schedule_stop.wait(1):
             try:
-                if not backup or not backup.pending:
-                    schedules.tick()
+                with mutation_gate:
+                    if not backup or not backup.pending:
+                        schedules.tick()
                 schedule_error["error"] = None
             except Exception as error:
                 schedule_error["error"] = str(error)[:240]
@@ -168,7 +170,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
 
         def server_close(self) -> None:
             schedule_stop.set()
-            schedule_thread.join(timeout=6)
+            if schedule_thread.ident is not None:
+                schedule_thread.join(timeout=6)
             schedules.close()
             try:
                 workflows.close()
@@ -697,6 +700,16 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     self.json(404, {"error": "Unknown route"})
 
         def do_POST(self) -> None:
+            parts = urlsplit(self.path).path.strip("/").split("/")
+            # Model uploads/installations cannot start capture or alter restored files.
+            # Keep their potentially slow I/O outside the camera/restore control gate.
+            if parts[:2] == ["api", "models"] or parts[:3] == ["api", "vision", "detectors"]:
+                self._post()
+            else:
+                with mutation_gate:
+                    self._post()
+
+        def _post(self) -> None:
             # Action requests may carry an unused body. Close rather than allowing
             # those bytes to be interpreted as another request on a persistent socket.
             self.close_connection = True
@@ -735,15 +748,43 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         raise ValueError("Send a backup with a persistent configuration")
                     raw = json.dumps(data["backup"], ensure_ascii=False)
                     if parts[3] == "restore":
-                        if recorder.status()["state"] not in ("idle", "error") or any(
-                            item["state"] not in ("stopped", "error") for item in manager.statuses()
-                        ):
-                            raise RuntimeError("Stop all cameras and recordings before restoring")
-                        if any(graph["enabled"] for graph in workflows.list()["workflows"]):
-                            raise RuntimeError("Disable all workflows before restoring")
-                        if any(rule["enabled"] for rule in schedules.snapshot()["schedules"]):
-                            raise RuntimeError("Disable recording schedules before restoring")
-                        self.json(200, backup.restore(raw))
+                        # Match workflow activation's lock order, and inspect actual
+                        # worker lifetime: an error state can precede finalization.
+                        with workflows._lock, manager._mutations:
+                            writer_thread = recorder._thread
+                            if (
+                                recorder.status()["state"] not in ("idle", "error")
+                                or (writer_thread is not None and writer_thread.is_alive())
+                                or recorder._writer is not None
+                            ):
+                                raise RuntimeError(
+                                    "Stop recordings and wait for finalization before restoring"
+                                )
+                            for worker in manager._snapshot():
+                                if (
+                                    worker.status()["state"] not in ("stopped", "error")
+                                    or (worker._thread is not None and worker._thread.is_alive())
+                                    or any(
+                                        runtime is not None and runtime.is_alive
+                                        for runtime in (
+                                            worker._retiring_pipeline,
+                                            worker._retiring_analysis,
+                                        )
+                                    )
+                                ):
+                                    raise RuntimeError(
+                                        "Stop all cameras and wait for processing "
+                                        "to finish before restoring"
+                                    )
+                            if any(graph["enabled"] for graph in workflows.list()["workflows"]):
+                                raise RuntimeError("Disable all workflows before restoring")
+                            if any(thread.is_alive() for thread in workflows._clip_threads):
+                                raise RuntimeError(
+                                    "Wait for workflow event clips to finish before restoring"
+                                )
+                            if any(rule["enabled"] for rule in schedules.snapshot()["schedules"]):
+                                raise RuntimeError("Disable recording schedules before restoring")
+                            self.json(200, backup.restore(raw))
                     else:
                         self.json(200, backup.preview(raw))
                 elif len(parts) == 4 and parts[:2] == ["api", "events"] and parts[3] == "rename":

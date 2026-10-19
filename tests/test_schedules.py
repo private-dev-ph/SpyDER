@@ -268,3 +268,17 @@ def test_validation_rejects_unbounded_or_invalid_rules(tmp_path):
         schedules.save([rule(str(i), ["a"]) for i in range(65)])
     with pytest.raises(ValueError):
         schedules.save([rule("bad", ["a"], days=(7,))])
+
+
+def test_schedule_size_limit_is_checked_before_replacing_saved_rules(tmp_path, monkeypatch):
+    import spyder_cctv.schedules as module
+
+    manager, recorder, path = controller(tmp_path)
+    schedules = make_schedules(manager, recorder, path)
+    schedules.save([rule("first", ["a"], enabled=False)])
+    original = path.read_bytes()
+    monkeypatch.setattr(module, "MAX_FILE_BYTES", 10)
+    with pytest.raises(ValueError, match="256 KiB"):
+        schedules.save([rule("second", ["b"], enabled=False)])
+    assert path.read_bytes() == original
+    assert schedules.snapshot()["schedules"][0]["id"] == "first"

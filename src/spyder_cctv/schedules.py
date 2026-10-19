@@ -161,6 +161,12 @@ class RecordingSchedules:
     def _current_status(self) -> dict[str, Any]:
         return self.recorder.status()
 
+    def _command(self, action: str, *args, revision=None):
+        method = getattr(self.recorder, action)
+        if getattr(self.recorder, "supports_expected_revision", False):
+            return method(*args, expected_revision=revision)
+        return method(*args)
+
     def _revision(self, status: dict[str, Any]) -> Any:
         return status.get("control_revision", status.get("revision"))
 
@@ -230,13 +236,16 @@ class RecordingSchedules:
             return self.save(rules)
 
     def _atomic_write(self, value: dict[str, Any]) -> None:
+        payload = json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
+        if len(payload) > MAX_FILE_BYTES:
+            raise ValueError("Saved schedules exceed 256 KiB; reduce rules or camera selections")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(
             prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-                json.dump(value, stream, ensure_ascii=False, indent=2)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(name, self.path)
@@ -284,7 +293,7 @@ class RecordingSchedules:
                     )
                     return self.snapshot()
                 if not needed:
-                    self.recorder.stop()
+                    self._command("stop", revision=self._owned_revision)
                     self._clear_ownership()
                     self._set_status("idle")
                     return self.snapshot()
@@ -295,7 +304,9 @@ class RecordingSchedules:
                     return self.snapshot()
                 if needed != self._owned_cameras:
                     try:
-                        updated = self.recorder.select(list(needed))
+                        updated = self._command(
+                            "select", list(needed), revision=self._owned_revision
+                        )
                         self._owned_cameras = needed
                         self._owned_revision = self._revision(updated)
                         self._set_status("recording")
@@ -325,7 +336,7 @@ class RecordingSchedules:
                 self._set_status("blocked", "Scheduled recording is waiting to retry")
                 return self.snapshot()
             try:
-                started = self.recorder.start(list(needed))
+                started = self._command("start", list(needed), revision=self._revision(current))
                 self._owned_session = started.get("session_id")
                 self._owned_cameras = tuple(sorted(started.get("camera_ids") or []))
                 self._owned_revision = self._revision(started)

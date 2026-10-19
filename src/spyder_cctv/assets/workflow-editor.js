@@ -299,7 +299,7 @@
     return removed;
   }
   function formatNodeStatus(status) {
-    const timestamp = status.last_run_at ? ` · ${status.last_run_at}` : "";
+    const timestamp = `${status.camera_id ? ` · ${status.camera_id}` : ""}${status.last_run_at ? ` · ${status.last_run_at}` : ""}`;
     if (status.state === "error")
       return `Last run: error · ${status.error || "Unknown error"}${timestamp}`;
     if (status.state === "skipped")
@@ -1458,6 +1458,46 @@
             portOffset(inputType(e, graph.nodes), b);
         return `M ${ax} ${ay} C ${ax + 41} ${ay}, ${bx - 40} ${by}, ${bx} ${by}`;
       }
+      function syncEdgeLabels() {
+        const canvas = root.querySelector("[data-canvas]");
+        if (!canvas) return;
+        for (const edge of graph.edges) {
+          const a = graph.nodes.find((n) => n.id === edge.from),
+            b = graph.nodes.find((n) => n.id === edge.to);
+          const group = canvas
+            .querySelector(`[data-wire="${edge.from}|${edge.to}"]`)
+            ?.closest(".we-edge");
+          if (!a || !b || !group) continue;
+          let text = group.querySelector(".we-wire-label");
+          if (!edge.label) {
+            text?.remove();
+            continue;
+          }
+          if (!text) {
+            text = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "text",
+            );
+            text.setAttribute("class", "we-wire-label");
+            group.append(text);
+          }
+          text.textContent = edge.label;
+          text.setAttribute(
+            "x",
+            canvasPadding + (clamp(a.x) + nodeSize(a).width + clamp(b.x)) / 2,
+          );
+          text.setAttribute(
+            "y",
+            canvasPadding +
+              (clamp(a.y) +
+                38 +
+                clamp(b.y) +
+                portOffset(inputType(edge, graph.nodes), b)) /
+                2 -
+              8,
+          );
+        }
+      }
       function wireActions(e) {
         const a = graph.nodes.find((n) => n.id === e.from),
           b = graph.nodes.find((n) => n.id === e.to);
@@ -1836,6 +1876,7 @@
             }
           }
         }
+        syncEdgeLabels();
         if (canvasScroll) {
           const wrap = root.querySelector(".we-canvas-wrap");
           wrap.scrollLeft = canvasScroll[0];
@@ -2267,8 +2308,32 @@
           !container.hidden
         );
       }
+      function updateDebugStatus() {
+        for (const card of root.querySelectorAll(".we-node[data-node]")) {
+          const status = statusFor(card.dataset.node);
+          let line = card.querySelector(".we-node-status");
+          if (!status) {
+            line?.remove();
+            continue;
+          }
+          if (!line) {
+            line = document.createElement("small");
+            line.className = "we-node-status";
+            card.append(line);
+          }
+          const text = formatNodeStatus(status);
+          line.textContent = text;
+          line.title = text;
+          line.dataset.state = status.state;
+        }
+        const latest = root.querySelector(".we-node-latest-status");
+        if (latest)
+          latest.textContent = statusFor(settingsNode)
+            ? formatNodeStatus(statusFor(settingsNode))
+            : "No recent run status available.";
+      }
       async function pollDebug() {
-        if (!visibleForStatus()) return;
+        if (!visibleForStatus() || debugController) return;
         const request = new AbortController();
         debugController = request;
         try {
@@ -2278,17 +2343,22 @@
           });
           if (!response.ok) throw Error("Workflow debug data unavailable.");
           const data = await response.json();
-          if (!visibleForStatus()) return;
+          if (!visibleForStatus() || debugController !== request) return;
           const nextStates = data.workflows || {};
           if (JSON.stringify(nextStates) !== JSON.stringify(debugStates)) {
             debugStates = nextStates;
-            render(true);
+            updateDebugStatus();
           }
         } catch {
           // Debug status is optional and does not affect workflow editing.
         } finally {
-          if (debugController === request) debugController = null;
-          if (visibleForStatus()) debugTimer = setTimeout(pollDebug, 5000);
+          if (debugController === request) {
+            debugController = null;
+            if (visibleForStatus()) {
+              clearTimeout(debugTimer);
+              debugTimer = setTimeout(pollDebug, 5000);
+            }
+          }
         }
       }
       const visibilityChanged = () => {
@@ -2360,10 +2430,7 @@
             if (label) edge.label = label;
             else delete edge.label;
             mark();
-            const summary = root.querySelector(
-              `.we-edge[data-edge="${from}|${to}"]`,
-            );
-            if (summary) summary.textContent = label;
+            syncEdgeLabels();
           }
           return;
         }
@@ -2849,7 +2916,10 @@
           pruneBindings(graph);
           selected = pasted.id;
           mark();
-          render(true);
+          render();
+          root
+            .querySelector(`[data-node="${pasted.id}"]`)
+            ?.focus?.({ preventScroll: true });
         } else if (b.dataset.focusNode !== undefined) {
           selected = b.dataset.focusNode;
           render(true);
@@ -3130,7 +3200,10 @@
             pruneBindings(graph);
             selected = copy.id;
             mark();
-            render(true);
+            render();
+            root
+              .querySelector(`[data-node="${copy.id}"]`)
+              ?.focus?.({ preventScroll: true });
           } else if (e.key.toLowerCase() === "z") {
             e.preventDefault();
             restore(undoStack, redoStack);
@@ -3240,6 +3313,7 @@
             } else path.setAttribute("d", wirePath(edge));
           }
         }
+        syncEdgeLabels();
         if (wireDrag) {
           const svg = canvas.querySelector(".we-wires"),
             rect = canvas.getBoundingClientRect(),

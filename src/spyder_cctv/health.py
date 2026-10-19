@@ -36,7 +36,8 @@ def summarize_health(cameras, recording, workflows, *, free_bytes=None, schedule
                     add(
                         "error" if result.get("state") == "error" else "warning",
                         "inference",
-                        f"{name}: {key} {result.get('error') or result.get('message') or result['state']}",
+                        f"{name}: {key} "
+                        f"{result.get('error') or result.get('message') or result['state']}",
                         ident,
                     )
                 elif (
