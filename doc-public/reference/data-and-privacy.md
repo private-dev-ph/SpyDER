@@ -14,6 +14,7 @@ application data root.
 | Camera sources, profiles, and active analysis settings | Configuration file. |
 | GUI pause preference | `preferences.json` beside the configuration. |
 | Workflow graphs | `workflows.json` in the application data root. |
+| Recording schedules | `schedules.json` in the application data root. |
 | Persistent event catalog | `events/events.json` in that root. |
 | Uploaded model library | `models/` in that root, including its registry and managed weights. |
 | Media output preference | `storage.json` in that root. |
@@ -39,6 +40,9 @@ the computer. SpyDER's local processing does not override an external folder's s
 behavior. See [storage allowances and recovery](../recording-storage.md).
 
 ## Backups
+
+For reviewed settings transfer, use [Configuration backup and restore](../user-guide/backups.md).
+It excludes media, model files, schedules, and browser layouts.
 
 Stop active recordings and the server before taking a consistent backup. Back up the
 configuration data root, all active/archived media folders, and any externally
