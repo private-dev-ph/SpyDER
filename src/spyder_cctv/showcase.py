@@ -45,6 +45,8 @@ def export_showcase(output: Path) -> None:
         "layouts.css",
         "workspaces.js",
         "workspaces.css",
+        "operations.js",
+        "operations.css",
         "browser-recording.js",
         "fullscreen.js",
         "fullscreen.css",

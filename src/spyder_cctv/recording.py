@@ -58,6 +58,7 @@ class RecordingService:
         self._started = 0.0
         self._stopped_at = 0.0
         self._last_elapsed = 0.0
+        self._control_revision = 0
         self._frames = 0
         self._disk_checked_at = 0.0
         self._disk_free = None
@@ -152,6 +153,7 @@ class RecordingService:
                     target=self._write_loop, name="spyder-recording-writer", daemon=True
                 )
                 self._thread.start()
+                self._control_revision += 1
                 return self.status()
             except Exception:
                 self._lease.release()
@@ -182,10 +184,12 @@ class RecordingService:
                     self._release(camera_id)
             if not ids:
                 self._wake.set()
+            self._control_revision += 1
             return self.status()
 
     def stop(self, timeout: float = 5.0) -> dict[str, Any]:
         with self._lock:
+            self._control_revision += 1
             if self._state == "recording":
                 self._stopped_at = time.monotonic()
                 self._state = "stopping"
@@ -236,6 +240,7 @@ class RecordingService:
             )
             return {
                 "state": self._state,
+                "control_revision": self._control_revision,
                 "session_id": self._session_id,
                 "camera_ids": list(self._camera_ids),
                 "elapsed_seconds": round(elapsed, 3),

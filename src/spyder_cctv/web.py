@@ -1,6 +1,7 @@
 """Loopback-only monitoring server. No package-relative filesystem assumptions."""
 
 import json
+import logging
 import math
 import platform
 import re
@@ -8,6 +9,7 @@ import shutil
 import socket
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from functools import lru_cache
@@ -25,10 +27,13 @@ from spyder_cctv.cameras import CameraManager
 from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile, load_app_config
+from spyder_cctv.configuration_backup import ConfigurationBackup
 from spyder_cctv.cv.detectors import DetectorCatalog
 from spyder_cctv.cv.diagnostics import engine_info
+from spyder_cctv.health import summarize_health
 from spyder_cctv.model_library import MAX_UPLOAD_BYTES, ModelLibrary
 from spyder_cctv.recording import RecordingService
+from spyder_cctv.schedules import RecordingSchedules
 from spyder_cctv.workflow import WorkflowService
 from spyder_cctv.workflow_code import run_code
 
@@ -53,6 +58,29 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         model_library=models,
         detector_catalog=detectors,
     )
+
+    schedules = RecordingSchedules(
+        manager, recorder, manager.app_data_dir / "schedules.json", autostart=False
+    )
+    backup = (
+        ConfigurationBackup(manager, recorder, workflows)
+        if getattr(manager, "_config_path", None)
+        else None
+    )
+    schedule_stop = threading.Event()
+    schedule_error = {"error": None}
+
+    def schedule_loop():
+        while not schedule_stop.wait(1):
+            try:
+                if not backup or not backup.pending:
+                    schedules.tick()
+                schedule_error["error"] = None
+            except Exception as error:
+                schedule_error["error"] = str(error)[:240]
+                logging.getLogger(__name__).warning("Schedule check failed: %s", error)
+
+    schedule_thread = threading.Thread(target=schedule_loop, name="spyder-schedules", daemon=True)
 
     @lru_cache(maxsize=128)
     def thumbnail(path, size, modified, position):
@@ -139,6 +167,9 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             super().server_bind()
 
         def server_close(self) -> None:
+            schedule_stop.set()
+            schedule_thread.join(timeout=6)
+            schedules.close()
             try:
                 workflows.close()
             finally:
@@ -246,6 +277,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/layouts.css",
                 "/workspaces.js",
                 "/workspaces.css",
+                "/operations.js",
+                "/operations.css",
                 "/fullscreen.js",
                 "/fullscreen.css",
                 "/vision-lab.js",
@@ -333,6 +366,35 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     ],
                 ]
                 self.json(200, snapshot)
+            elif path == "/api/system/health":
+                try:
+                    free = shutil.disk_usage(manager.media_dir).free
+                except OSError:
+                    free = 0
+                runtime = workflows.list()
+                runtime["debug"] = workflows.debug()["workflows"]
+                schedule_status = {**schedules.snapshot(), **schedule_error}
+                data = summarize_health(
+                    manager.statuses(),
+                    recorder.status(),
+                    runtime,
+                    free_bytes=free,
+                    schedules=schedule_status,
+                )
+                data["restore_pending"] = bool(backup and backup.pending)
+                self.json(200, data)
+            elif path == "/api/system/backup":
+                if backup is None:
+                    self.json(409, {"error": "Backup requires a persistent configuration"})
+                else:
+                    try:
+                        self.json(200, json.loads(backup.export()))
+                    except (OSError, ValueError, RuntimeError) as error:
+                        self.json(409, {"error": str(error)})
+            elif path == "/api/recordings/schedules":
+                self.json(200, schedules.snapshot())
+            elif path == "/api/workflows/debug":
+                self.json(200, workflows.debug())
             elif path == "/api/workflows":
                 self.json(200, workflows.list())
             elif path == "/api/vision/detectors":
@@ -646,7 +708,45 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
             try:
-                if len(parts) == 4 and parts[:2] == ["api", "events"] and parts[3] == "rename":
+                if backup and backup.pending:
+                    raise RuntimeError(
+                        "Configuration restore is pending; restart SpyDER before changing settings"
+                    )
+                if parts == ["api", "recordings", "schedules"]:
+                    data = self.body(262144)
+                    if set(data) != {"schedules"}:
+                        raise ValueError("Send schedules")
+                    self.json(200, schedules.save(data))
+                elif (
+                    len(parts) == 5
+                    and parts[:3] == ["api", "recordings", "schedules"]
+                    and parts[4] == "remove"
+                ):
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(200, schedules.remove(parts[3]))
+                elif (
+                    len(parts) == 4
+                    and parts[:3] == ["api", "system", "backup"]
+                    and parts[3] in ("preview", "restore")
+                ):
+                    data = self.body(2 * 1024 * 1024 + 256)
+                    if set(data) != {"backup"} or backup is None:
+                        raise ValueError("Send a backup with a persistent configuration")
+                    raw = json.dumps(data["backup"], ensure_ascii=False)
+                    if parts[3] == "restore":
+                        if recorder.status()["state"] not in ("idle", "error") or any(
+                            item["state"] not in ("stopped", "error") for item in manager.statuses()
+                        ):
+                            raise RuntimeError("Stop all cameras and recordings before restoring")
+                        if any(graph["enabled"] for graph in workflows.list()["workflows"]):
+                            raise RuntimeError("Disable all workflows before restoring")
+                        if any(rule["enabled"] for rule in schedules.snapshot()["schedules"]):
+                            raise RuntimeError("Disable recording schedules before restoring")
+                        self.json(200, backup.restore(raw))
+                    else:
+                        self.json(200, backup.preview(raw))
+                elif len(parts) == 4 and parts[:2] == ["api", "events"] and parts[3] == "rename":
                     data = self.body()
                     if set(data) != {"name"}:
                         raise ValueError("Send event name")
@@ -831,6 +931,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     data = self.body()
                     if set(data) != {"camera_ids"}:
                         raise ValueError("Send camera_ids")
+                    if parts != ["api", "captures"]:
+                        schedules.release_ownership()
                     outcome = (
                         recorder.capture(data["camera_ids"])
                         if parts == ["api", "captures"]
@@ -844,6 +946,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 elif parts == ["api", "recordings", "stop"]:
                     if self.body() != {}:
                         raise ValueError("Send an empty object")
+                    schedules.release_ownership()
                     outcome = workflows.manual_recording("stop")
                     self.json(200, outcome)
                 elif parts == ["api", "cameras"]:
@@ -967,8 +1070,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(409, {"error": str(error)})
 
     try:
-        return LocalServer(("127.0.0.1", port), Handler)
+        server = LocalServer(("127.0.0.1", port), Handler)
+        schedule_thread.start()
+        return server
     except Exception:
+        schedule_stop.set()
+        schedules.close()
         workflows.close()
         previews.close()
         capacity.close()

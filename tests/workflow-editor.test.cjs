@@ -96,11 +96,13 @@ test("new node parameters are independent and coordinates stay bounded", () => {
   assert.equal(clamp(NaN), 0);
 });
 
-
 test("copying a node creates independent bounded draft without connections", () => {
   const original = node("filter", 4990, 4990);
   original.params.label = "person";
-  const graph = { nodes: [original, node("cooldown")], edges: [{ from: original.id, to: "other" }] };
+  const graph = {
+    nodes: [original, node("cooldown")],
+    edges: [{ from: original.id, to: "other" }],
+  };
   const copy = duplicateNode(graph, original.id);
   assert.ok(copy);
   assert.notEqual(copy.id, original.id);
@@ -119,7 +121,10 @@ test("connection labels survive export and import, while unsupported edge fields
   assert.equal(restored.edges[0].internal_debug, undefined);
   const invalid = faceTemplate();
   invalid.edges[0].label = "x".repeat(81);
-  assert.throws(() => decodeWorkflow(encodeWorkflow(invalid)), /Invalid workflow connection/);
+  assert.throws(
+    () => decodeWorkflow(encodeWorkflow(invalid)),
+    /Invalid workflow connection/,
+  );
 });
 
 test("workflow viewport clamps zoom and converts pointer coordinates to canvas units", () => {
@@ -133,11 +138,16 @@ test("event nodes expose safe default naming, attachment and duration settings",
   assert.equal(TYPES.event.params.attachment, "none");
   assert.equal(TYPES.event.params.duration_seconds, 10);
   assert.match(TYPES.event.params.name_pattern, /\{workflow\}/);
-  assert.match(source, /\{workflow\}, \{camera\}, \{date\}, \{time\}, \{node\}, \{kind\}, \{label\}/);
+  assert.match(
+    source,
+    /\{workflow\}, \{camera\}, \{date\}, \{time\}, \{node\}, \{kind\}, \{label\}/,
+  );
   assert.match(source, /data-param="attachment"/);
-  assert.match(source, /data-param="duration_seconds" type="number" min="1" max="300"/);
+  assert.match(
+    source,
+    /data-param="duration_seconds" type="number" min="1" max="300"/,
+  );
 });
-
 
 test("toolbar node copy and paste stays a disabled draft", async () => {
   const h = mountHarness();
@@ -146,9 +156,15 @@ test("toolbar node copy and paste stays a disabled draft", async () => {
   const before = (h.root.innerHTML.match(/data-node="/g) || []).length;
   h.root.dispatch("click", h.target("button", { copyNode: "" }));
   h.root.dispatch("click", h.target("button", { pasteNode: "" }));
-  assert.equal((h.root.innerHTML.match(/data-node="/g) || []).length, before + 1);
+  assert.equal(
+    (h.root.innerHTML.match(/data-node="/g) || []).length,
+    before + 1,
+  );
   assert.match(h.root.innerHTML, /Workflow disabled/);
-  assert.equal(h.calls.some((call) => call.options?.method === "POST"), false);
+  assert.equal(
+    h.calls.some((call) => call.options?.method === "POST"),
+    false,
+  );
   h.window.spyderWorkflows.unmount();
 });
 
@@ -160,9 +176,18 @@ test("latest status endpoint polls in editor and showcase explains status is una
   const showcase = mountHarness({ showcase: true });
   await showcase.flush();
   const showcaseNode = addNode(showcase, "filter");
-  showcase.root.dispatch("dblclick", showcase.target("[data-node]", { node: showcaseNode }));
-  assert.match(showcase.root.innerHTML, /Latest node status unavailable in showcase/);
-  assert.equal(showcase.calls.some((call) => call.url === "/api/workflows/debug"), false);
+  showcase.root.dispatch(
+    "dblclick",
+    showcase.target("[data-node]", { node: showcaseNode }),
+  );
+  assert.match(
+    showcase.root.innerHTML,
+    /Latest node status unavailable in showcase/,
+  );
+  assert.equal(
+    showcase.calls.some((call) => call.url === "/api/workflows/debug"),
+    false,
+  );
   showcase.window.spyderWorkflows.unmount();
 });
 
@@ -174,7 +199,11 @@ test("zoom controls change canvas scale in place and clamp supported range", asy
   h.root.dispatch("click", h.target("button", { zoomIn: "" }));
   assert.equal(canvas.style.zoom, "1.1");
   assert.equal(h.root.querySelector("[data-zoom-level]").textContent, "110%");
-  assert.equal(h.root.assignments, assignments, "zoom must not rerender preview canvas");
+  assert.equal(
+    h.root.assignments,
+    assignments,
+    "zoom must not rerender preview canvas",
+  );
   for (let i = 0; i < 30; i++)
     h.root.dispatch("click", h.target("button", { zoomIn: "" }));
   assert.equal(canvas.style.zoom, "2");

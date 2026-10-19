@@ -1,0 +1,110 @@
+.operations-panel {
+  min-width: 0;
+}
+.operations-panel h2 {
+  margin-block: 0 12px;
+}
+.operations-panel fieldset {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-block: 12px;
+  min-width: 0;
+}
+.operations-panel legend {
+  padding-inline: 6px;
+  font-weight: 600;
+}
+.operation-fields {
+  display: grid;
+  grid-template-columns: minmax(140px, 2fr) repeat(2, minmax(100px, 1fr));
+  gap: 12px;
+}
+.operation-fields label,
+.backup-file-label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.schedule-days,
+.schedule-cameras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.operations-panel .operation-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.operations-panel .operation-check input {
+  width: auto;
+  margin: 0;
+}
+.schedule-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-block: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.schedule-row > div {
+  min-width: 0;
+}
+.schedule-row small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.schedule-list {
+  max-height: 24rem;
+  overflow: auto;
+}
+.backup-review {
+  padding: 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  margin-block: 16px;
+}
+.backup-review .button {
+  margin-top: 14px;
+}
+.health-issues {
+  max-height: 20rem;
+  overflow: auto;
+  padding-inline-start: 20px;
+}
+.health-issues li {
+  margin-block: 8px;
+  overflow-wrap: anywhere;
+}
+.health-error {
+  color: var(--accent);
+  font-weight: 600;
+}
+.operations-panel[data-state="healthy"] .health-summary {
+  color: var(--text);
+}
+.operations-panel[data-state="error"] .health-summary {
+  color: var(--accent);
+}
+.operations-panel small {
+  color: var(--muted);
+}
+@media (max-width: 600px) {
+  .operation-fields {
+    grid-template-columns: 1fr 1fr;
+  }
+  .operation-fields label:first-child {
+    grid-column: 1/-1;
+  }
+  .schedule-row .recording-actions {
+    width: 100%;
+  }
+  .backup-file-label {
+    width: 100%;
+  }
+}
