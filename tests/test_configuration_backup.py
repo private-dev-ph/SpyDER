@@ -8,8 +8,11 @@ from spyder_cctv.configuration_backup import ConfigurationBackup
 
 
 class Preferences:
+    def __init__(self):
+        self.error = None
+
     def snapshot(self):
-        return {"pause_when_unfocused": True}
+        return {"pause_when_unfocused": True, "storage_error": self.error}
 
 
 class Manager:
@@ -28,8 +31,12 @@ class Recorder:
 
 
 class Workflows:
+    def __init__(self):
+        self.workflows = []
+        self.error = None
+
     def list(self):
-        return {"workflows": []}
+        return {"workflows": self.workflows, "storage_error": self.error}
 
 
 def service(root):
@@ -127,3 +134,170 @@ def test_apply_failure_rolls_back_every_target(tmp_path, monkeypatch):
     assert {path: path.read_bytes() for path in files} == files
     assert backup.pending
     assert not (tmp_path / ".configuration-restore-journal.json").exists()
+
+
+def test_export_rejects_corrupt_preferences_and_workflows(tmp_path):
+    backup = service(tmp_path)
+    backup.manager._preferences.error = "corrupt"
+    with pytest.raises(ValueError, match="preferences storage is invalid"):
+        backup.export()
+    backup.manager._preferences.error = None
+    backup.workflows.error = "corrupt"
+    with pytest.raises(ValueError, match="workflow storage is invalid"):
+        backup.export()
+
+
+def test_preview_reports_camera_nodes_and_models_missing_on_destination(tmp_path):
+    backup = service(tmp_path)
+    backup.workflows.workflows = [
+        {
+            "id": "observe",
+            "name": "Observe",
+            "enabled": False,
+            "camera_ids": [],
+            "nodes": [
+                {"id": "cam", "type": "camera", "x": 0, "y": 0, "params": {"camera_id": "other"}},
+                {
+                    "id": "model",
+                    "type": "model",
+                    "x": 1,
+                    "y": 0,
+                    "params": {"model_id": "local-model"},
+                },
+            ],
+            "edges": [],
+        }
+    ]
+    preview = backup.preview(backup.export())
+    assert preview["missing_camera_references"] == ["other"]
+    assert preview["missing_model_references"] == ["local-model"]
+
+
+def test_import_sanitizes_machine_model_paths_and_dependent_labels(tmp_path):
+    backup = service(tmp_path)
+    data = json.loads(backup.export())
+    camera = data["config"]["cameras"][0]
+    camera["pipeline"] = "vision"
+    camera["vision"] = {
+        "engine": "insightface",
+        "model": "C:/weights/detector.onnx",
+        "device": "cpu",
+        "inference_fps": 3.0,
+        "confidence": 0.5,
+        "input_size": 640,
+        "max_detections": 100,
+        "recognition_model": None,
+        "identity_gallery": None,
+        "recognition_threshold": 0.65,
+        "classifier_model": "C:/weights/classifier.onnx",
+        "classifier_labels": ["person"],
+        "classifier_threshold": 0.5,
+        "classifier_output": "probabilities",
+        "classifier_preprocessing": "arcface",
+        "classifier_confirmation_frames": 3,
+        "classifier_switch_frames": 5,
+        "classifier_min_margin": 0.15,
+    }
+    normalized = backup._validate(json.dumps(data))
+    camera = normalized["config"]["cameras"][0]
+    assert camera["pipeline"] == "motion"
+    assert camera["vision"] is None
+    assert "C:/weights" not in json.dumps(normalized)
+
+
+def test_export_preserves_opencv_vision_settings_without_classifier_paths(tmp_path):
+    backup = service(tmp_path)
+    camera = CameraConfig(
+        "front",
+        0,
+        pipeline="vision",
+        vision={"engine": "opencv"},
+    )
+    backup.manager.workers = {"front": SimpleNamespace(config=camera)}
+    exported = backup.export()
+    preview = backup.preview(exported)
+    exported_camera = json.loads(exported)["config"]["cameras"][0]
+    assert preview["valid"] is True
+    assert exported_camera["pipeline"] == "vision"
+    assert exported_camera["vision"]["engine"] == "opencv"
+    assert exported_camera["vision"]["classifier_labels"] == []
+
+
+def test_invalid_profile_shape_becomes_validation_error(tmp_path):
+    backup = service(tmp_path)
+    data = json.loads(backup.export())
+    data["config"]["profiles"] = [{"name": "missing id"}]
+    with pytest.raises(ValueError, match="Profile contains"):
+        backup.preview(json.dumps(data))
+
+
+def test_recovery_rejects_different_media_directory_without_touching_it(tmp_path):
+    backup = service(tmp_path)
+    configured_media = tmp_path / "original-media"
+    alternate_media = tmp_path / "alternate-media"
+    alternate_media.mkdir()
+    marker = alternate_media / "recording-settings.json"
+    marker.write_bytes(b"preserve")
+    journal = tmp_path / ".configuration-restore-journal.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "config_path": str(backup.config_path.resolve()),
+                "config_filename": backup.config_path.name,
+                "media_dir": str(configured_media.resolve()),
+                "old": [None, None, None, None],
+            }
+        )
+    )
+    with pytest.raises(RuntimeError, match="identity"):
+        ConfigurationBackup.recover_interrupted(backup.config_path, alternate_media)
+    assert marker.read_bytes() == b"preserve"
+    assert journal.exists()
+
+
+def test_pending_and_journal_reads_are_bounded_and_targets_do_not_alias(tmp_path):
+    backup = service(tmp_path)
+    backup.pending_path.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="exceeds"):
+        ConfigurationBackup.apply_pending(backup.config_path)
+    backup.pending_path.unlink()
+    with pytest.raises(ValueError, match="distinct"):
+        ConfigurationBackup._target_paths(
+            tmp_path / "media" / "recording-settings.json", tmp_path / "media"
+        )
+    with pytest.raises(ValueError, match="conflicts"):
+        ConfigurationBackup._target_paths(
+            tmp_path / ".configuration-restore.json", tmp_path / "media"
+        )
+
+
+def test_journal_read_is_bounded_before_parsing(tmp_path):
+    from spyder_cctv.configuration_backup import MAX_JOURNAL_BYTES
+
+    journal = tmp_path / ".configuration-restore-journal.json"
+    with journal.open("wb") as stream:
+        stream.truncate(MAX_JOURNAL_BYTES + 1)
+    with pytest.raises(ValueError, match="exceeds"):
+        ConfigurationBackup.recover_interrupted(tmp_path / "config.json")
+
+
+def test_pending_unlink_failure_leaves_idempotent_committed_restore(tmp_path, monkeypatch):
+    backup = service(tmp_path)
+    backup.restore(backup.export())
+    original_unlink = type(backup.pending_path).unlink
+    failed = False
+
+    def fail_pending_once(path, *args, **kwargs):
+        nonlocal failed
+        if path == backup.pending_path and not failed:
+            failed = True
+            raise OSError("sharing violation")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(backup.pending_path), "unlink", fail_pending_once)
+    assert ConfigurationBackup.apply_pending(backup.config_path) is True
+    assert backup.pending
+    assert not (tmp_path / ".configuration-restore-journal.json").exists()
+    assert ConfigurationBackup.apply_pending(backup.config_path) is True
+    assert not backup.pending
