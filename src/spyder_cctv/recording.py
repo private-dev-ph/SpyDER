@@ -41,6 +41,8 @@ _MANIFEST = "manifest.json"
 class RecordingService:
     """Write composite sessions from camera workers' latest JPEG samples."""
 
+    supports_expected_revision = True
+
     def __init__(
         self, manager: Any, output_dir: Path, *, archive_dirs: list[Path] | None = None
     ) -> None:
@@ -96,10 +98,13 @@ class RecordingService:
         self.allowance = RecordingAllowance(self)
         self._recover_interrupted()
 
-    def start(self, camera_ids: list[str]) -> dict[str, Any]:
+    def start(
+        self, camera_ids: list[str], *, expected_revision: int | None = None
+    ) -> dict[str, Any]:
         ids = self._validate_ids(camera_ids)
         with self._lock:
             self._ensure_open()
+            self._check_revision(expected_revision)
             if self._state in ("recording", "stopping") or (
                 self._thread is not None and self._thread.is_alive()
             ):
@@ -159,10 +164,13 @@ class RecordingService:
                 self._lease.release()
                 raise
 
-    def select(self, camera_ids: list[str]) -> dict[str, Any]:
+    def select(
+        self, camera_ids: list[str], *, expected_revision: int | None = None
+    ) -> dict[str, Any]:
         ids = self._validate_ids(camera_ids, allow_empty=True)
         with self._lock:
             self._ensure_open()
+            self._check_revision(expected_revision)
             if self._state != "recording":
                 raise RuntimeError("No recording is active")
             before = list(self._camera_ids)
@@ -187,8 +195,9 @@ class RecordingService:
             self._control_revision += 1
             return self.status()
 
-    def stop(self, timeout: float = 5.0) -> dict[str, Any]:
+    def stop(self, timeout: float = 5.0, *, expected_revision: int | None = None) -> dict[str, Any]:
         with self._lock:
+            self._check_revision(expected_revision)
             self._control_revision += 1
             if self._state == "recording":
                 self._stopped_at = time.monotonic()
@@ -722,6 +731,10 @@ class RecordingService:
                 self.manager.set_recording(camera_id, False)
         except (KeyError, RuntimeError):
             pass
+
+    def _check_revision(self, expected: int | None) -> None:
+        if expected is not None and expected != self._control_revision:
+            raise RuntimeError("Recording ownership changed; scheduled action cancelled")
 
     def _ensure_open(self) -> None:
         if self._closed:

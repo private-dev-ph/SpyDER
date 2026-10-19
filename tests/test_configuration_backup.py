@@ -301,3 +301,41 @@ def test_pending_unlink_failure_leaves_idempotent_committed_restore(tmp_path, mo
     assert not (tmp_path / ".configuration-restore-journal.json").exists()
     assert ConfigurationBackup.apply_pending(backup.config_path) is True
     assert not backup.pending
+
+
+def test_malformed_later_journal_entry_never_partially_rolls_back(tmp_path):
+    from base64 import b64encode
+
+    backup = service(tmp_path)
+    media = tmp_path / "media"
+    media.mkdir()
+    targets = [
+        backup.config_path,
+        tmp_path / "preferences.json",
+        tmp_path / "workflows.json",
+        media / "recording-settings.json",
+    ]
+    for target in targets:
+        target.write_bytes(b"current contents")
+    journal = tmp_path / ".configuration-restore-journal.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "config_path": str(backup.config_path),
+                "config_filename": backup.config_path.name,
+                "media_dir": str(media),
+                "old": [
+                    b64encode(b"old config").decode(),
+                    b64encode(b"old preferences").decode(),
+                    "%%%invalid%%",
+                    None,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="Invalid restore journal"):
+        ConfigurationBackup.recover_interrupted(backup.config_path, media)
+    assert all(target.read_bytes() == b"current contents" for target in targets)
+    assert journal.exists()

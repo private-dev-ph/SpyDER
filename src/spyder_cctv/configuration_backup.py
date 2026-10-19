@@ -269,11 +269,12 @@ class ConfigurationBackup:
             or any(value is not None and not isinstance(value, str) for value in data["old"])
         ):
             raise RuntimeError("Invalid restore journal; preserve files for recovery")
+        previous_contents = []
         for path, value in zip(targets, data["old"], strict=True):
             if path.is_symlink():
                 raise RuntimeError("Restore target cannot be a symbolic link")
             if value is None:
-                path.unlink(missing_ok=True)
+                previous_contents.append(None)
             else:
                 try:
                     previous = b64decode(value, validate=True)
@@ -283,6 +284,12 @@ class ConfigurationBackup:
                     ) from error
                 if len(previous) > MAX_BACKUP_BYTES:
                     raise RuntimeError("Restore journal target exceeds its recovery limit")
+                previous_contents.append(previous)
+        # Validate the complete rollback document before touching any destination.
+        for path, previous in zip(targets, previous_contents, strict=True):
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
                 ConfigurationBackup._atomic_write(path, previous)
         journal.unlink()
 

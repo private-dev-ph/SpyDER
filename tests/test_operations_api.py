@@ -11,10 +11,20 @@ from spyder_cctv.web import create_server
 
 
 @pytest.fixture
-def local_app(tmp_path):
+def local_app(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     save_config(path, [CameraConfig("front", 0)])
     manager = CameraManager([CameraConfig("front", 0)], config_path=path)
+    import spyder_cctv.web as web_module
+
+    original_recorder = web_module.RecordingService
+
+    def capture_recorder(*args, **kwargs):
+        service = original_recorder(*args, **kwargs)
+        manager.test_recorder = service
+        return service
+
+    monkeypatch.setattr(web_module, "RecordingService", capture_recorder)
     server = create_server(manager, port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -91,3 +101,56 @@ def test_restore_previews_then_stages_without_touching_current_configuration(loc
     with pytest.raises(HTTPError) as locked:
         request("/api/preferences", {"pause_when_unfocused": False})
     assert locked.value.code == 409
+
+
+def test_restore_waits_for_error_state_workers_to_finish(local_app):
+    manager, request = local_app
+    backup = request("/api/system/backup")
+
+    class Retiring:
+        def is_alive(self):
+            return True
+
+    recorder = manager.test_recorder
+    recorder._state, recorder._thread = "error", Retiring()
+    try:
+        with pytest.raises(HTTPError) as denied:
+            request("/api/system/backup/restore", {"backup": backup})
+        assert denied.value.code == 409
+    finally:
+        recorder._state, recorder._thread = "idle", None
+    worker = manager.get_worker("front")
+    worker._state, worker._thread = "error", Retiring()
+    try:
+        with pytest.raises(HTTPError) as denied:
+            request("/api/system/backup/restore", {"backup": backup})
+        assert denied.value.code == 409
+    finally:
+        worker._state, worker._thread = "stopped", None
+
+
+def test_restore_serializes_pending_marker_with_other_controls(local_app, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from spyder_cctv.configuration_backup import ConfigurationBackup
+
+    _, request = local_app
+    backup = request("/api/system/backup")
+    entered, release = threading.Event(), threading.Event()
+    original = ConfigurationBackup.restore
+
+    def blocked(self, raw):
+        entered.set()
+        assert release.wait(3)
+        return original(self, raw)
+
+    monkeypatch.setattr(ConfigurationBackup, "restore", blocked)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        restore = pool.submit(request, "/api/system/backup/restore", {"backup": backup})
+        assert entered.wait(2)
+        mutation = pool.submit(request, "/api/preferences", {"pause_when_unfocused": False})
+        release.set()
+        assert restore.result()["pending"]
+        with pytest.raises(HTTPError) as locked:
+            mutation.result()
+        assert locked.value.code == 409

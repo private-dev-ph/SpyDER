@@ -437,3 +437,18 @@ def test_finalized_video_recovers_if_manifest_commit_fails(rig, monkeypatch):
     restored._save_catalog()
     assert not list(folder.glob(".*.recording.json"))
     restored.close()
+
+
+def test_scheduled_commands_cannot_modify_a_manually_transferred_session(rig):
+    _, service, _ = rig
+    started = service.start(["red"])
+    schedule_revision = started["control_revision"]
+    transferred = service.select(["red"])
+    assert transferred["control_revision"] > schedule_revision
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        service.stop(expected_revision=schedule_revision)
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        service.select(["green"], expected_revision=schedule_revision)
+    assert service.status()["state"] == "recording"
+    assert service.status()["camera_ids"] == ["red"]
+    service.stop()

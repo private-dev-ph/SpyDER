@@ -473,3 +473,10 @@ test("preview requests isolate upstream validation from invalid unrelated drafts
   assert.deepEqual(previewGraph(h.g, "preview"), payload);
   h.controller.destroy();
 });
+
+test("connection labels are cosmetic and never restart a preview branch", () => {
+  const before = graph();
+  const after = structuredClone(before);
+  after.edges[0].label = "Main camera";
+  assert.equal(branchKey(before, "preview"), branchKey(after, "preview"));
+});
