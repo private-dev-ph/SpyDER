@@ -82,6 +82,9 @@ def rig(tmp_path):
 
 def test_tiled_recording_reshapes_and_decodes(rig):
     _, service, _ = rig
+    # Test camera composition, independently of an asynchronous capture's cold start.
+    service.manager.get_worker("red").start()
+    wait_for(lambda: service.manager.get_worker("red").jpeg() is not None)
     service.start(["red"])
     wait_for(lambda: service.status()["frames"] >= 5)
     service.select(["red", "green"])
@@ -452,3 +455,199 @@ def test_scheduled_commands_cannot_modify_a_manually_transferred_session(rig):
     assert service.status()["state"] == "recording"
     assert service.status()["camera_ids"] == ["red"]
     service.stop()
+
+
+def sharing_violation():
+    error = PermissionError("recording file temporarily held by another process")
+    error.winerror = 32
+    return error
+
+
+@pytest.mark.parametrize("locked_step", ["journal", "confirmed_journal", "video", "catalog"])
+def test_rotation_retries_transient_journal_lock_and_continues(rig, monkeypatch, locked_step):
+    _, service, folder = rig
+    original = recording_module.os.replace
+    blocked = []
+
+    def replace(source, destination):
+        destination = recording_module.Path(destination)
+        target = {
+            "journal": destination.name.endswith(".active.json") and not destination.exists(),
+            "confirmed_journal": destination.name.endswith(".active.json") and destination.exists(),
+            "video": destination.suffix == ".mp4",
+            "catalog": destination.name == "manifest.json",
+        }[locked_step]
+        if target and service._segment_index >= 1 and len(blocked) < 3:
+            blocked.append(str(destination))
+            raise sharing_violation()
+        return original(source, destination)
+
+    monkeypatch.setattr(recording_module.os, "replace", replace)
+    monkeypatch.setattr(service, "_segment_frame_limit", lambda: 4)
+    service.start(["red", "green"])
+    wait_for(
+        lambda: service.status()["segments_saved"] >= 2 or service.status()["state"] == "error"
+    )
+    result = service.stop()
+    assert result["state"] == "idle", result["error"]
+    assert len(blocked) == 3
+    clips = [item for item in result["items"] if item["kind"] == "recording"]
+    assert len(clips) >= 2
+    assert clips[0]["session_id"] == clips[1]["session_id"]
+    assert [item["segment_index"] for item in clips[:2]] == [1, 2]
+    for item in clips[:2]:
+        reader = cv2.VideoCapture(str(folder / item["filename"]))
+        try:
+            assert reader.read()[0]
+            assert reader.get(cv2.CAP_PROP_FRAME_COUNT) == 4
+        finally:
+            reader.release()
+
+
+def test_atomic_write_does_not_mask_replace_failure_with_cleanup(rig, monkeypatch):
+    _, service, folder = rig
+    original = recording_module.Path.unlink
+    failure = OSError("original storage failure")
+
+    def replace(*args):
+        raise failure
+
+    def unlink(path, *args, **kwargs):
+        if path.suffix == ".tmp":
+            raise sharing_violation()
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(recording_module.os, "replace", replace)
+    monkeypatch.setattr(recording_module.Path, "unlink", unlink)
+    with pytest.raises(OSError, match="original storage failure"):
+        service._write_atomic(folder / "test.json", b"{}")
+
+
+def test_atomic_write_permanent_permission_failure_is_not_retried(rig, monkeypatch):
+    _, service, folder = rig
+    calls = []
+    (folder / "test.json").write_bytes(b"old")
+
+    def replace(*args):
+        calls.append(args)
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(recording_module.os, "replace", replace)
+    with pytest.raises(PermissionError, match="access denied"):
+        service._write_atomic(folder / "test.json", b"new")
+    assert len(calls) == 1
+    assert (folder / "test.json").read_bytes() == b"old"
+
+
+@pytest.mark.parametrize("winerror", [32, 33])
+def test_atomic_write_persistent_lock_has_bounded_retries(rig, monkeypatch, winerror):
+    _, service, folder = rig
+    calls, delays = [], []
+    (folder / "test.json").write_bytes(b"old")
+
+    def replace(*args):
+        calls.append(args)
+        error = sharing_violation()
+        error.winerror = winerror
+        raise error
+
+    monkeypatch.setattr(recording_module.os, "replace", replace)
+    monkeypatch.setattr(recording_module.time, "sleep", delays.append)
+    with pytest.raises(PermissionError):
+        service._write_atomic(folder / "test.json", b"new")
+    assert len(calls) == 8
+    assert sum(delays) == pytest.approx(3.15)
+    assert (folder / "test.json").read_bytes() == b"old"
+
+
+def test_persistent_video_lock_preserves_first_clip_and_reports_lock(rig, monkeypatch):
+    _, service, folder = rig
+    original = recording_module.os.replace
+
+    def replace(source, destination):
+        if str(destination).endswith(".mp4") and service._segment_index >= 1:
+            raise sharing_violation()
+        return original(source, destination)
+
+    monkeypatch.setattr(recording_module.os, "replace", replace)
+    monkeypatch.setattr(service, "_segment_frame_limit", lambda: 4)
+    service.start(["red"])
+    wait_for(lambda: service._thread is None, timeout=30)
+    result = service.status()
+    assert result["state"] == "error"
+    assert "file locked after retries" in result["error"]
+    assert result["segments_saved"] == 1
+    first = result["items"][0]
+    assert (folder / first["filename"]).is_file()
+    assert result["recovery"]["pending"]
+    partials = list(folder.glob(".*.partial.mp4"))
+    assert len(partials) == 1
+    reader = cv2.VideoCapture(str(partials[0]))
+    try:
+        assert reader.read()[0]
+    finally:
+        reader.release()
+
+
+def test_completed_journal_cleanup_failure_does_not_stop_next_clip(rig, monkeypatch):
+    _, service, _ = rig
+    original = recording_module.Path.unlink
+
+    def unlink(path, *args, **kwargs):
+        if path.name.endswith(".active.json"):
+            raise PermissionError("journal cleanup denied")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(recording_module.Path, "unlink", unlink)
+    monkeypatch.setattr(service, "_segment_frame_limit", lambda: 4)
+    service.start(["red"])
+    wait_for(lambda: service.status()["segments_saved"] >= 2, timeout=15)
+    assert service.stop(timeout=15)["state"] == "idle"
+    assert len(service.status()["items"]) >= 2
+
+
+@pytest.mark.skipif(recording_module.os.name != "nt", reason="Windows file sharing semantics")
+def test_atomic_write_survives_real_windows_file_handle_lock(rig, monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+
+    _, service, folder = rig
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    original = recording_module.os.replace
+    timer = None
+    failures = []
+
+    def replace(source, destination):
+        nonlocal timer
+        if timer is None:
+            # Permit reads/writes, but deny rename/delete just like an external reader.
+            handle = kernel.CreateFileW(str(source), 0x80000000, 3, None, 3, 0x80, None)
+            assert handle != wintypes.HANDLE(-1).value, ctypes.get_last_error()
+            timer = threading.Timer(0.2, lambda: kernel.CloseHandle(handle))
+            timer.start()
+        try:
+            return original(source, destination)
+        except PermissionError as error:
+            failures.append(error.winerror)
+            raise
+
+    monkeypatch.setattr(recording_module.os, "replace", replace)
+    try:
+        service._write_atomic(folder / "test.json", b"durable metadata")
+    finally:
+        if timer is not None:
+            timer.join()
+    assert failures and set(failures) == {32}
+    assert (folder / "test.json").read_bytes() == b"durable metadata"
