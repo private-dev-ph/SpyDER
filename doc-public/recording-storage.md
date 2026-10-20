@@ -45,6 +45,15 @@ clip is approximately 173 MB in Archive, 691 MB in Efficient, or 5.4 GB in Detai
 before container overhead. Choose a storage allowance larger than a normal clip
 and shorten clips if continuous cleanup needs to reclaim space sooner.
 
+Brief Windows file-sharing locks during clip rotation are retried automatically
+for up to 3.15 seconds per operation. This covers recording journal/catalog updates
+and video renames without rewriting the durable source. Cleanup of a completed
+clip's journal cannot stop the next clip. Persistent locks stop the session and
+report a file-lock error in System health; earlier completed clips remain saved.
+Check other applications accessing the output folder before starting again.
+A stop does not automatically restart recording. Temporary metadata cleanup failures
+are logged without hiding the original error, and uncertain footage remains on disk.
+
 ## Unexpected stops and recovery
 
 New native recordings use **fragmented MP4**, with a two-second fragment target,

@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,27 @@ HEIGHT = 1080
 FPS = 15
 MIN_FREE_BYTES = 64 * 1024 * 1024
 _MANIFEST = "manifest.json"
+_LOCKED_FILE_ERROR = (
+    "Recording stopped: another process kept a recording file locked after "
+    "retries. Earlier completed clips remain saved. Check file-sync, scanner "
+    "or media-reader locks on the output folder."
+)
+
+
+def _retry_sharing_violation(operation: Callable[[], None]) -> None:
+    """Retry only Windows sharing/lock violations, with a bounded 3.15s delay.
+
+    A scanner or media reader may briefly hold a closed file without delete sharing.
+    Keep the same durable source for each attempt; never recreate or truncate it.
+    """
+    for attempt in range(8):
+        try:
+            operation()
+            return
+        except OSError as error:
+            if getattr(error, "winerror", None) not in (32, 33) or attempt == 7:
+                raise
+            time.sleep(min(0.05 * 2**attempt, 0.8))
 
 
 class RecordingService:
@@ -415,10 +437,15 @@ class RecordingService:
                 )
                 self._wake.wait(remaining)
                 self._wake.clear()
-        except Exception:
+        except Exception as error:
             logger.exception("Recording writer failed")
             with self._lock:
-                self._error = "Recording writer failed. Check local encoder and available storage."
+                if getattr(error, "winerror", None) in (32, 33):
+                    self._error = _LOCKED_FILE_ERROR
+                else:
+                    self._error = (
+                        "Recording writer failed. Check local encoder and available storage."
+                    )
                 self._state = "error"
         finally:
             self._finalize()
@@ -478,12 +505,20 @@ class RecordingService:
             # A small recovery journal bridges the video rename and catalog update.
             journal = self.output_dir / f".{self._segment_id}.recording.json"
             self._write_atomic(journal, json.dumps(item).encode("utf-8"))
-            os.replace(temp_path, final_path)
+            _retry_sharing_violation(lambda: os.replace(temp_path, final_path))
             with self._lock:
                 self._items[self._segment_id] = item
                 self._save_catalog()
                 self._segment_index += 1
-            (self.output_dir / f".{self._segment_id}.active.json").unlink(missing_ok=True)
+            try:
+                _retry_sharing_violation(
+                    lambda: (self.output_dir / f".{self._segment_id}.active.json").unlink(
+                        missing_ok=True
+                    )
+                )
+            except OSError:
+                # The catalog is already durable. Startup can retire this stale journal.
+                logger.warning("Could not remove completed recording active journal", exc_info=True)
             sync_directory(self.output_dir)
             self._segment_frames = 0
             self._temp_path = None
@@ -494,10 +529,14 @@ class RecordingService:
             self._stopped_at = self._stopped_at or time.monotonic()
         try:
             self._finish_segment()
-        except Exception:
+        except Exception as error:
             logger.exception("Recording finalization failed")
             with self._lock:
-                self._error = "Recording finalization failed; earlier completed clips remain saved"
+                self._error = (
+                    _LOCKED_FILE_ERROR
+                    if getattr(error, "winerror", None) in (32, 33)
+                    else "Recording finalization failed; earlier completed clips remain saved"
+                )
                 self._state = "error"
         finally:
             try:
@@ -590,7 +629,9 @@ class RecordingService:
                     )
                     journal = self.output_dir / f".{ident}.recording.json"
                     self._write_atomic(journal, json.dumps(item).encode("utf-8"))
-                    os.replace(source, final_path)
+                    _retry_sharing_violation(
+                        lambda source=source, final_path=final_path: os.replace(source, final_path)
+                    )
                     self._items[ident] = item
                     self._save_catalog()
                     active.unlink(missing_ok=True)
@@ -899,7 +940,11 @@ class RecordingService:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp, path)
+            _retry_sharing_violation(lambda: os.replace(temp, path))
             sync_directory(path.parent)
         finally:
-            temp.unlink(missing_ok=True)
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                # Cleanup must not hide the original write/rename error.
+                logger.warning("Could not remove recording metadata temporary file", exc_info=True)
