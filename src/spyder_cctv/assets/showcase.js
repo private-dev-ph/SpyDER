@@ -12,7 +12,7 @@
       for (const camera of cameras.values()) {
         if (
           recording.has(camera.id) ||
-          !["running", "starting"].includes(camera.state)
+          !["running", "starting", "reconnecting"].includes(camera.state)
         )
           continue;
         sleeping.add(camera.id);
@@ -182,7 +182,9 @@
       recording: recording.has(camera.id),
       error: camera.error,
       frames: camera.frames,
+      capture_session: camera.capture_session,
       metadata: { motion_fraction: camera.motion || 0 },
+      reconnection: { ...camera.reconnection },
       profile_id: camera.profile_id,
       profile_name:
         profiles.find((p) => p.id === camera.profile_id)?.name || null,
@@ -235,7 +237,9 @@
       ? "partial"
       : "applied";
   }
-  function stop(camera) {
+  function stop(camera, { preserveReconnect = false } = {}) {
+    clearTimeout(camera.retryTimer);
+    camera.retryTimer = null;
     camera.epoch++;
     camera.framePromise = null;
     camera.track = null;
@@ -253,16 +257,92 @@
     camera.previous = null;
     camera.blob = null;
     camera.frameTime = 0;
+    camera.capture_session = null;
     camera.state = "stopped";
     camera.motion = 0;
+    if (!preserveReconnect) {
+      camera.reconnection.enabled = false;
+      camera.reconnection.retry_in_seconds = null;
+      camera.reconnection.attempt = 0;
+      camera.reconnectStableSince = 0;
+    }
     camera.settings_state = Object.keys(desired(camera)).length
       ? "scheduled"
       : "applied";
   }
-  async function start(camera) {
+  const retryDelays = [1, 2, 4, 8, 16, 30];
+  function reconnectFailure(camera, error) {
+    if (error?.name === "NotAllowedError") {
+      camera.reconnection.enabled = false;
+      camera.reconnection.retry_in_seconds = null;
+      camera.state = "error";
+      camera.error = "Camera permission unavailable. Allow access, then Retry.";
+      return;
+    }
+    scheduleReconnect(camera);
+  }
+  function scheduleReconnect(camera) {
+    if (
+      !cameras.has(camera.id) ||
+      (away && !recording.has(camera.id)) ||
+      camera.retryTimer !== null || camera.state !== "reconnecting"
+    ) return;
+    const delay =
+      retryDelays[
+        Math.min(camera.reconnection.attempt, retryDelays.length - 1)
+      ];
+    camera.reconnection.attempt++;
+    camera.reconnection.retry_in_seconds = delay;
+    camera.retryTimer = setTimeout(async () => {
+      camera.retryTimer = null;
+      camera.reconnection.retry_in_seconds = 0;
+      if (!cameras.has(camera.id) || (away && !recording.has(camera.id))) return;
+      try {
+        await start(camera, { reconnect: true });
+      } catch (error) {
+        reconnectFailure(camera, error);
+      }
+    }, delay * 1000);
+  }
+  async function cameraPermissionGranted() {
+    if (!navigator.permissions?.query) return false;
+    try {
+      return (
+        (await navigator.permissions.query({ name: "camera" })).state ===
+        "granted"
+      );
+    } catch {
+      return false;
+    }
+  }
+  async function cameraEnded(camera, epoch) {
+    if (camera.epoch !== epoch || camera.state !== "running") return;
+    stop(camera, { preserveReconnect: true });
+    camera.state = "reconnecting";
+    camera.error = null;
+    camera.reconnection.enabled = true;
+    camera.reconnection.retry_in_seconds = null;
+    camera.reconnectStableSince = 0;
+    if (!(await cameraPermissionGranted())) {
+      camera.reconnection.enabled = false;
+      camera.state = "error";
+      camera.error = "Camera disconnected. Allow camera access, then Retry.";
+      return;
+    }
+    if (!cameras.has(camera.id) || (away && !recording.has(camera.id))) return;
+    scheduleReconnect(camera);
+  }
+  async function start(camera, { reconnect = false } = {}) {
     if (camera.state === "running" || camera.state === "starting") return;
+    if (!reconnect) {
+      clearTimeout(camera.retryTimer);
+      camera.retryTimer = null;
+      camera.reconnection.retry_in_seconds = null;
+      camera.reconnection.attempt = 0;
+      camera.reconnectStableSince = 0;
+    }
     const epoch = ++camera.epoch;
-    camera.state = "starting";
+    camera.state = reconnect ? "reconnecting" : "starting";
     camera.error = null;
     let stream;
     try {
@@ -309,11 +389,7 @@
               "This webcam is already in the wall. Choose another device.",
             );
           camera.track.addEventListener("ended", () => {
-            if (camera.epoch === epoch) {
-              stop(camera);
-              camera.state = "error";
-              camera.error = "Camera disconnected or permission revoked.";
-            }
+            cameraEnded(camera, epoch);
           });
         } else {
           camera.fileUrl = URL.createObjectURL(camera.file);
@@ -332,19 +408,30 @@
           video.currentTime = camera.resumeTime;
       }
       if (epoch !== camera.epoch) return;
+      camera.capture_session = crypto.randomUUID();
       camera.state = "running";
       await apply(camera);
+      if (reconnect && camera.epoch === epoch) {
+        camera.reconnection.recoveries++;
+        camera.reconnection.enabled = true;
+        camera.reconnection.retry_in_seconds = null;
+        camera.reconnectStableSince = performance.now();
+      }
     } catch (error) {
       stream?.getTracks().forEach((t) => t.stop());
       if (epoch !== camera.epoch) return;
-      stop(camera);
-      camera.state = "error";
+      stop(camera, { preserveReconnect: reconnect });
+      camera.state =
+        reconnect && error.name !== "NotAllowedError"
+          ? "reconnecting"
+          : "error";
       camera.error =
         error.name === "NotAllowedError"
           ? "Camera permission denied. Allow this site in browser settings, then Retry."
           : error.name === "NotReadableError"
             ? "Camera busy or unavailable. Close other camera apps, then Retry."
             : error.message;
+      if (reconnect) reconnectFailure(camera, error);
     }
   }
   async function add(data, fixedId = null) {
@@ -401,6 +488,13 @@
       results: {},
       frames: 0,
       epoch: 0,
+      retryTimer: null,
+      reconnection: {
+        enabled: kind === "webcam",
+        attempt: 0,
+        retry_in_seconds: null,
+        recoveries: 0,
+      },
       canvas,
       context: canvas.getContext("2d", { willReadFrequently: true }),
       sample: document.createElement("canvas"),
@@ -501,6 +595,13 @@
       throw new Error("Camera stopped while encoding.");
     camera.blob = blob;
     camera.frameTime = performance.now();
+    if (
+      camera.reconnectStableSince &&
+      camera.frameTime - camera.reconnectStableSince >= 30000
+    ) {
+      camera.reconnection.attempt = 0;
+      camera.reconnectStableSince = 0;
+    }
     return blob;
   }
   async function request(path, data = {}) {
@@ -716,7 +817,8 @@
   window.addEventListener("pagehide", () => {
     clearTimeout(idleTimer);
     for (const c of cameras.values()) {
-      if (["running", "starting"].includes(c.state)) sleeping.add(c.id);
+      if (["running", "starting", "reconnecting"].includes(c.state))
+        sleeping.add(c.id);
       stop(c);
     }
   });
