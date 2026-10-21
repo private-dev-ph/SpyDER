@@ -228,9 +228,7 @@ class RecordingService:
                 self._pre_event_snapshot = history
                 self._event_decode_cache.clear()
                 self._event_trigger_time = trigger
-                self._event_end_time = (
-                    trigger + post_event_seconds if trigger is not None else None
-                )
+                self._event_end_time = trigger + post_event_seconds if trigger is not None else None
                 self._event_next_time = timeline_start
                 self._segment_id = self._session_id
                 self._session_filename = f"{self._segment_id}.mp4"
@@ -489,13 +487,13 @@ class RecordingService:
                     now = time.monotonic()
                     due = max(
                         0,
-                        int((min(now, event_end) - event_next) * self._profile["fps"] + 1e-7)
+                        math.floor((min(now, event_end) - event_next) * self._profile["fps"] + 1e-7)
                         + 1,
                     )
                     for _ in range(due):
                         target = event_next
                         if (
-                            target > event_end
+                            target >= event_end
                             or not self._owns_event_frame(event_end, target)
                             or not self._recording_space_available()
                         ):
@@ -522,7 +520,6 @@ class RecordingService:
                             )
                         if not self._write_composite(composite, pre_event_seconds=pre_seconds):
                             break
-                        event_next += 1 / self._profile["fps"]
                         with self._lock:
                             if (
                                 self._state != "recording"
@@ -530,6 +527,9 @@ class RecordingService:
                                 or self._event_next_time != target
                             ):
                                 break
+                            # Derive timestamps from frame count, avoiding accumulated
+                            # floating-point drift at an exact clip endpoint.
+                            event_next = self._started + self._frames / self._profile["fps"]
                             self._event_next_time = event_next
                     with self._lock:
                         event_active = (
@@ -539,7 +539,7 @@ class RecordingService:
                     if not event_active or event_next is None:
                         continue
                     now = time.monotonic()
-                    if now >= event_end and event_next > event_end:
+                    if now >= event_end and event_next >= event_end:
                         finish_event = False
                         with self._lock:
                             if (
@@ -615,7 +615,9 @@ class RecordingService:
             candidates = [frame for frame in initial if frame.timestamp <= target]
             if buffer is not None:
                 try:
-                    candidates.extend(buffer.snapshot(camera_id, seconds, before=target))
+                    candidates.extend(
+                        buffer.snapshot(camera_id, seconds, before=min(target, time.monotonic()))
+                    )
                 except (KeyError, RuntimeError, ValueError):
                     pass
             newest = max(candidates, key=lambda frame: frame.timestamp, default=None)
@@ -626,11 +628,7 @@ class RecordingService:
                     newest = sample() if callable(sample) else None
                 except (KeyError, RuntimeError, ValueError, TypeError):
                     newest = None
-            if (
-                newest is None
-                or newest.timestamp > target
-                or target - newest.timestamp > freshness
-            ):
+            if newest is None or newest.timestamp > target or target - newest.timestamp > freshness:
                 images.append(None)
             else:
                 images.append(self._decode_event_frame(camera_id, newest))
@@ -661,9 +659,7 @@ class RecordingService:
     def _wall_time(timestamp: float) -> datetime:
         return datetime.fromtimestamp(timestamp + time.time() - time.monotonic(), UTC)
 
-    def _write_composite(
-        self, composite: np.ndarray, *, pre_event_seconds: float = 0.0
-    ) -> bool:
+    def _write_composite(self, composite: np.ndarray, *, pre_event_seconds: float = 0.0) -> bool:
         if not self._recording_space_available():
             return False
         if self._writer is None:
@@ -704,9 +700,9 @@ class RecordingService:
             codec="H.264",
             format_version=1,
             requested_pre_event_seconds=self._requested_pre_event_seconds,
-            pre_event_seconds=round(
-                self._available_pre_event_seconds if self._segment_index == 0 else 0.0, 3
-            ),
+            # A crash journal must not claim history that has not reached the file.
+            # Completed clips receive the exact encoded count in _finish_segment.
+            pre_event_seconds=0.0,
             **(
                 {"created_at": self._wall_time(self._started).isoformat()}
                 if self._requested_pre_event_seconds and self._segment_index == 0

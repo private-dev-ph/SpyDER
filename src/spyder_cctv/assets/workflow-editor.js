@@ -627,6 +627,7 @@
           !Number.isInteger(n.params?.duration_seconds) ||
           n.params.duration_seconds < 1 ||
           n.params.duration_seconds > 300 ||
+          n.params?.pre_event_seconds === null ||
           !Number.isInteger(n.params?.pre_event_seconds ?? 0) ||
           (n.params?.pre_event_seconds ?? 0) < 0 ||
           (n.params?.pre_event_seconds ?? 0) > 30)

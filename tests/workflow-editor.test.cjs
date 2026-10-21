@@ -173,7 +173,7 @@ test("pre-event seconds default on legacy imports, round-trip, and validate rang
     ).params.pre_event_seconds,
     0,
   );
-  for (const invalid of [-1, 31, 1.5, "2"]) {
+  for (const invalid of [-1, 31, 1.5, "2", true, null]) {
     const candidate = faceTemplate();
     candidate.nodes.find(
       (item) => item.type === "event",

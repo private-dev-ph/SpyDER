@@ -66,7 +66,9 @@ def decoded_frames(path):
     return frames
 
 
-def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(service_rig):
+def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(
+    service_rig, monkeypatch
+):
     manager, service, output = service_rig
     history = manager.pre_event_buffer
     history.configure({"red": 2})
@@ -76,6 +78,13 @@ def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(se
     for offset in (1.0, 0.78, 0.56, 0.34, 0.12):
         history.push("red", red, trigger - offset, "camera-session")
     green = encode_color((20, 220, 20))
+    # The real worker must agree with the simulated post-trigger source, including
+    # the atomic latest-frame fallback if encoder startup outlasts ring retention.
+    monkeypatch.setattr(
+        StaticCapture,
+        "read",
+        lambda self: (True, np.full((90, 160, 3), (20, 220, 20), dtype=np.uint8)),
+    )
     finish = threading.Event()
     publisher_started = threading.Event()
     publishers = []
@@ -110,8 +119,7 @@ def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(se
 
     try:
         wait_for(
-            lambda: service.status()["state"] == "idle"
-            and not service.status()["writer_active"]
+            lambda: service.status()["state"] == "idle" and not service.status()["writer_active"]
         )
     finally:
         finish.set()
@@ -121,7 +129,7 @@ def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(se
     item_start = datetime.fromisoformat(item["created_at"]).timestamp()
     assert abs(item_start - (trigger - 1.0 + wall_offset)) < 0.5
     frames = decoded_frames(service.media_path(item["id"]))
-    assert len(frames) >= 4
+    assert len(frames) == 6  # One second before + one after, at 3 fps; end is exclusive.
     center = [frame[100:-50, 100:-50] for frame in frames]
     assert center[0][:, :, 2].mean() > center[0][:, :, 1].mean() * 2
     assert center[-1][:, :, 1].mean() > center[-1][:, :, 2].mean() * 2
@@ -190,9 +198,7 @@ def test_select_same_membership_and_explicit_takeover_cancel_auto_finish(service
     history.configure({"red": 1})
     trigger = time.monotonic()
     history.push("red", encode_color((20, 20, 230)), trigger, "s")
-    service.start(
-        ["red"], pre_event_seconds=1, event_trigger_time=trigger, post_event_seconds=2
-    )
+    service.start(["red"], pre_event_seconds=1, event_trigger_time=trigger, post_event_seconds=2)
     # Same membership still transfers ownership and cancels pre-event mode.
     service.select(["red"])
     assert service._event_end_time is None
@@ -218,9 +224,7 @@ def test_select_during_blocked_event_sampling_cannot_restore_auto_stop(service_r
         return sample(camera_ids, target)
 
     monkeypatch.setattr(service, "_event_samples", blocked_sample)
-    service.start(
-        ["red"], pre_event_seconds=1, event_trigger_time=trigger, post_event_seconds=1
-    )
+    service.start(["red"], pre_event_seconds=1, event_trigger_time=trigger, post_event_seconds=1)
     assert entered.wait(3)
     service.select(["red"])
     time.sleep(1.1)
