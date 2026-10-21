@@ -184,7 +184,16 @@
       frames: camera.frames,
       capture_session: camera.capture_session,
       metadata: { motion_fraction: camera.motion || 0 },
-      reconnection: { ...camera.reconnection },
+      reconnection: {
+        ...camera.reconnection,
+        retry_in_seconds:
+          camera.retryDeadline === null
+            ? camera.reconnection.retry_in_seconds
+            : Math.max(
+                0,
+                Math.ceil((camera.retryDeadline - performance.now()) / 1000),
+              ),
+      },
       profile_id: camera.profile_id,
       profile_name:
         profiles.find((p) => p.id === camera.profile_id)?.name || null,
@@ -240,6 +249,7 @@
   function stop(camera, { preserveReconnect = false } = {}) {
     clearTimeout(camera.retryTimer);
     camera.retryTimer = null;
+    camera.retryDeadline = null;
     camera.epoch++;
     camera.framePromise = null;
     camera.track = null;
@@ -275,6 +285,7 @@
     if (error?.name === "NotAllowedError") {
       camera.reconnection.enabled = false;
       camera.reconnection.retry_in_seconds = null;
+      camera.retryDeadline = null;
       camera.state = "error";
       camera.error = "Camera permission unavailable. Allow access, then Retry.";
       return;
@@ -293,8 +304,10 @@
       ];
     camera.reconnection.attempt++;
     camera.reconnection.retry_in_seconds = delay;
+    camera.retryDeadline = performance.now() + delay * 1000;
     camera.retryTimer = setTimeout(async () => {
       camera.retryTimer = null;
+      camera.retryDeadline = null;
       camera.reconnection.retry_in_seconds = 0;
       if (!cameras.has(camera.id) || (away && !recording.has(camera.id))) return;
       try {
@@ -319,11 +332,18 @@
     if (camera.epoch !== epoch || camera.state !== "running") return;
     stop(camera, { preserveReconnect: true });
     camera.state = "reconnecting";
+    const reconnectEpoch = camera.epoch;
     camera.error = null;
     camera.reconnection.enabled = true;
     camera.reconnection.retry_in_seconds = null;
     camera.reconnectStableSince = 0;
-    if (!(await cameraPermissionGranted())) {
+    const granted = await cameraPermissionGranted();
+    if (
+      camera.epoch !== reconnectEpoch ||
+      camera.state !== "reconnecting" ||
+      !cameras.has(camera.id)
+    ) return;
+    if (!granted) {
       camera.reconnection.enabled = false;
       camera.state = "error";
       camera.error = "Camera disconnected. Allow camera access, then Retry.";
@@ -334,14 +354,17 @@
   }
   async function start(camera, { reconnect = false } = {}) {
     if (camera.state === "running" || camera.state === "starting") return;
+    if (camera.openEpoch === camera.epoch) return;
     if (!reconnect) {
       clearTimeout(camera.retryTimer);
       camera.retryTimer = null;
+      camera.retryDeadline = null;
       camera.reconnection.retry_in_seconds = null;
       camera.reconnection.attempt = 0;
       camera.reconnectStableSince = 0;
     }
     const epoch = ++camera.epoch;
+    camera.openEpoch = epoch;
     camera.state = reconnect ? "reconnecting" : "starting";
     camera.error = null;
     let stream;
@@ -356,6 +379,20 @@
             throw new Error(
               "Webcams require HTTPS or localhost and a supported browser.",
             );
+          if (reconnect) {
+            const granted = await cameraPermissionGranted();
+            if (
+              epoch !== camera.epoch ||
+              camera.state !== "reconnecting" ||
+              !cameras.has(camera.id) ||
+              (away && !recording.has(camera.id))
+            ) return;
+            if (!granted)
+              throw new DOMException(
+                "Camera permission unavailable.",
+                "NotAllowedError",
+              );
+          }
           stream = await navigator.mediaDevices.getUserMedia({
             audio: false,
             video: {
@@ -415,6 +452,7 @@
         camera.reconnection.recoveries++;
         camera.reconnection.enabled = true;
         camera.reconnection.retry_in_seconds = null;
+        camera.retryDeadline = null;
         camera.reconnectStableSince = performance.now();
       }
     } catch (error) {
@@ -432,6 +470,8 @@
             ? "Camera busy or unavailable. Close other camera apps, then Retry."
             : error.message;
       if (reconnect) reconnectFailure(camera, error);
+    } finally {
+      if (camera.openEpoch === epoch) camera.openEpoch = null;
     }
   }
   async function add(data, fixedId = null) {
@@ -489,6 +529,8 @@
       frames: 0,
       epoch: 0,
       retryTimer: null,
+      retryDeadline: null,
+      openEpoch: null,
       reconnection: {
         enabled: kind === "webcam",
         attempt: 0,
