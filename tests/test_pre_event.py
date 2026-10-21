@@ -115,3 +115,25 @@ def test_thread_safe_pushes_keep_byte_accounting_consistent():
     assert status["total_bytes"] == sum(cam["bytes"] for cam in status["cameras"].values())
     assert status["total_bytes"] <= status["max_bytes"]
     assert sum(cam["frames"] for cam in status["cameras"].values()) == 20
+
+
+def test_full_camera_wall_eviction_and_clear_keep_index_bounded():
+    clock = FakeClock()
+    buffer = PreEventBuffer(max_bytes=64 * 2048, per_camera_bytes=2048, clock=clock)
+    buffer.configure({f"camera-{i}": 30 for i in range(64)})
+    for step in range(160):
+        clock.value = 100 + step * 0.21
+        for camera in range(64):
+            buffer.push(f"camera-{camera}", bytes([camera]) * 1024, clock(), "session")
+    status = buffer.status()
+    assert status["total_bytes"] <= 64 * 2048
+    assert sum(item["frames"] for item in status["cameras"].values()) == 128
+    # Secondary eviction bookkeeping must not retain evicted JPEGs.
+    assert len(buffer._order) == 128
+    for camera in range(64):
+        frames = buffer.snapshot(f"camera-{camera}", 30)
+        assert len(frames) == 2
+        assert all(frame.jpeg == bytes([camera]) * 1024 for frame in frames)
+    buffer.configure({})
+    assert not buffer._order
+    assert buffer.status()["total_bytes"] == 0

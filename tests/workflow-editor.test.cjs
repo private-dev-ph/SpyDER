@@ -161,21 +161,27 @@ test("pre-event seconds default on legacy imports, round-trip, and validate rang
     event = graph.nodes.find((item) => item.type === "event");
   event.params.pre_event_seconds = 14;
   assert.equal(
-    decodeWorkflow(encodeWorkflow(graph)).nodes.find((item) => item.type === "event")
-      .params.pre_event_seconds,
+    decodeWorkflow(encodeWorkflow(graph)).nodes.find(
+      (item) => item.type === "event",
+    ).params.pre_event_seconds,
     14,
   );
   delete event.params.pre_event_seconds;
   assert.equal(
-    decodeWorkflow(encodeWorkflow(graph)).nodes.find((item) => item.type === "event")
-      .params.pre_event_seconds,
+    decodeWorkflow(encodeWorkflow(graph)).nodes.find(
+      (item) => item.type === "event",
+    ).params.pre_event_seconds,
     0,
   );
   for (const invalid of [-1, 31, 1.5, "2"]) {
     const candidate = faceTemplate();
-    candidate.nodes.find((item) => item.type === "event").params.pre_event_seconds =
-      invalid;
-    assert.match(validate(candidate).join(" "), /Event name, attachment, or duration is invalid/);
+    candidate.nodes.find(
+      (item) => item.type === "event",
+    ).params.pre_event_seconds = invalid;
+    assert.match(
+      validate(candidate).join(" "),
+      /Event name, attachment, or duration is invalid/,
+    );
   }
 });
 
@@ -199,7 +205,10 @@ test("pre-event control appears only for recording and preserves value while hid
   assert.doesNotMatch(h.root.innerHTML, /data-param="pre_event_seconds"/);
   attachment.value = "recording";
   h.root.dispatch("change", attachment);
-  assert.match(h.root.innerHTML, /data-param="pre_event_seconds"[^>]*value="7"/);
+  assert.match(
+    h.root.innerHTML,
+    /data-param="pre_event_seconds"[^>]*value="7"/,
+  );
   h.window.spyderWorkflows.unmount();
 });
 

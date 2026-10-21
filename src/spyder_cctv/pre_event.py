@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -45,7 +45,7 @@ class PreEventBuffer:
         self._clock = clock
         self._lock = threading.RLock()
         self._cameras: dict[str, _CameraBuffer] = {}
-        self._order: deque[tuple[str, BufferedFrame]] = deque()
+        self._order: OrderedDict[int, tuple[str, BufferedFrame]] = OrderedDict()
         self._bytes = 0
 
     def configure(self, requirements: dict[str, int]) -> None:
@@ -104,7 +104,7 @@ class PreEventBuffer:
             camera.frames.append(frame)
             camera.size += size
             self._bytes += size
-            self._order.append((camera_id, frame))
+            self._order[id(frame)] = (camera_id, frame)
             camera.last_accepted = timestamp
             self._trim_camera(camera_id, now)
             while self._bytes > self._max_bytes and self._order:
@@ -180,26 +180,21 @@ class PreEventBuffer:
             camera.frames.remove(frame)
         camera.size -= len(frame.jpeg)
         self._bytes -= len(frame.jpeg)
-        self._order = deque(
-            (cid, stored) for cid, stored in self._order
-            if cid != camera_id or stored is not frame
-        )
+        self._order.pop(id(frame), None)
 
     def _remove_frames(self, camera_id: str) -> None:
         camera = self._cameras[camera_id]
         while camera.frames:
             self._drop_frame(camera_id, camera.frames[0])
-        self._order = deque((cid, frame) for cid, frame in self._order if cid != camera_id)
 
     def _remove_camera(self, camera_id: str) -> None:
         self._remove_frames(camera_id)
         del self._cameras[camera_id]
 
     def _evict_oldest(self) -> None:
-        camera_id, frame = self._order.popleft()
+        _, (camera_id, frame) = self._order.popitem(last=False)
         camera = self._cameras.get(camera_id)
         if camera is None:
             return
         if camera.frames and camera.frames[0] is frame:
             self._drop_frame(camera_id, frame)
-

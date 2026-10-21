@@ -34,6 +34,7 @@ flowchart LR
 | Draft analysis and motion | `analysis_preview.py`, `analysis_runtime.py`, `motion.py`, `motion_config.py` |
 | Models and metadata | `model_library.py`, `model_metadata.py`, `cv/detectors.py` |
 | Workflow validation and execution | `workflow.py`, `workflow_code.py`, `assets/workflow-editor.js` |
+| Opt-in pre-event JPEG history | `pre_event.py`, `cameras.py` |
 | Media and crash recovery | `recording.py`, `video_encoder.py`, `recording_recovery.py` |
 | Quota policy and data locations | `recording_allowance.py`, `storage.py` |
 | Durable events and preferences | `events.py`, `preferences.py` |
@@ -56,6 +57,16 @@ The recorder owns one composite session, samples existing camera workers, and wr
 fragmented H.264 MP4 through a local FFmpeg subprocess. Its frame size/rate comes from
 the selected storage profile. Camera membership changes rearrange tiles inside that
 fixed canvas. See [recovery and storage](../recording-storage.md) for persistence guarantees.
+
+Enabled workflow recording Event nodes configure a shared `PreEventBuffer` on the
+camera manager. Workers publish existing encoded JPEGs at up to 5 fps; the buffer
+has a 64 MiB global limit, an 8 MiB per-camera limit, and a 30-second maximum window.
+It never starts or retains cameras. Capture-session resets and stops clear history.
+The recorder holds an immutable reference snapshot for one event clip, then follows
+monotonic sample timestamps through its post-trigger endpoint. Additional snapshot
+references (up to one camera's history), decode/composite scratch space, and encoder
+memory are separate from the ring's byte limit. Automatic endpoints are cancelled
+when recording ownership transfers to manual controls or another workflow action.
 
 ## Drafts, activation, and persistence
 

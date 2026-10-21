@@ -1313,10 +1313,10 @@ class WorkflowService:
                 raise ValueError("stop does not accept camera_ids")
             with self._lock:
                 session_id = self.recorder.status().get("session_id")
-                if session_id in self._event_clip_sessions:
-                    self._transfer_event_clip(session_id)
                 memberships = list(self.recorder.status().get("camera_ids", []))
                 result = self.recorder.stop()
+                if session_id in self._event_clip_sessions:
+                    self._transfer_event_clip(session_id)
                 self.relinquish_recording(memberships)
                 return result
         if (
@@ -1330,14 +1330,14 @@ class WorkflowService:
             raise ValueError("camera_ids must be a list of valid camera ids")
         with self._lock:
             session_id = self.recorder.status().get("session_id")
-            if session_id in self._event_clip_sessions:
-                self._transfer_event_clip(session_id)
             previous = list(self.recorder.status().get("camera_ids", []))
             result = (
                 self.recorder.start(camera_ids)
                 if action == "start"
                 else self.recorder.select(camera_ids)
             )
+            if session_id in self._event_clip_sessions:
+                self._transfer_event_clip(session_id)
             transferred = camera_ids if action == "start" else [*previous, *camera_ids]
             self.relinquish_recording(transferred)
             return result
@@ -2366,11 +2366,11 @@ class WorkflowService:
 
     def _record_locked(self, action: str, graph_id: str, camera_id: str) -> None:
         state = self.recorder.status()
-        if state.get("session_id") in self._event_clip_sessions:
-            self._transfer_event_clip(state["session_id"])
         members = list(state.get("camera_ids", []))
         if action == "start":
             if camera_id in members:
+                if state.get("session_id") in self._event_clip_sessions:
+                    self._transfer_event_clip(state["session_id"])
                 owners = self._record_owned.get(camera_id)
                 if owners:
                     owners.add(graph_id)
@@ -2379,6 +2379,8 @@ class WorkflowService:
                 self.recorder.select(list(dict.fromkeys([*members, camera_id])))
             else:
                 self.recorder.start([camera_id])
+            if state.get("session_id") in self._event_clip_sessions:
+                self._transfer_event_clip(state["session_id"])
             self._record_owned.setdefault(camera_id, set()).add(graph_id)
         elif graph_id in self._record_owned.get(camera_id, set()):
             owned = self._record_owned[camera_id]

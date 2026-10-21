@@ -125,3 +125,22 @@ def test_disconnect_clears_history_and_camera_removal_clears_history():
         assert "front" not in manager.workers
     finally:
         manager.close()
+
+
+def test_atomic_recording_sample_tracks_exact_pixels_timestamp_and_session():
+    manager = make_manager([CameraConfig("front", 1, fps=60)], PreEventBuffer())
+    worker = manager.workers["front"]
+    try:
+        assert worker.recording_sample() is None
+        worker.start()
+        wait_for(lambda: worker.recording_sample() is not None)
+        sample = worker.recording_sample()
+        assert sample.jpeg == b"1"
+        assert sample.timestamp <= time.monotonic()
+        assert sample.capture_session == worker.status()["capture_session"]
+        worker.stop()
+        assert worker.recording_sample() is None
+        # Consumer-held snapshots remain immutable after the capture is released.
+        assert sample.jpeg == b"1"
+    finally:
+        manager.close()

@@ -55,6 +55,7 @@ before configuring DNS. A generated export does not deploy the site or configure
 | Workflow editing and JSON exchange | Supported | Browser-only drafts/import/export. |
 | Workflow execution, Code nodes, Preview node execution, event actions | Local execution | Disabled. |
 | Recording and captures | Local filesystem | Canvas/MediaRecorder and local Blob objects. |
+| Pre-event recording | Opt-in local RAM buffer for workflow Event clips | Settings editable; native pre-event capture unavailable. |
 | Retention and crash recovery | Native storage policy and journals | No durable media recovery. |
 
 Webcam permission is requested after a user action. Production webcam access requires
