@@ -6,6 +6,10 @@ const {
   modelPage,
   faceTemplate,
   insightfaceTemplate,
+  preEventTemplate,
+  TEMPLATE_CATALOG,
+  templateEntries,
+  createWorkflowTemplate,
   validate,
   node,
   duplicateNode,
@@ -278,6 +282,11 @@ test("zoom controls change canvas scale in place and clamp supported range", asy
   h.window.spyderWorkflows.unmount();
 });
 
+function loadTemplate(h, id) {
+  h.root.dispatch("click", h.target("button", { openTemplates: "" }));
+  h.root.dispatch("click", h.target("button", { loadTemplate: id }));
+}
+
 function mountHarness({
   showcase = false,
   fetcher,
@@ -529,7 +538,7 @@ test("showcase loads local draft, makes no requests, and unmount clears handlers
   await h.flush();
   assert.equal(h.calls.length, 0);
   assert.match(h.root.innerHTML, /Demo editing only/);
-  h.root.dispatch("click", h.target("button", { template: "" }));
+  loadTemplate(h, "face-event");
   h.root.dispatch("click", h.target("button", { save: "" }));
   assert.ok(h.local.has("spyder.workflow-editor.draft"));
   assert.equal(h.calls.length, 0);
@@ -884,7 +893,7 @@ test("node deletion and template replacement both undo", async () => {
   h.root.dispatch("click", h.target("button", { add: "filter" }));
   h.root.dispatch("click", h.target("button", { deleteNode: "" }));
   h.root.dispatch("click", h.target("button", { undo: "" }));
-  h.root.dispatch("click", h.target("button", { template: "" }));
+  loadTemplate(h, "face-event");
   h.root.dispatch("click", h.target("button", { undo: "" }));
   h.root.dispatch("click", h.target("button", { save: "" }));
   await h.flush();
@@ -971,7 +980,7 @@ test("first node and template starting node center in viewport; Center frames gr
     .querySelector(`[data-node="${id}"]`);
   assert.equal(parseFloat(card.style.left) + 82 - wrap.scrollLeft, 320);
   assert.equal(parseFloat(card.style.top) + 38 - wrap.scrollTop, 120);
-  h.root.dispatch("click", h.target("button", { template: "" }));
+  loadTemplate(h, "face-event");
   assert.equal(wrap.scrollLeft, 802); // Starting detection node, not the whole chain.
   h.root.dispatch("click", h.target("button", { center: "" }));
   assert.equal(wrap.scrollLeft, 1162); // Padding + midpoint of x=40..924 - width/2.
@@ -1462,8 +1471,8 @@ test("template button preselects local InsightFace model and makes matching filt
     ],
   });
   await h.flush();
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
-  assert.match(h.root.innerHTML, /InsightFace alert draft created/);
+  loadTemplate(h, "insightface-alert");
+  assert.match(h.root.innerHTML, /InsightFace detection alert draft created/);
   assert.match(
     h.root.innerHTML,
     /Classifier identity<select data-param="identity"/,
@@ -1498,7 +1507,7 @@ test("InsightFace template omits classifier when no compatible upload exists", a
     ],
   });
   await h.flush();
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
+  loadTemplate(h, "insightface-alert");
   assert.match(h.root.innerHTML, /SCRFD 500MF/);
   assert.doesNotMatch(h.root.innerHTML, /we-node-classifier/);
   h.root.dispatch("click", h.target("button", { save: "" }));
@@ -1726,7 +1735,7 @@ test("class identity mode offers connected model classes and keeps custom choice
     ],
   });
   await h.flush();
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
+  loadTemplate(h, "insightface-alert");
   const source = h.target("[data-param]", { param: "identity_source" });
   source.value = "class";
   h.root.dispatch("change", source);
@@ -1787,7 +1796,7 @@ test("independent motion on a non-face workflow does not show a disable-motion w
 test("class identity without metadata retains editable text and import preserves its source", async () => {
   const h = mountHarness();
   await h.flush();
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
+  loadTemplate(h, "insightface-alert");
   const modelId = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)].at(
     -1,
   )[1];
@@ -1877,7 +1886,7 @@ test("activation timeout reconciles server state and retains the draft", async (
 test("wire trash deletes only its connection and undo restores it", async () => {
   const h = mountHarness();
   await h.flush();
-  h.root.dispatch("click", h.target("button", { template: "" }));
+  loadTemplate(h, "face-event");
   const ids = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)].map(
     (m) => m[1],
   );
@@ -1908,7 +1917,7 @@ test("wire trash deletes only its connection and undo restores it", async () => 
 test("dragging connected IN moves the existing wire, cancellation and cycles keep it", async () => {
   const h = mountHarness();
   await h.flush();
-  h.root.dispatch("click", h.target("button", { template: "" }));
+  loadTemplate(h, "face-event");
   const ids = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)].map(
     (m) => m[1],
   );
@@ -1951,7 +1960,7 @@ test("dragging connected IN moves the existing wire, cancellation and cycles kee
 test("unconnected IN creates a wire and a shared IN asks which wire to reconnect", async () => {
   const h = mountHarness();
   await h.flush();
-  h.root.dispatch("click", h.target("button", { template: "" }));
+  loadTemplate(h, "face-event");
   const ids = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)].map(
     (m) => m[1],
   );
@@ -2004,7 +2013,7 @@ test("settings signal drop creates live link; fixed class drop restores literal 
     ],
   });
   await h.flush();
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
+  loadTemplate(h, "insightface-alert");
   const ids = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)].map(
     (m) => m[1],
   );
@@ -2072,7 +2081,7 @@ test("incompatible signal is rejected and deleting source connection clears down
     ],
   });
   await h.flush();
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
+  loadTemplate(h, "insightface-alert");
   const ids = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)].map(
     (m) => m[1],
   );
@@ -2139,7 +2148,7 @@ test("removing a filter rule shifts remaining data links and unlink restores lit
     ],
   });
   await h.flush();
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
+  loadTemplate(h, "insightface-alert");
   const ids = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)].map(
     (m) => m[1],
   );
@@ -2697,7 +2706,7 @@ test("desktop permission belongs to Notification node gestures rather than edito
   assert.match(h.root.innerHTML, /PC \/ browser notifications/);
   assert.match(h.root.innerHTML, /data-notification-permission/);
   assert.match(h.root.innerHTML, /Send test notification/);
-  h.root.dispatch("click", h.target("button", { insightfaceTemplate: "" }));
+  loadTemplate(h, "insightface-alert");
   assert.equal(uses, 2);
   h.window.spyderWorkflows.unmount();
 });
@@ -2940,5 +2949,136 @@ test("saved usage and current unsaved draft references both block library remova
     h.calls.some((c) => c.url.endsWith("/vision")),
     false,
   );
+  h.window.spyderWorkflows.unmount();
+});
+
+test("pre-event template uses built-in person detection and safe clip timing", () => {
+  const graph = preEventTemplate({ cameraId: "front" });
+  assert.equal(graph.enabled, false);
+  assert.deepEqual(
+    graph.nodes.map((n) => n.type),
+    ["camera", "detections", "filter", "cooldown", "event"],
+  );
+  assert.equal(graph.nodes[0].params.camera_id, "front");
+  assert.equal(graph.nodes[1].params.engine, "opencv");
+  assert.equal(graph.nodes[2].params.label, "person");
+  assert.equal(graph.nodes[2].params.confidence, 0);
+  assert.equal(graph.nodes[3].params.seconds, 45);
+  assert.deepEqual(graph.edges[0], {
+    from: graph.nodes[0].id,
+    to: graph.nodes[1].id,
+    input: "camera",
+  });
+  const event = graph.nodes[4];
+  assert.equal(event.params.attachment, "recording");
+  assert.equal(event.params.pre_event_seconds, 10);
+  assert.equal(event.params.duration_seconds, 20);
+  assert.deepEqual(validate(graph), []);
+  assert.equal(
+    decodeWorkflow(encodeWorkflow(graph)).nodes[4].params.pre_event_seconds,
+    10,
+  );
+  const second = createWorkflowTemplate("pre-event-person", {
+    cameraId: "back",
+  });
+  assert.notEqual(second.id, graph.id);
+  second.nodes[4].params.pre_event_seconds = 1;
+  assert.equal(event.params.pre_event_seconds, 10);
+});
+
+test("template catalog describes requirements and supports purpose search", () => {
+  assert.equal(new Set(TEMPLATE_CATALOG.map((t) => t.id)).size, 3);
+  for (const entry of TEMPLATE_CATALOG) {
+    assert.ok(
+      entry.name &&
+        entry.description &&
+        entry.purpose &&
+        entry.details &&
+        entry.setup,
+    );
+    assert.ok(entry.requirements.length);
+    assert.equal(createWorkflowTemplate(entry.id).enabled, false);
+  }
+  assert.deepEqual(
+    templateEntries("OpenCV recording").map((t) => t.id),
+    ["pre-event-person"],
+  );
+  assert.deepEqual(
+    templateEntries("  IDENTITY  ").map((t) => t.id),
+    ["insightface-alert"],
+  );
+  assert.equal(templateEntries("no-such-template").length, 0);
+  assert.throws(
+    () => createWorkflowTemplate("unknown"),
+    /Unknown workflow template/,
+  );
+});
+
+test("template picker browses without modifying draft or requesting permissions", async () => {
+  const h = mountHarness({ showcase: true });
+  await h.flush();
+  const name = h.target("[data-name]");
+  name.value = "Keep this draft";
+  h.root.dispatch("input", name);
+  const before = h.local.get("spyder.workflow-editor.draft");
+  h.root.dispatch("click", h.target("button", { openTemplates: "" }));
+  assert.match(h.root.innerHTML, /Workflow templates/);
+  assert.match(h.root.innerHTML, /aria-labelledby="we-template-title"/);
+  assert.equal(
+    (h.root.innerHTML.match(/class="we-template-thumbnail"/g) || []).length,
+    3,
+  );
+  assert.match(h.root.innerHTML, /10s before · 20s after/);
+  assert.match(h.root.innerHTML, /Idle recorder/);
+  assert.match(
+    h.root.innerHTML,
+    /Showcase: templates are editable local drafts/,
+  );
+  const search = h.target("[data-template-search]");
+  search.value = "OpenCV recording";
+  h.root.dispatch("input", search);
+  assert.match(
+    h.root.querySelector("[data-template-list]").innerHTML,
+    /Pre-event person recording/,
+  );
+  assert.doesNotMatch(
+    h.root.querySelector("[data-template-list]").innerHTML,
+    /InsightFace detection alert/,
+  );
+  search.value = "nonexistent";
+  h.root.dispatch("input", search);
+  assert.match(
+    h.root.querySelector("[data-template-list]").innerHTML,
+    /No templates match/,
+  );
+  h.root.dispatch("keydown", search, { key: "Escape" });
+  assert.doesNotMatch(h.root.innerHTML, /data-template-modal/);
+  assert.equal(h.local.get("spyder.workflow-editor.draft"), before);
+  assert.equal(h.root.querySelector("[data-open-templates]").focused, true);
+  assert.equal(h.calls.length, 0);
+  h.window.spyderWorkflows.unmount();
+});
+
+test("loading pre-event template creates disabled draft and undo restores unsaved work", async () => {
+  const h = mountHarness({ showcase: true });
+  await h.flush();
+  const name = h.target("[data-name]");
+  name.value = "My unsaved work";
+  h.root.dispatch("input", name);
+  const before = JSON.parse(h.local.get("spyder.workflow-editor.draft"));
+  loadTemplate(h, "pre-event-person");
+  const after = JSON.parse(h.local.get("spyder.workflow-editor.draft"));
+  assert.notEqual(after.id, before.id);
+  assert.equal(after.enabled, false);
+  assert.equal(after.nodes[0].params.camera_id, "cam-1");
+  assert.equal(after.nodes.at(-1).params.pre_event_seconds, 10);
+  assert.doesNotMatch(h.root.innerHTML, /data-template-modal/);
+  assert.match(h.root.innerHTML, /Review settings, save, then enable/);
+  h.root.dispatch("click", h.target("button", { undo: "" }));
+  assert.deepEqual(
+    JSON.parse(h.local.get("spyder.workflow-editor.draft")),
+    before,
+  );
+  assert.equal(h.calls.length, 0);
   h.window.spyderWorkflows.unmount();
 });
