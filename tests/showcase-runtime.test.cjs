@@ -10,10 +10,12 @@ function runtime(
   },
   storage = new Map(),
   encode = (callback) => callback(new Blob(["jpeg"], { type: "image/jpeg" })),
-  { omitRoomLabel = false } = {},
+  { omitRoomLabel = false, permissionState = "granted" } = {},
 ) {
   const elements = new Map();
-  const idleCallbacks = new Set();
+  const timers = new Map();
+  let nextTimer = 0;
+  let now = 0;
   function element() {
     return {
       value: "demo",
@@ -65,6 +67,7 @@ function runtime(
       createTextNode: (text) => ({ textContent: text }),
     },
     navigator: {
+      permissions: { query: async () => ({ state: permissionState }) },
       mediaDevices: {
         getUserMedia,
         enumerateDevices: async () => [],
@@ -85,12 +88,13 @@ function runtime(
     URL,
     DOMException,
     crypto: require("node:crypto").webcrypto,
-    performance,
-    setTimeout: (callback) => {
-      idleCallbacks.add(callback);
-      return callback;
+    performance: { now: () => now },
+    setTimeout: (callback, delay = 0) => {
+      const id = ++nextTimer;
+      timers.set(id, { callback, due: now + delay });
+      return id;
     },
-    clearTimeout: (callback) => idleCallbacks.delete(callback),
+    clearTimeout: (id) => timers.delete(id),
     Uint8ClampedArray,
     fetch: () => {
       throw new Error("Network access forbidden");
@@ -103,10 +107,22 @@ function runtime(
     ),
     context,
   );
-  window.spyderShowcase.flushIdle = async () => {
-    for (const callback of idleCallbacks) callback();
-    idleCallbacks.clear();
+  window.spyderShowcase.advanceTimers = async (milliseconds) => {
+    now += milliseconds;
+    const due = [...timers.entries()]
+      .filter(([, timer]) => timer.due <= now)
+      .sort((a, b) => a[1].due - b[1].due);
+    for (const [id, timer] of due) {
+      timers.delete(id);
+      await timer.callback();
+    }
     await Promise.resolve();
+  };
+  window.spyderShowcase.flushMicrotasks = async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  };
+  window.spyderShowcase.flushIdle = async () => {
+    await window.spyderShowcase.advanceTimers(2000);
   };
   return window.spyderShowcase;
 }
@@ -119,13 +135,19 @@ const cameraData = {
   autostart: true,
 };
 function track() {
+  const listeners = new Map();
   return {
     stopped: false,
     value: 100,
     stop() {
       this.stopped = true;
     },
-    addEventListener() {},
+    addEventListener(name, callback) {
+      listeners.set(name, callback);
+    },
+    emit(name) {
+      listeners.get(name)?.();
+    },
     getCapabilities: () => ({ zoom: { min: 100, max: 500, step: 1 } }),
     getSettings() {
       return { deviceId: "one", zoom: this.value };
@@ -227,6 +249,122 @@ test("permission denial is recoverable and remote sources never open", async () 
     app.request("/api/profiles", { name: "Bad", settings: { zoom: 101 } }),
     /between 0 and 100/,
   );
+});
+
+test("disconnected webcam reacquires only granted saved device and publishes a fresh capture session", async () => {
+  const devices = [track(), track()];
+  const constraints = [];
+  let opens = 0;
+  const app = runtime(async (options) => {
+    constraints.push(options.video.deviceId);
+    const device = devices[opens++];
+    return { getTracks: () => [device], getVideoTracks: () => [device] };
+  });
+  const camera = await app.request("/api/cameras", cameraData);
+  const first = (await list(app))[0];
+  devices[0].emit("ended");
+  await app.flushMicrotasks();
+  let current = (await list(app)).find((entry) => entry.id === camera.id);
+  assert.equal(current.state, "reconnecting");
+  assert.deepEqual(current.reconnection, {
+    enabled: true,
+    attempt: 1,
+    retry_in_seconds: 1,
+    recoveries: 0,
+  });
+  await app.advanceTimers(1000);
+  current = (await list(app)).find((entry) => entry.id === camera.id);
+  assert.equal(current.state, "running");
+  assert.equal(current.reconnection.recoveries, 1);
+  assert.notEqual(current.capture_session, first.capture_session);
+  assert.equal(devices[0].stopped, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(constraints)), [
+    { exact: "one" },
+    { exact: "one" },
+  ]);
+  await app.request(`/api/cameras/${camera.id}/stop`);
+});
+
+test("webcam reconnect backoff grows to thirty seconds and resets after stable frames", async () => {
+  const devices = [track(), track(), track()];
+  let opens = 0;
+  const app = runtime(async () => {
+    const index = opens++;
+    if (index > 0 && index < 6)
+      throw new DOMException("busy", "NotReadableError");
+    return { getTracks: () => [devices[Math.min(index, 2)]], getVideoTracks: () => [devices[Math.min(index, 2)]] };
+  });
+  const camera = await app.request("/api/cameras", cameraData);
+  devices[0].emit("ended");
+  await app.flushMicrotasks();
+  for (const [delay, next] of [[1, 2], [2, 4], [4, 8], [8, 16], [16, 30]]) {
+    const pending = (await list(app)).find((entry) => entry.id === camera.id);
+    assert.equal(pending.state, "reconnecting");
+    assert.equal(pending.reconnection.retry_in_seconds, delay);
+    await app.advanceTimers(delay * 1000);
+    const after = (await list(app)).find((entry) => entry.id === camera.id);
+    if (next) assert.equal(after.reconnection.retry_in_seconds, next);
+  }
+  await app.advanceTimers(30000);
+  let current = (await list(app)).find((entry) => entry.id === camera.id);
+  assert.equal(current.state, "running");
+  assert.equal(current.reconnection.recoveries, 1);
+  await app.fetch(`/api/cameras/${camera.id}/frame`);
+  await app.advanceTimers(30000);
+  await app.fetch(`/api/cameras/${camera.id}/frame`);
+  current = (await list(app)).find((entry) => entry.id === camera.id);
+  assert.equal(current.reconnection.attempt, 0);
+  await app.request(`/api/cameras/${camera.id}/stop`);
+});
+
+test("showcase does not retry when camera permission is not confirmed and stop cancels pending retry", async () => {
+  const device = track();
+  let opens = 0;
+  const denied = runtime(async () => {
+    opens++;
+    return { getTracks: () => [device], getVideoTracks: () => [device] };
+  }, new Map(), undefined, { permissionState: "prompt" });
+  const camera = await denied.request("/api/cameras", cameraData);
+  device.emit("ended");
+  await denied.flushMicrotasks();
+  const status = (await list(denied)).find((entry) => entry.id === camera.id);
+  assert.equal(status.state, "error");
+  await denied.advanceTimers(60000);
+  assert.equal(opens, 1);
+
+  const secondDevice = track();
+  opens = 0;
+  const allowed = runtime(async () => {
+    opens++;
+    return { getTracks: () => [secondDevice], getVideoTracks: () => [secondDevice] };
+  });
+  const second = await allowed.request("/api/cameras", cameraData);
+  secondDevice.emit("ended");
+  await allowed.flushMicrotasks();
+  await allowed.request(`/api/cameras/${second.id}/stop`);
+  await allowed.advanceTimers(60000);
+  assert.equal(opens, 1);
+  assert.equal((await list(allowed)).find((entry) => entry.id === second.id).state, "stopped");
+});
+
+test("permanent permission denial ends automatic retries", async () => {
+  const device = track();
+  let opens = 0;
+  const app = runtime(async () => {
+    if (opens++ === 0)
+      return { getTracks: () => [device], getVideoTracks: () => [device] };
+    throw new DOMException("revoked", "NotAllowedError");
+  });
+  const camera = await app.request("/api/cameras", cameraData);
+  device.emit("ended");
+  await app.flushMicrotasks();
+  await app.advanceTimers(1000);
+  const current = (await list(app)).find((entry) => entry.id === camera.id);
+  assert.equal(current.state, "error");
+  assert.equal(current.reconnection.enabled, false);
+  assert.equal(current.reconnection.retry_in_seconds, null);
+  await app.advanceTimers(60000);
+  assert.equal(opens, 2);
 });
 
 test("pausing during JPEG encoding discards the late frame", async () => {
