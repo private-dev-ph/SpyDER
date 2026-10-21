@@ -112,3 +112,60 @@ def test_event_attachment_includes_worker_history_and_finishes_after_trigger(tmp
         workflow.close()
         recorder.close()
         manager.close()
+
+
+def test_storage_stop_saves_encoded_pre_event_frames_and_releases_snapshot(tmp_path, monkeypatch):
+    class Capture:
+        def __init__(self, source):
+            pass
+
+        def read(self):
+            return True, np.full((90, 160, 3), (20, 20, 230), dtype=np.uint8)
+
+        def close(self):
+            pass
+
+    manager = CameraManager(
+        [CameraConfig("front", 0, fps=15)], capture_factory=Capture, media_dir=tmp_path / "media"
+    )
+    recorder = RecordingService(manager, tmp_path / "media")
+    history = manager.pre_event_buffer
+    history.configure({"front": 3})
+    manager.get_worker("front").start()
+    allowed = True
+    original_write = recorder._write_composite
+
+    def fill_allowance_after_one_frame(frame, *args, **kwargs):
+        nonlocal allowed
+        result = original_write(frame, *args, **kwargs)
+        assert recorder._active_metadata["pre_event_seconds"] == 0
+        allowed = False
+        return result
+
+    monkeypatch.setattr(recorder.allowance, "permit", lambda: allowed)
+    monkeypatch.setattr(recorder, "_write_composite", fill_allowance_after_one_frame)
+    try:
+        wait_for(lambda: history.status()["cameras"]["front"]["frames"] >= 5)
+        recorder.start(
+            ["front"],
+            pre_event_seconds=3,
+            event_trigger_time=time.monotonic(),
+            post_event_seconds=2,
+        )
+        wait_for(lambda: not recorder.status()["writer_active"])
+        status = recorder.status()
+        assert status["state"] == "idle"
+        assert "storage allowance" in status["error"]
+        item = status["items"][0]
+        assert item["duration_seconds"] <= 0.2
+        assert 0 < item["pre_event_seconds"] <= item["duration_seconds"]
+        assert recorder._pre_event_snapshot == ()
+        video = cv2.VideoCapture(str(recorder.media_path(item["id"])))
+        try:
+            assert video.read()[0]
+        finally:
+            video.release()
+        assert "front" not in manager._recording
+    finally:
+        recorder.close()
+        manager.close()

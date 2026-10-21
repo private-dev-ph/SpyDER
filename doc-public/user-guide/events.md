@@ -42,6 +42,9 @@ many cameras, memory pressure, and recent starts can shorten available history.
 The encoded MP4 follows your recording quality profile; resampling the history
 does not recover additional motion detail. Recording metadata reports requested
 and included pre-event seconds rather than guaranteeing the entire request.
+Missing intervals show an unavailable tile instead of stretching stale footage.
+After crash recovery, pre-event duration is conservatively reported as zero when
+the exact count was not finalized, even if buffered footage exists in the video.
 
 Only cameras targeted by enabled recording Event nodes are buffered. Buffering
 does not start a camera or keep it running by itself. Pausing, disconnecting, or
