@@ -15,6 +15,7 @@ let nextFrameRequest = 0;
 const stateLabels = {
   running: "LIVE",
   starting: "CONNECTING",
+  reconnecting: "RECONNECTING",
   stopped: "PAUSED",
   stopping: "STOPPING",
   error: "OFFLINE",
@@ -161,7 +162,9 @@ async function controlAll(action) {
   const selected = cameras.filter((camera) =>
     action === "stop"
       ? !camera.recording &&
-        ["running", "starting", "stopping"].includes(camera.state)
+        ["running", "starting", "reconnecting", "stopping"].includes(
+          camera.state,
+        )
       : ["stopped", "error"].includes(camera.state),
   );
   const outcomes = await Promise.allSettled(
@@ -359,7 +362,9 @@ function createCard(camera) {
   $(".toggle-camera", element).addEventListener("click", () =>
     control(
       camera.id,
-      ["running", "starting"].includes(card.camera.state) ? "stop" : "start",
+      ["running", "starting", "reconnecting"].includes(card.camera.state)
+        ? "stop"
+        : "start",
     ),
   );
   $(".remove-camera", element).addEventListener("click", () =>
@@ -425,9 +430,17 @@ async function loadFrame(card) {
   }
   // A large wall shares a preview budget; backend capture/CV/recording is independent.
   const now = performance.now();
-  if (frameRequests >= 6 || now < nextFrameRequest ||
-      (card.element.hidden && !$("#control-room").hidden && card.element.dataset.pinned !== "true")) {
-    card.timer = setTimeout(() => loadFrame(card), Math.max(45, nextFrameRequest - now));
+  if (
+    frameRequests >= 6 ||
+    now < nextFrameRequest ||
+    (card.element.hidden &&
+      !$("#control-room").hidden &&
+      card.element.dataset.pinned !== "true")
+  ) {
+    card.timer = setTimeout(
+      () => loadFrame(card),
+      Math.max(45, nextFrameRequest - now),
+    );
     return;
   }
   nextFrameRequest = now + 1000 / 24;
@@ -530,7 +543,7 @@ function render() {
     const toggleLabel =
       camera.state === "error"
         ? "Retry"
-        : ["running", "starting"].includes(camera.state)
+        : ["running", "starting", "reconnecting"].includes(camera.state)
           ? "Pause"
           : released
             ? "Resume"
@@ -587,11 +600,13 @@ function render() {
                 ? "CV needs setup · preview stays live"
                 : "CV loading · preview stays live"
             : "Video only"
-        : camera.state === "error"
-          ? "Connection needs attention"
-          : released
-            ? "Released while away"
-            : "Not streaming";
+        : camera.state === "reconnecting"
+          ? "Automatic reconnection in progress"
+          : camera.state === "error"
+            ? "Connection needs attention"
+            : released
+              ? "Released while away"
+              : "Not streaming";
     $(".motion-reading", element).title = camera.metadata.cv?.message || "";
     if (camera.analysis_enabled && camera.state === "running") {
       const analysis = camera.metadata.analysis || {};
@@ -613,6 +628,7 @@ function render() {
         : {
             stopped: "Your camera is paused",
             starting: "Connecting your camera…",
+            reconnecting: "Reconnecting your camera…",
             stopping: "Stopping the feed…",
             error: "Camera unavailable",
             running: "Waiting for your first frame…",
@@ -621,11 +637,13 @@ function render() {
       ? "Start the application to bring your workspace back online."
       : released
         ? "Return to this view to reconnect. Manually paused cameras stay paused."
-        : camera.state === "error"
-          ? "Check the device, stream address or camera permissions. Then retry."
-          : camera.state === "stopped"
-            ? "Press Start to bring this view online."
-            : "Each camera connects independently.";
+        : camera.state === "reconnecting"
+          ? `Attempt ${camera.reconnection?.attempt || 1}${camera.reconnection?.retry_in_seconds != null ? ` · retry in ${Math.ceil(camera.reconnection.retry_in_seconds)}s` : " · connecting"}. Pause to cancel automatic retries.`
+          : camera.state === "error"
+            ? "Check the device, stream address or camera permissions. Then retry."
+            : camera.state === "stopped"
+              ? "Press Start to bring this view online."
+              : "Each camera connects independently.";
     if (camera.state === "running" && connected) {
       if (!card.loading && !card.timer) loadFrame(card);
     } else {
@@ -633,7 +651,9 @@ function render() {
     }
   });
   const live = cameras.filter((camera) => camera.state === "running").length;
-  const attention = cameras.filter((camera) => camera.state === "error").length;
+  const attention = cameras.filter((camera) =>
+    ["error", "reconnecting"].includes(camera.state),
+  ).length;
   $("#total-count").textContent = String(cameras.length).padStart(2, "0");
   $("#live-count").textContent = String(connected ? live : 0).padStart(2, "0");
   $("#attention-count").textContent = connected
@@ -661,7 +681,8 @@ function render() {
     !connected ||
     !cameras.some(
       (camera) =>
-        !camera.recording && ["running", "starting"].includes(camera.state),
+        !camera.recording &&
+        ["running", "starting", "reconnecting"].includes(camera.state),
     );
   $("#add-camera").disabled = $("#empty-add").disabled = !connected;
   $("#open-profiles").disabled = !connected;
@@ -673,7 +694,9 @@ function render() {
   $(".connection-row").dataset.connected = String(connected);
   $(".connection-row").dataset.idle = String(
     cameras.some((c) => c.idle_suspended) &&
-      !cameras.some((c) => ["running", "starting"].includes(c.state)),
+      !cameras.some((c) =>
+        ["running", "starting", "reconnecting"].includes(c.state),
+      ),
   );
   reflow();
   window.dispatchEvent(

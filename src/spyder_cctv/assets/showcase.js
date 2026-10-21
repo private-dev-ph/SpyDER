@@ -296,8 +296,10 @@
     if (
       !cameras.has(camera.id) ||
       (away && !recording.has(camera.id)) ||
-      camera.retryTimer !== null || camera.state !== "reconnecting"
-    ) return;
+      camera.retryTimer !== null ||
+      camera.state !== "reconnecting"
+    )
+      return;
     const delay =
       retryDelays[
         Math.min(camera.reconnection.attempt, retryDelays.length - 1)
@@ -309,7 +311,8 @@
       camera.retryTimer = null;
       camera.retryDeadline = null;
       camera.reconnection.retry_in_seconds = 0;
-      if (!cameras.has(camera.id) || (away && !recording.has(camera.id))) return;
+      if (!cameras.has(camera.id) || (away && !recording.has(camera.id)))
+        return;
       try {
         await start(camera, { reconnect: true });
       } catch (error) {
@@ -317,12 +320,16 @@
       }
     }, delay * 1000);
   }
-  async function cameraPermissionGranted() {
+  async function cameraPermissionGranted(camera) {
     if (!navigator.permissions?.query) return false;
     try {
       return (
-        (await navigator.permissions.query({ name: "camera" })).state ===
-        "granted"
+        (
+          await navigator.permissions.query({
+            name: "camera",
+            ...(camera.ptz ? { panTiltZoom: true } : {}),
+          })
+        ).state === "granted"
       );
     } catch {
       return false;
@@ -337,12 +344,13 @@
     camera.reconnection.enabled = true;
     camera.reconnection.retry_in_seconds = null;
     camera.reconnectStableSince = 0;
-    const granted = await cameraPermissionGranted();
+    const granted = await cameraPermissionGranted(camera);
     if (
       camera.epoch !== reconnectEpoch ||
       camera.state !== "reconnecting" ||
       !cameras.has(camera.id)
-    ) return;
+    )
+      return;
     if (!granted) {
       camera.reconnection.enabled = false;
       camera.state = "error";
@@ -380,13 +388,14 @@
               "Webcams require HTTPS or localhost and a supported browser.",
             );
           if (reconnect) {
-            const granted = await cameraPermissionGranted();
+            const granted = await cameraPermissionGranted(camera);
             if (
               epoch !== camera.epoch ||
               camera.state !== "reconnecting" ||
               !cameras.has(camera.id) ||
               (away && !recording.has(camera.id))
-            ) return;
+            )
+              return;
             if (!granted)
               throw new DOMException(
                 "Camera permission unavailable.",
@@ -826,7 +835,9 @@
         try {
           await start(camera);
           if (camera.state !== "running")
-            throw new Error(camera.error || "Camera could not start for recording.");
+            throw new Error(
+              camera.error || "Camera could not start for recording.",
+            );
         } catch (error) {
           recording.delete(id);
           throw error;
@@ -864,18 +875,24 @@
       stop(c);
     }
   });
-  add({
-    name: "Demo / North",
-    source: "demo",
-    fps: 10,
-    pipeline: "motion",
-    autostart: true,
-  }, "cam-demo-north");
-  add({
-    name: "Demo / South",
-    source: "demo",
-    fps: 10,
-    pipeline: "motion",
-    autostart: true,
-  }, "cam-demo-south");
+  add(
+    {
+      name: "Demo / North",
+      source: "demo",
+      fps: 10,
+      pipeline: "motion",
+      autostart: true,
+    },
+    "cam-demo-north",
+  );
+  add(
+    {
+      name: "Demo / South",
+      source: "demo",
+      fps: 10,
+      pipeline: "motion",
+      autostart: true,
+    },
+    "cam-demo-south",
+  );
 })();

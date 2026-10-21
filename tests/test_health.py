@@ -59,3 +59,12 @@ def test_health_limits_issue_count_and_message_size():
     health = summarize_health([{"state": "error", "error": "x" * 1000}] * 10000, {}, {})
     assert len(health["issues"]) <= 256
     assert all(len(issue["message"]) <= 240 for issue in health["issues"])
+
+
+def test_reconnecting_camera_is_a_warning_and_not_live():
+    health = summarize_health(
+        [{"id": "front", "name": "Front", "state": "reconnecting"}], {"state": "recording"}, {}
+    )
+    assert health["state"] == "warning" and health["running_cameras"] == 0
+    assert health["issues"][0]["area"] == "camera"
+    assert "reconnecting automatically" in health["issues"][0]["message"]

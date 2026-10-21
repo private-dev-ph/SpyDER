@@ -651,3 +651,45 @@ def test_atomic_write_survives_real_windows_file_handle_lock(rig, monkeypatch):
             timer.join()
     assert failures and set(failures) == {32}
     assert (folder / "test.json").read_bytes() == b"durable metadata"
+
+
+def test_recording_keeps_session_during_camera_disconnect_and_recovery(tmp_path):
+    dropped, restored = threading.Event(), threading.Event()
+
+    class Capture(ColorCapture):
+        def read(self):
+            if self.source == 0 and dropped.is_set() and not restored.is_set():
+                return False, None
+            return super().read()
+
+    manager = CameraManager(
+        [CameraConfig("red", 0, fps=15), CameraConfig("green", 1, fps=15)],
+        capture_factory=Capture,
+    )
+    manager.get_worker("red")._reconnect_delay = lambda attempt: 0.05
+    service = RecordingService(manager, tmp_path)
+    try:
+        service.start(["red", "green"])
+        wait_for(lambda: service.status()["frames"] >= 3)
+        session = service.status()["session_id"]
+        dropped.set()
+        wait_for(lambda: manager.get_worker("red").status()["state"] == "reconnecting")
+        frames = service.status()["frames"]
+        wait_for(lambda: service.status()["frames"] >= frames + 3)
+        assert service.status()["state"] == "recording"
+        assert manager.get_worker("red").jpeg() is None
+        restored.set()
+        wait_for(lambda: manager.get_worker("red").status()["state"] == "running")
+        wait_for(lambda: service.status()["frames"] >= frames + 6)
+        assert service.status()["session_id"] == session
+        result = service.stop(timeout=15)
+        assert result["state"] == "idle" and result["error"] is None
+        item = result["items"][-1]
+        reader = cv2.VideoCapture(str(service.media_path(item["id"])))
+        try:
+            assert reader.read()[0]
+        finally:
+            reader.release()
+    finally:
+        service.close()
+        manager.close()

@@ -27,6 +27,10 @@ from spyder_cctv.vision import Pipeline, create_pipeline
 logger = logging.getLogger(__name__)
 
 
+class _CaptureDisconnected(Exception):
+    """Only capture open/read failures qualify for automatic reconnection."""
+
+
 class CameraWorker:
     def __init__(
         self,
@@ -46,6 +50,7 @@ class CameraWorker:
         self._lock = threading.Lock()
         self._lifecycle = threading.Lock()
         self._closed = False
+        self._capture_release_failed = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._retiring_pipeline: Any = None
@@ -64,6 +69,10 @@ class CameraWorker:
         self._updated: float | None = None
         self._metadata: dict[str, Any] = {}
         self._frames = 0
+        self._reconnect_attempts = 0
+        self._reconnect_at: float | None = None
+        self._recoveries = 0
+        self._connected_since: float | None = None
         self._desired_settings = copy.deepcopy(
             config.settings if desired_settings is None else desired_settings,
         )
@@ -97,7 +106,14 @@ class CameraWorker:
             if self.config.vision is None:
                 runtime = {"state": "disabled"}
             elif self._state not in ("starting", "running"):
-                runtime = {"state": "paused", "message": "Start the camera to run its model"}
+                runtime = {
+                    "state": "paused",
+                    "message": (
+                        "Camera reconnecting; model resumes automatically"
+                        if self._state == "reconnecting"
+                        else "Start the camera to run its model"
+                    ),
+                }
             return {
                 "id": self.config.id,
                 "pipeline": self.config.pipeline,
@@ -112,7 +128,14 @@ class CameraWorker:
             if not self.config.analysis.enabled:
                 result = {"state": "disabled"}
             elif self._state not in ("running", "starting"):
-                result = {"state": "paused", "message": "Start this camera to run analysis"}
+                result = {
+                    "state": "paused",
+                    "message": (
+                        "Camera reconnecting; analysis resumes automatically"
+                        if self._state == "reconnecting"
+                        else "Start this camera to run analysis"
+                    ),
+                }
             elif not result:
                 result = {"state": "scheduled"}
             return {
@@ -197,6 +220,8 @@ class CameraWorker:
         with self._lifecycle, self._lock:
             if self._closed:
                 raise RuntimeError("Camera manager is closed")
+            if self._capture_release_failed:
+                raise RuntimeError("Camera backend could not be released; restart the application")
             if self._retiring_analysis is not None:
                 if self._retiring_analysis.is_alive:
                     raise RuntimeError("Motion analysis is still stopping")
@@ -213,6 +238,8 @@ class CameraWorker:
             self._state, self._error = "starting", None
             self._jpeg, self._updated = None, None
             self._metadata, self._frames = {}, 0
+            self._reconnect_attempts = self._recoveries = 0
+            self._reconnect_at = self._connected_since = None
             self._applied_revision = -1
             self._settings_results = {}
             self._thread = threading.Thread(
@@ -230,7 +257,10 @@ class CameraWorker:
             self._stop.set()
             if self._thread is not None and self._thread.is_alive():
                 self._state = "stopping"
-            self._jpeg = None
+            self._jpeg, self._updated = None, None
+            self._metadata = {}
+            self._preview_raw = None
+            self._analysis_runtime = None
 
     def stop(self, timeout: float = 2.0) -> None:
         # Serialize control calls without holding the state lock during join.
@@ -281,6 +311,16 @@ class CameraWorker:
                 if self.config.vision is not None
                 else None,
                 "capture_session": self._capture_session,
+                "reconnection": {
+                    "enabled": self._can_reconnect(),
+                    "attempt": self._reconnect_attempts,
+                    "retry_in_seconds": (
+                        round(max(0, self._reconnect_at - time.monotonic()), 1)
+                        if self._reconnect_at is not None
+                        else None
+                    ),
+                    "recoveries": self._recoveries,
+                },
             }
 
     def raw_frame(self) -> Any:
@@ -299,7 +339,50 @@ class CameraWorker:
                 return None
             return self._jpeg
 
+    def _can_reconnect(self) -> bool:
+        source = self.config.source
+        return isinstance(source, int) or (
+            isinstance(source, str)
+            and (
+                ("://" in source and not source.lower().startswith("file://"))
+                or source.startswith(("/dev/video", "/dev/v4l/by-id/", "/dev/v4l/by-path/"))
+            )
+        )
+
+    @staticmethod
+    def _reconnect_delay(attempt: int) -> float:
+        return min(30.0, 2.0 ** min(max(0, attempt - 1), 5))
+
     def _run(self) -> None:
+        try:
+            while not self._stop.is_set():
+                if not self._run_capture():
+                    break
+                with self._lock:
+                    if self._stop.is_set():
+                        break
+                    if (
+                        self._retiring_analysis is not None and self._retiring_analysis.is_alive
+                    ) or (self._retiring_pipeline is not None and self._retiring_pipeline.is_alive):
+                        self._state, self._error = "error", "CV engine is still stopping"
+                        break
+                    self._reconnect_attempts += 1
+                    delay = self._reconnect_delay(self._reconnect_attempts)
+                    self._reconnect_at = time.monotonic() + delay
+                if self._stop.wait(delay):
+                    break
+                with self._lock:
+                    self._reconnect_at = None
+                    self._applied_revision = -1
+                    self._capture_session = uuid4().hex
+        finally:
+            with self._lock:
+                self._reconnect_at = None
+                if self._state != "error":
+                    self._state, self._error = "stopped", None
+
+    def _run_capture(self) -> bool:
+        reconnect = False
         capture = None
         pipeline = None
         analysis = None
@@ -308,13 +391,19 @@ class CameraWorker:
         vision_revision = -1
         vision_error = False
         try:
-            capture = self._capture_factory(self.config.source)
+            try:
+                capture = self._capture_factory(self.config.source)
+            except Exception:
+                raise _CaptureDisconnected from None
             while not self._stop.is_set():
                 began = time.monotonic()
                 self._apply_desired(capture)
-                ok, frame = capture.read()
-                if not ok:
-                    raise RuntimeError("Camera read failed or video ended")
+                try:
+                    ok, frame = capture.read()
+                    if not ok or frame is None:
+                        raise _CaptureDisconnected
+                except Exception:
+                    raise _CaptureDisconnected from None
                 with self._lock:
                     desired_vision, pipeline_name = self._vision_revision, self.config.pipeline
                     vision_options = self.config.vision
@@ -414,8 +503,32 @@ class CameraWorker:
                     self._jpeg, self._metadata = jpeg, copy.deepcopy(metadata)
                     self._updated = time.monotonic()
                     self._frames += 1
-                    self._state = "running"
+                    if self._state != "running":
+                        if self._reconnect_attempts:
+                            self._recoveries += 1
+                        self._connected_since = time.monotonic()
+                    self._state, self._error = "running", None
                 self._stop.wait(max(0.0, 1.0 / self.config.fps - (time.monotonic() - began)))
+        except _CaptureDisconnected:
+            with self._lock:
+                if not self._stop.is_set():
+                    reconnect = self._can_reconnect()
+                    if self._connected_since is not None and (
+                        time.monotonic() - self._connected_since >= 30
+                    ):
+                        self._reconnect_attempts = 0
+                    self._connected_since = None
+                    self._state = "reconnecting" if reconnect else "error"
+                    self._error = (
+                        "Camera disconnected; reconnecting automatically"
+                        if reconnect
+                        else "Video ended or capture unavailable"
+                    )
+                    self._jpeg, self._updated = None, None
+                    self._preview_raw = None
+                    self._analysis_runtime = None
+                    self._metadata = {}
+            logger.warning("Capture unavailable for camera %s", self.config.id)
         except Exception:
             # Backend exceptions may contain camera credentials. Do not expose their text.
             logger.warning("Capture or processing failed for camera %s", self.config.id)
@@ -444,10 +557,15 @@ class CameraWorker:
                     capture.close()
                 except Exception:
                     logger.warning("Capture release failed for camera %s", self.config.id)
+                    with self._lock:
+                        self._capture_release_failed = True
+                        self._state, self._error = "error", "Camera backend could not be released"
             with self._lock:
                 self._jpeg = None
-                if self._state != "error":
+                if self._state not in ("error", "reconnecting"):
                     self._state = "stopped"
+        with self._lock:
+            return reconnect and self._state == "reconnecting"
 
 
 class CameraManager:
