@@ -71,6 +71,8 @@ both themes, keyboard focus, console/network errors, and reduced-motion behavior
 
 Browser regression scripts can use a fresh exported showcase with an isolated Chrome
 profile. For example, `node tests/layouts-browser.mjs <export-directory>` checks layouts;
+`node tests/workflow-templates-browser.mjs <export-directory>` checks template loading,
+search, keyboard focus, themes, mobile layouts, and the static network boundary;
 `node tests/camera-priority-browser.mjs <export-directory>` exercises large synthetic
 walls. Set `CHROME_PATH` if Chrome is installed outside the script's default location.
 See [Layouts](../layouts.md#development-checks) for the distinction between layout

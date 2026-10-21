@@ -737,6 +737,113 @@
       ],
     };
   }
+  function preEventTemplate({ cameraId = "" } = {}) {
+    const nodes = [
+      node("camera", 40, 90),
+      node("detections", 280, 90),
+      node("filter", 520, 90),
+      node("cooldown", 760, 90),
+      node("event", 1000, 90),
+    ];
+    nodes[0].params.camera_id = cameraId;
+    nodes[1].params.engine = "opencv";
+    Object.assign(nodes[2].params, { label: "person", confidence: 0 });
+    nodes[3].params.seconds = 45;
+    Object.assign(nodes[4].params, {
+      message: "Person detected",
+      attachment: "recording",
+      pre_event_seconds: 10,
+      duration_seconds: 20,
+      name_pattern: "{camera} · Person detected · {date} {time}",
+    });
+    return {
+      id: `workflow-${Math.random().toString(36).slice(2, 10)}`,
+      name: "Pre-event person recording",
+      enabled: false,
+      camera_ids: [],
+      nodes,
+      edges: nodes.slice(1).map((item, index) => ({
+        from: nodes[index].id,
+        to: item.id,
+        ...(index === 0 ? { input: "camera" } : {}),
+      })),
+    };
+  }
+  const TEMPLATE_CATALOG = [
+    {
+      id: "pre-event-person",
+      name: "Pre-event person recording",
+      category: "Recording",
+      engine: "OpenCV",
+      description:
+        "See the approach, detection, and what happens next in one event clip.",
+      purpose: "Entrances, corridors, and activity evidence",
+      details: "10s before · 20s after · 45s cooldown",
+      requirements: ["Installed local app", "Running camera", "Idle recorder"],
+      setup:
+        "Built-in OpenCV person detector; no model download. Keep the camera running and allow history to warm up. HOG is a baseline detector, not identity recognition.",
+    },
+    {
+      id: "insightface-alert",
+      name: "InsightFace detection alert",
+      category: "Notifications",
+      engine: "InsightFace",
+      description:
+        "Notify this computer when a face or selected identity matches your rules.",
+      purpose: "Face detection and optional identity alerts",
+      details: "SCRFD 500MF · 10s cooldown",
+      requirements: [
+        "Local InsightFace runtime",
+        "Local detector weights",
+        "Notification permission",
+      ],
+      setup:
+        "Choose a camera and install the detector explicitly if needed. A compatible uploaded classifier is connected when available; choose an identity in Filter. Browser permission is requested when using notifications.",
+    },
+    {
+      id: "face-event",
+      name: "Face event log",
+      category: "Events",
+      engine: "InsightFace",
+      description:
+        "Log matching face detections as named events without recording a video.",
+      purpose: "A simple event trail from an existing face pipeline",
+      details: "Event log · 10s cooldown",
+      requirements: ["Installed local app", "Configured InsightFace camera"],
+      setup:
+        "Select target cameras after loading. This template observes their existing InsightFace pipeline; it does not install or select a detector model.",
+    },
+  ];
+  function templateEntries(query = "") {
+    const words = String(query)
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    return TEMPLATE_CATALOG.filter((entry) =>
+      words.every((word) =>
+        [
+          entry.name,
+          entry.category,
+          entry.description,
+          entry.purpose,
+          entry.details,
+          entry.engine,
+          ...entry.requirements,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(word),
+      ),
+    );
+  }
+  function createWorkflowTemplate(id, context = {}) {
+    if (id === "pre-event-person") return preEventTemplate(context);
+    if (id === "insightface-alert")
+      return insightfaceTemplate({ classifierId: "", ...context });
+    if (id === "face-event") return faceTemplate();
+    throw new Error("Unknown workflow template");
+  }
   if (typeof module !== "undefined" && module.exports)
     module.exports = {
       TYPES,
@@ -753,6 +860,10 @@
       validate,
       faceTemplate,
       insightfaceTemplate,
+      preEventTemplate,
+      TEMPLATE_CATALOG,
+      templateEntries,
+      createWorkflowTemplate,
       outputType,
       inputType,
       edgeFor,
@@ -835,7 +946,9 @@
         debugStates = {},
         copiedNode = null,
         pasteCount = 0,
-        importGeneration = 0;
+        importGeneration = 0,
+        templatePickerOpen = false,
+        templateQuery = "";
       let activationReview = null,
         activationBusy = false,
         activationStage = "",
@@ -1626,6 +1739,38 @@
           return "Model IN · face detection";
         return n.type;
       }
+      const templateContext = () => ({
+        cameraId: cameraList()[0]?.id || "",
+        classifierId: classifierModels()[0]?.id || "",
+      });
+      function templateThumbnail(entry) {
+        const sample = createWorkflowTemplate(entry.id, templateContext());
+        const width = Math.max(...sample.nodes.map((n) => n.x)) + 220;
+        const height = Math.max(...sample.nodes.map((n) => n.y)) + 130;
+        const wires = sample.edges
+          .map((edge) => {
+            const from = sample.nodes.find((n) => n.id === edge.from);
+            const to = sample.nodes.find((n) => n.id === edge.to);
+            return `<path d="M ${from.x + 160} ${from.y + 32} C ${from.x + 200} ${from.y + 32}, ${to.x - 40} ${to.y + 32}, ${to.x} ${to.y + 32}"/>`;
+          })
+          .join("");
+        return `<svg class="we-template-thumbnail" viewBox="0 0 ${width} ${height}" aria-hidden="true" focusable="false"><g class="we-template-wires">${wires}</g>${sample.nodes.map((n) => `<g class="we-template-mini ${n.type === "event" || n.type === "notification" ? "is-action" : ""}"><rect x="${n.x}" y="${n.y}" width="160" height="64" rx="12"/><circle cx="${n.x}" cy="${n.y + 32}" r="5"/><circle cx="${n.x + 160}" cy="${n.y + 32}" r="5"/><text x="${n.x + 80}" y="${n.y + 38}" text-anchor="middle">${esc(TYPES[n.type].label)}</text></g>`).join("")}</svg>`;
+      }
+      function templateRows() {
+        const entries = templateEntries(templateQuery);
+        return `<p class="we-template-count" role="status">${entries.length} ${entries.length === 1 ? "template" : "templates"}</p>${entries.map((entry) => `<article class="we-template-row" aria-labelledby="we-template-${entry.id}"><div class="we-template-preview">${templateThumbnail(entry)}<span>${esc(entry.category)}</span></div><div class="we-template-copy"><h4 id="we-template-${entry.id}">${esc(entry.name)}</h4><p>${esc(entry.description)}</p><p class="we-template-purpose"><strong>Best for:</strong> ${esc(entry.purpose)}</p><p class="we-template-timing">${esc(entry.details)} · ${createWorkflowTemplate(entry.id, templateContext()).nodes.length} nodes</p><ul class="we-template-requirements" aria-label="Requirements">${entry.requirements.map((value) => `<li>${esc(value)}</li>`).join("")}</ul><p class="we-template-setup">${esc(entry.setup)}</p></div><button type="button" class="button primary" data-load-template="${entry.id}" aria-label="Load ${esc(entry.name)}">Load template</button></article>`).join("") || '<p class="we-template-empty">No templates match. Try “recording”, “face”, or “OpenCV”.</p>'}`;
+      }
+      function templatePanel() {
+        if (!templatePickerOpen) return "";
+        return `<div class="we-modal-backdrop" data-template-modal><section class="we-modal we-template-modal" role="dialog" aria-modal="true" aria-labelledby="we-template-title" aria-describedby="we-template-help" tabindex="-1"><header><div><p class="eyebrow">START WITH A WORKFLOW</p><h3 id="we-template-title">Workflow templates</h3></div><button type="button" class="button secondary" data-close-templates aria-label="Close templates"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></header><details class="we-template-guidance"><summary>How templates work · Undo preserves your previous draft</summary><p id="we-template-help">Load a new disabled draft, then review its camera and settings before saving and enabling. Saved workflows stay intact. Undo restores your previous draft${dirty ? ", including its unsaved changes" : ""}.</p>${demo ? '<p class="we-demo">Showcase: templates are editable local drafts. Native detection, pre-event recording, and workflow actions require the installed app.</p>' : ""}</details><label class="we-template-search">Search templates<input type="search" data-template-search placeholder="Search by purpose, engine, or requirement" value="${esc(templateQuery)}" autocomplete="off"></label><div class="we-template-list" data-template-list>${templateRows()}</div><footer><span>Loads disabled. Review settings before enabling.</span><button type="button" class="button secondary" data-close-templates>Cancel</button></footer></section></div>`;
+      }
+      function closeTemplates() {
+        templatePickerOpen = false;
+        render(true);
+        root
+          .querySelector("[data-open-templates]")
+          ?.focus?.({ preventScroll: true });
+      }
       function parameterFields(n) {
         if (!n) return "<p>Select node to edit.</p>";
 
@@ -1745,6 +1890,21 @@
         changed();
       }
       function render(preserveCanvas = false) {
+        const pickerFocus =
+          templatePickerOpen &&
+          document.activeElement?.closest?.("[data-template-modal]")
+            ? {
+                search: document.activeElement.matches(
+                  "[data-template-search]",
+                ),
+                templateId: document.activeElement.dataset?.loadTemplate,
+                start: document.activeElement.selectionStart,
+                end: document.activeElement.selectionEnd,
+                scroll:
+                  root.querySelector("[data-template-list]")?.scrollTop || 0,
+                guidance: root.querySelector(".we-template-guidance")?.open,
+              }
+            : null;
         const retainedCanvas = preserveCanvas
           ? root.querySelector("[data-canvas]")
           : null;
@@ -1818,7 +1978,7 @@
                 "",
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
-        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><div class="we-toolbar-identity"><label>Workflow<select data-workflow>${workflows.map((w) => `<option value="${esc(w.id)}" ${w.id === graph.id ? "selected" : ""}>${esc(w.name)}</option>`).join("")}<option value="__new">New workflow</option></select></label><label>Name<input data-name value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button class="button secondary" data-insightface-template>InsightFace notification template</button><button class="button secondary" data-template>Use Face event template</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${demo || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
+        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><div class="we-toolbar-identity"><label>Workflow<select data-workflow>${workflows.map((w) => `<option value="${esc(w.id)}" ${w.id === graph.id ? "selected" : ""}>${esc(w.name)}</option>`).join("")}<option value="__new">New workflow</option></select></label><label>Name<input data-name value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${demo || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
           events
             .slice(-5)
             .reverse()
@@ -1907,6 +2067,32 @@
             "beforeend",
             `<div class="we-modal-backdrop" data-settings-modal><section class="we-modal we-node-modal" role="dialog" aria-modal="true" aria-labelledby="we-settings-title"><header><h3 id="we-settings-title">${esc(TYPES[settings.type]?.label || settings.type)} settings</h3><button data-close-settings aria-label="Close settings">Close</button></header>${demo ? '<p class="we-debug-unavailable" role="status">Latest node status unavailable in showcase.</p>' : statusFor(settings.id) ? `<p class="we-node-latest-status" role="status">${esc(formatNodeStatus(statusFor(settings.id)))} · ${esc(statusFor(settings.id).last_run_at || "")}</p>` : '<p class="we-node-latest-status" role="status">No recent run status available.</p>'}<p data-signal-status role="status">${esc(notice)}</p><div class="we-node-layout">${signalPanel(settings, "in")}<section class="we-node-settings" aria-label="Node settings">${selected === settings.id ? params : ""}${nodeConnections(settings)}${settings.type === "code" ? `<div class="we-code-actions"><button class="button secondary" data-code-test ${demo ? "disabled" : ""}>Test code locally</button><span role="status">${esc(codeError)}</span></div>${testPane ? `<section data-test-pane><p>Runs locally. Sample detections are editable.</p><label>Sample detections JSON<textarea data-test-input>${esc(JSON.stringify([{ label: "person", confidence: 0.93, bbox: [20, 30, 90, 180] }], null, 2))}</textarea></label><button class="button primary" data-run-test ${testRunning ? "disabled" : ""}>${testRunning ? "Running…" : "Run test"}</button><pre data-test-result role="status"></pre></section>` : ""}` : ""}</section>${signalPanel(settings, "out")}</div><button class="button secondary" data-close-settings>Done</button></section></div>`,
           );
+        root.insertAdjacentHTML("beforeend", templatePanel());
+        if (templatePickerOpen) {
+          for (const item of root.children?.[Symbol.iterator]
+            ? root.children
+            : []) {
+            if (!item.matches?.("[data-template-modal]")) item.inert = true;
+          }
+        }
+        if (pickerFocus) {
+          const list = root.querySelector("[data-template-list]");
+          if (list) list.scrollTop = pickerFocus.scroll;
+          const guidance = root.querySelector(".we-template-guidance");
+          if (guidance) guidance.open = !!pickerFocus.guidance;
+          const focus = pickerFocus.search
+            ? root.querySelector("[data-template-search]")
+            : TEMPLATE_CATALOG.some(
+                  (entry) => entry.id === pickerFocus.templateId,
+                )
+              ? root.querySelector(
+                  `[data-load-template="${pickerFocus.templateId}"]`,
+                )
+              : root.querySelector("[data-close-templates]");
+          focus?.focus?.({ preventScroll: true });
+          if (pickerFocus.search && pickerFocus.start !== null)
+            focus?.setSelectionRange?.(pickerFocus.start, pickerFocus.end);
+        }
         previewController?.sync();
         if (wireDrag) {
           const canvas = root.querySelector("[data-canvas]"),
@@ -2414,7 +2600,13 @@
             if (saved) graph.enabled = !!saved.enabled;
             syncActivationControls();
           }
-          if (!dirty && !busy && !activationReview && !activationBusy) {
+          if (
+            !dirty &&
+            !busy &&
+            !activationReview &&
+            !activationBusy &&
+            !templatePickerOpen
+          ) {
             const latest = workflows.find((w) => w.id === graph?.id);
             if (latest) graph = migrateDetectorNodes(latest);
             else if (!snapshotLoaded && workflows[0])
@@ -2432,6 +2624,12 @@
         }
       }
       const input = (e) => {
+        if (e.target.matches?.("[data-template-search]")) {
+          templateQuery = e.target.value.slice(0, 200);
+          root.querySelector("[data-template-list]").innerHTML = templateRows();
+          return;
+        }
+
         const t = e.target;
         if (t.matches?.("[data-edge-label]")) {
           const [from, to] = t.dataset.edgeLabel.split("|");
@@ -2995,23 +3193,43 @@
           } finally {
             if (runGeneration === modalGeneration) testRunning = false;
           }
-        } else if (b.dataset.insightfaceTemplate !== undefined) {
-          if (!demo) window.spyderNotifications?.useNode?.();
-          remember();
-          graph = insightfaceTemplate({
-            cameraId: cameraList()[0]?.id || "",
-            classifierId: classifierModels()[0]?.id || "",
-          });
-          selected = graph.nodes.find((n) => n.type === "filter").id;
+        } else if (b.dataset.openTemplates !== undefined) {
+          if (busy || activationBusy || activationReview) return;
+          templateQuery = "";
+          templatePickerOpen = true;
           settingsNode = "";
-          notice =
-            "InsightFace alert draft created with SCRFD 500MF. Choose Camera and Filter settings. A connected classifier supplies identity choices. Add one from the palette if needed.";
-          changed();
-        } else if (b.dataset.template !== undefined) {
+          render(true);
+          root.querySelector("[data-template-search]")?.focus?.();
+        } else if (b.dataset.closeTemplates !== undefined) {
+          closeTemplates();
+        } else if (b.dataset.loadTemplate !== undefined) {
+          if (!templatePickerOpen || busy || activationBusy || activationReview)
+            return;
+          const entry = TEMPLATE_CATALOG.find(
+            (item) => item.id === b.dataset.loadTemplate,
+          );
+          if (!entry) return;
           remember();
-          graph = faceTemplate();
-          selected = "";
+          graph = createWorkflowTemplate(entry.id, templateContext());
+          if (!demo && graph.nodes.some((item) => item.type === "notification"))
+            window.spyderNotifications?.useNode?.();
+          selected =
+            graph.nodes.find(
+              (n) =>
+                n.type ===
+                (entry.id === "pre-event-person" ? "event" : "filter"),
+            )?.id || "";
+          settingsNode = "";
+          selectedEdge = "";
+          reconnectChoice = null;
+          templatePickerOpen = false;
+          activationMessage = "";
+          activationError = false;
+          notice = `${entry.name} draft created. ${entry.setup} Review settings, save, then enable. Undo restores your previous draft.`;
           changed();
+          root
+            .querySelector("[data-open-templates]")
+            ?.focus?.({ preventScroll: true });
         } else if (b.dataset.connect !== undefined) {
           connectNodes(
             root.querySelector("[data-from]").value,
@@ -3093,6 +3311,33 @@
           selectedEdge = e.target.dataset.deleteEdge;
       };
       const keydown = (e) => {
+        if (templatePickerOpen) {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            closeTemplates();
+          } else if (e.key === "Tab") {
+            const dialog = root.querySelector(
+              "[data-template-modal] .we-template-modal",
+            );
+            const items = [
+              ...(dialog?.querySelectorAll(
+                "button:not([disabled]),input:not([disabled])",
+              ) || []),
+            ];
+            const first = items[0],
+              last = items.at(-1);
+            if (
+              first &&
+              ((e.shiftKey && e.target === first) ||
+                (!e.shiftKey && e.target === last))
+            ) {
+              e.preventDefault();
+              (e.shiftKey ? last : first).focus();
+            }
+          }
+          return;
+        }
+
         const activationDialog = e.target.closest?.(
           "[data-activation-modal] .we-activation-modal",
         );

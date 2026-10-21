@@ -142,10 +142,30 @@ preserve that preview; changing its upstream processing can invalidate it.
 
 ## Templates and exchange
 
-The **InsightFace notification template** creates a disabled starting graph. Select
-the camera/model, configure the intended class or identity filter, review the cooldown
-and notification message, then enable it. For durable records or evidence, add/configure
-an Event node as described in [Events and notifications](events.md).
+Choose **Templates** in the workflow toolbar to open the searchable template
+picker. Each row includes a miniature graph, a description, suggested use, timing,
+node count, and setup requirements. Loading a template creates a new **disabled**
+draft. It does not overwrite a saved workflow, start a camera, or install a model.
+Use **Undo** to restore the previous draft, including unsaved edits, during the
+current editor session. Cancel or Escape closes the picker without changing it.
+
+| Template | Purpose | Setup |
+| --- | --- | --- |
+| Pre-event person recording | Save 10 seconds before and 20 seconds after person detection, with a 45-second cooldown. | Built-in OpenCV HOG detector; running camera and idle local recorder. |
+| InsightFace detection alert | Notify when a face or selected identity matches. | Local SCRFD 500MF detector and InsightFace runtime; optional compatible classifier; browser notification permission. |
+| Face event log | Create named events without video attachments. | Select cameras with an existing InsightFace pipeline. |
+
+For pre-event recording, review the Camera node and Event node, save the draft, then
+enable it. Allow the running camera's RAM buffer to warm up. The 10-second history
+is best effort within memory limits; this template does not identify particular
+people. HOG is a baseline detector, so test its results in your scene. Change the
+filter, clip timing, and cooldown for your use case. See [Events and notifications](events.md#include-footage-before-a-trigger)
+for buffer limits and recording behavior.
+
+For InsightFace alerts, review the camera/model and intended class or identity
+filter, cooldown, and notification message before enabling. A compatible registered
+classifier is connected when available. Notification permission is requested when
+adding/using notification nodes, not when browsing the template list.
 
 Export workflow JSON for backup or reuse. It includes graph definitions, code, and
 model references, not model weights, media, or machine paths. Imports open disabled;
