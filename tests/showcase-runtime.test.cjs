@@ -10,7 +10,12 @@ function runtime(
   },
   storage = new Map(),
   encode = (callback) => callback(new Blob(["jpeg"], { type: "image/jpeg" })),
-  { omitRoomLabel = false, permissionState = "granted", permissionQuery } = {},
+  {
+    omitRoomLabel = false,
+    permissionState = "granted",
+    permissionQuery,
+    ptz = false,
+  } = {},
 ) {
   const elements = new Map();
   const timers = new Map();
@@ -61,6 +66,7 @@ function runtime(
       querySelector(selector) {
         if (omitRoomLabel && selector === ".room-label") return null;
         if (!elements.has(selector)) elements.set(selector, element());
+        if (selector === "#browser-ptz") elements.get(selector).checked = ptz;
         return elements.get(selector);
       },
       createElement: element,
@@ -300,7 +306,10 @@ test("webcam reconnect backoff grows to thirty seconds and resets after stable f
     const index = opens++;
     if (index > 0 && index < 6)
       throw new DOMException("busy", "NotReadableError");
-    return { getTracks: () => [devices[Math.min(index, 2)]], getVideoTracks: () => [devices[Math.min(index, 2)]] };
+    return {
+      getTracks: () => [devices[Math.min(index, 2)]],
+      getVideoTracks: () => [devices[Math.min(index, 2)]],
+    };
   });
   const camera = await app.request("/api/cameras", cameraData);
   devices[0].emit("ended");
@@ -337,10 +346,15 @@ test("webcam reconnect backoff grows to thirty seconds and resets after stable f
 test("showcase does not retry when camera permission is not confirmed and stop cancels pending retry", async () => {
   const device = track();
   let opens = 0;
-  const denied = runtime(async () => {
-    opens++;
-    return { getTracks: () => [device], getVideoTracks: () => [device] };
-  }, new Map(), undefined, { permissionState: "prompt" });
+  const denied = runtime(
+    async () => {
+      opens++;
+      return { getTracks: () => [device], getVideoTracks: () => [device] };
+    },
+    new Map(),
+    undefined,
+    { permissionState: "prompt" },
+  );
   const camera = await denied.request("/api/cameras", cameraData);
   device.emit("ended");
   await denied.flushMicrotasks();
@@ -353,7 +367,10 @@ test("showcase does not retry when camera permission is not confirmed and stop c
   opens = 0;
   const allowed = runtime(async () => {
     opens++;
-    return { getTracks: () => [secondDevice], getVideoTracks: () => [secondDevice] };
+    return {
+      getTracks: () => [secondDevice],
+      getVideoTracks: () => [secondDevice],
+    };
   });
   const second = await allowed.request("/api/cameras", cameraData);
   secondDevice.emit("ended");
@@ -361,7 +378,10 @@ test("showcase does not retry when camera permission is not confirmed and stop c
   await allowed.request(`/api/cameras/${second.id}/stop`);
   await allowed.advanceTimers(60000);
   assert.equal(opens, 1);
-  assert.equal((await list(allowed)).find((entry) => entry.id === second.id).state, "stopped");
+  assert.equal(
+    (await list(allowed)).find((entry) => entry.id === second.id).state,
+    "stopped",
+  );
 });
 
 test("permanent permission denial ends automatic retries", async () => {
@@ -464,7 +484,10 @@ test("pending automatic permission check blocks duplicate opens and cancels afte
   await opening;
   await app.flushMicrotasks();
   assert.equal(opens, 1);
-  assert.equal((await list(app)).some((entry) => entry.id === camera.id), false);
+  assert.equal(
+    (await list(app)).some((entry) => entry.id === camera.id),
+    false,
+  );
 });
 
 test("pausing during JPEG encoding discards the late frame", async () => {
@@ -542,19 +565,33 @@ test("recording state appears in camera status and manual pause is blocked until
   const app = runtime();
   const camera = (await list(app))[0];
   await app.setRecording(camera.id, true);
-  assert.equal((await list(app)).find((entry) => entry.id === camera.id).recording, true);
-  await assert.rejects(app.request(`/api/cameras/${camera.id}/stop`), /Remove this camera from recording/);
+  assert.equal(
+    (await list(app)).find((entry) => entry.id === camera.id).recording,
+    true,
+  );
+  await assert.rejects(
+    app.request(`/api/cameras/${camera.id}/stop`),
+    /Remove this camera from recording/,
+  );
   await app.setRecording(camera.id, false);
-  assert.equal((await list(app)).find((entry) => entry.id === camera.id).recording, false);
+  assert.equal(
+    (await list(app)).find((entry) => entry.id === camera.id).recording,
+    false,
+  );
   await app.request(`/api/cameras/${camera.id}/stop`);
 });
 
 test("failed recording start rolls back the recording flag", async () => {
-  const app = runtime(async () => { throw new DOMException("denied", "NotAllowedError"); });
+  const app = runtime(async () => {
+    throw new DOMException("denied", "NotAllowedError");
+  });
   const camera = await app.request("/api/cameras", cameraData);
   assert.equal(camera.state, "error");
   await assert.rejects(app.setRecording(camera.id, true), /permission denied/);
-  assert.equal((await list(app)).find((entry) => entry.id === camera.id).recording, false);
+  assert.equal(
+    (await list(app)).find((entry) => entry.id === camera.id).recording,
+    false,
+  );
 });
 
 test("frame source shares pending and cached JPEG work", async () => {
@@ -573,4 +610,38 @@ test("frame source shares pending and cached JPEG work", async () => {
   assert.equal(await one, await two);
   await app.getFrameSource(camera.id);
   assert.equal(encodes, 1);
+});
+
+test("PTZ reconnect checks PTZ permission without requesting access again", async () => {
+  const device = track();
+  const descriptors = [];
+  let opens = 0;
+  const app = runtime(
+    async () => {
+      opens++;
+      return { getTracks: () => [device], getVideoTracks: () => [device] };
+    },
+    new Map(),
+    undefined,
+    {
+      ptz: true,
+      permissionQuery: (descriptor) => {
+        descriptors.push(JSON.parse(JSON.stringify(descriptor)));
+        return { state: descriptor.panTiltZoom ? "prompt" : "granted" };
+      },
+    },
+  );
+  const camera = await app.request("/api/cameras", {
+    ...cameraData,
+    ptz: true,
+  });
+  device.emit("ended");
+  await app.flushMicrotasks();
+  await app.advanceTimers(60000);
+  assert.deepEqual(descriptors, [{ name: "camera", panTiltZoom: true }]);
+  assert.equal(opens, 1);
+  assert.equal(
+    (await list(app)).find((c) => c.id === camera.id).state,
+    "error",
+  );
 });

@@ -24,6 +24,8 @@ def summarize_health(cameras, recording, workflows, *, free_bytes=None, schedule
         state = camera.get("state")
         if state == "error":
             add("error", "camera", f"{name}: {camera.get('error') or 'capture failed'}", ident)
+        if state == "reconnecting":
+            add("warning", "camera", f"{name}: disconnected; reconnecting automatically", ident)
         if state == "running":
             running += 1
             age = camera.get("frame_age_seconds")

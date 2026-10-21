@@ -549,6 +549,10 @@ h2 {
   color: var(--live);
   background: var(--live-soft);
 }
+.camera-card[data-state="reconnecting"] .camera-state {
+  color: #f7d87f;
+  background: #403822;
+}
 .camera-card[data-state="error"] .camera-state {
   color: var(--danger);
 }
