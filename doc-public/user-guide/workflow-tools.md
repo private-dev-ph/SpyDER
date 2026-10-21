@@ -15,3 +15,18 @@ The installed app shows each node's latest run state, input and output counts, t
 Before enabling a workflow, review the validation summary. Select an issue to focus its node when the editor can identify one. Fix all reported issues before enabling.
 
 Latest status contains counts and errors, not stored frames or a historical input/output log. For workflows with multiple cameras, it reflects the most recent camera evaluation. Status polling updates indicators in place and preserves open settings, typing focus, camera frames, and preview connections. Native status is unavailable in the Cloudflare editor showcase.
+
+
+## Field help and value controls
+
+Each field in a node's settings has an information icon. Hover over it or focus it
+with the keyboard to read the field's purpose, accepted input, units, and limits.
+Click or tap to keep the tooltip open; click again or click elsewhere to dismiss it.
+Escape dismisses field help before closing the node settings. Guidance that used
+to appear below fields is now inside these tooltips. Live status, validation errors,
+and model-installation notices remain visible.
+
+Numeric fields retain direct typing and keyboard arrow controls. The themed minus
+and plus buttons adjust by the field's step and respect minimum/maximum limits.
+Disabled or linked fields cannot be changed through their step controls. Inspect
+settings before saving or enabling a workflow; opening help does not apply changes.
