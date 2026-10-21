@@ -108,3 +108,20 @@
     width: 100%;
   }
 }
+
+.backup-file-label {
+  flex: 1 1 260px;
+  max-width: 480px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.backup-file-label input[type="file"] {
+  margin: 0;
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .backup-file-label {
+    max-width: none;
+  }
+}

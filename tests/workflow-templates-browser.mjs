@@ -154,8 +154,60 @@ try {
   await until("!!document.querySelector('#vision-workflow-tab')");
   await evaluate("document.querySelector('#vision-workflow-tab').click()");
   await until("!!document.querySelector('[data-open-templates]')");
+  for (const theme of ["light", "dark"]) {
+    const controls = await evaluate(`(() => {
+      document.documentElement.dataset.theme=${JSON.stringify(theme)};
+      const select=document.querySelector('[data-workflow]');
+      const box=document.querySelector('[data-camera]');
+      const checked=box.checked;
+      box.checked=true;
+      const selected=getComputedStyle(select), check=getComputedStyle(box);
+      const result={appearance:selected.appearance, arrow:selected.backgroundImage,
+        padding:parseFloat(selected.paddingRight), red:check.backgroundColor,
+        whiteCheck:check.backgroundImage.includes('white'), width:box.getBoundingClientRect().width};
+      box.disabled=true;
+      result.disabledCursor=getComputedStyle(box).cursor;
+      box.disabled=false; box.checked=checked;
+      return result;
+    })()`);
+    assert.equal(controls.appearance, "none");
+    assert.match(controls.arrow, /svg/);
+    assert.ok(controls.padding >= 40);
+    assert.equal(controls.red, "rgb(190, 26, 26)");
+    assert.equal(controls.whiteCheck, true);
+    assert.equal(controls.width, 18);
+    assert.equal(controls.disabledCursor, "not-allowed");
+  }
+  await command(
+    "Emulation.setEmulatedMedia",
+    { features: [{ name: "forced-colors", value: "active" }] },
+    sessionId,
+  );
+  const forcedControls = await evaluate(
+    "(() => {const box=document.querySelector('[data-camera]');box.checked=true;const s=getComputedStyle(box);return {appearance:s.appearance,image:s.backgroundImage,select:getComputedStyle(document.querySelector('[data-workflow]')).appearance};})()",
+  );
+  assert.equal(forcedControls.appearance, "auto");
+  assert.equal(forcedControls.image, "none");
+  assert.equal(forcedControls.select, "auto");
+  await command("Emulation.setEmulatedMedia", { features: [] }, sessionId);
+  await evaluate("document.documentElement.dataset.theme='light'");
+  async function assertCenteredClose(selector) {
+    const result =
+      await evaluate(`(() => {const b=document.querySelector(${JSON.stringify(selector)}),
+      icon=b.querySelector('svg'), r=b.getBoundingClientRect(), s=icon.getBoundingClientRect();
+      return {text:b.textContent.trim(), href:icon.querySelector('use').getAttribute('href'),
+        width:r.width,height:r.height,dx:Math.abs(r.x+r.width/2-s.x-s.width/2),
+        dy:Math.abs(r.y+r.height/2-s.y-s.height/2)};})()`);
+    assert.equal(result.text, "");
+    assert.equal(result.href, "/icons.svg#close");
+    assert.ok(result.width >= 40 && result.height >= 40);
+    assert.ok(result.dx < 1 && result.dy < 1, JSON.stringify(result));
+  }
   await evaluate(
     "document.querySelector('[data-name]').value='Unfinished workflow';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-open-templates]').click()",
+  );
+  await assertCenteredClose(
+    "[data-template-modal] header [data-close-templates]",
   );
   assert.equal(
     await evaluate("document.querySelectorAll('.we-template-row').length"),
@@ -262,6 +314,19 @@ try {
   assert.equal(loaded.enabled, false);
   assert.equal(loaded.nodes.at(-1).params.pre_event_seconds, 10);
   assert.equal(loaded.nodes.at(-1).params.duration_seconds, 20);
+  await evaluate(
+    "document.querySelector('.we-node-event').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
+  );
+  await assertCenteredClose(
+    "[data-settings-modal] header [data-close-settings]",
+  );
+  await evaluate(
+    "document.querySelector('[data-settings-modal] header [data-close-settings]').click()",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-settings-modal]')===null"),
+    true,
+  );
   await evaluate("document.querySelector('[data-undo]').click()");
   assert.equal(
     await evaluate("document.querySelector('[data-name]').value"),
@@ -316,13 +381,43 @@ try {
     ),
     true,
   );
+  await evaluate(
+    "document.querySelector('[data-template-modal] footer button').click();location.hash='system'",
+  );
+  await until(
+    "!!document.querySelector('.backup-file-label input[type=file]')",
+  );
+  for (const theme of ["light", "dark"]) {
+    const upload = await evaluate(`(() => {
+      document.documentElement.dataset.theme=${JSON.stringify(theme)};
+      const input=document.querySelector('.backup-file-label input[type=file]');
+      const s=getComputedStyle(input,'::file-selector-button');
+      return {background:s.backgroundColor,color:s.color,radius:s.borderRadius,
+        hiddenWorkflowInputs:document.querySelectorAll('input[hidden]:not([type=file])').length};
+    })()`);
+    assert.equal(upload.background, "rgb(190, 26, 26)");
+    assert.equal(upload.color, "rgb(255, 255, 255)");
+    assert.equal(upload.radius, "5px");
+  }
+  // Demo restore actions remain unavailable; reveal only their styling for a mobile width check.
+  await command(
+    "Emulation.setDeviceMetricsOverride",
+    { width: 390, height: 520, deviceScaleFactor: 1, mobile: true },
+    sessionId,
+  );
+  assert.equal(
+    await evaluate(
+      "(() => {const input=document.querySelector('.backup-file-label input');input.parentElement.parentElement.hidden=false;const r=input.getBoundingClientRect();return r.width>0 && r.right<=innerWidth;})()",
+    ),
+    true,
+  );
   assert.deepEqual(await evaluate("templateErrors"), []);
   assert.equal(
     networkPaths.some((url) => url.startsWith("/api/")),
     false,
   );
   console.log(
-    "PASS: template SVGs, search, focus trap, Escape, draft loading/undo, mobile/short windows and no API requests.",
+    "PASS: templates and themed controls: dropdowns, red/white checkboxes, centered SVG close buttons, uploads, light/dark, keyboard, mobile/short windows, and no API requests.",
   );
 } finally {
   socket?.close();
