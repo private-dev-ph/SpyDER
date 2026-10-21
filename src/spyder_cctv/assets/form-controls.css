@@ -1,0 +1,91 @@
+input[type="number"].themed-number-input {
+  appearance: textfield;
+  -moz-appearance: textfield;
+  min-height: 42px;
+  padding-inline-end: 5.25rem;
+}
+
+input[type="number"].themed-number-input::-webkit-inner-spin-button,
+input[type="number"].themed-number-input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.number-stepper {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(2, 40px);
+  width: 5rem;
+  height: 40px;
+  pointer-events: none;
+}
+
+.number-input-stepper-anchor {
+  position: relative;
+}
+
+.number-stepper-button {
+  display: grid;
+  min-width: 40px;
+  min-height: 40px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border, #d8d4ca);
+  color: var(--ink, #25241f);
+  background: var(--surface, #fffefa);
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.number-stepper-button:first-child {
+  border-radius: 0;
+}
+
+.number-stepper-button:last-child {
+  border-inline-start: 0;
+  border-radius: 0 var(--radius-small, 5px) var(--radius-small, 5px) 0;
+}
+
+.number-stepper-button:hover:not(:disabled) {
+  color: var(--accent-hover, #830000);
+  background: var(--rail, #f0eee7);
+}
+
+.number-stepper-button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--focus, #830000);
+  outline-offset: 1px;
+}
+
+.number-stepper-button:disabled {
+  color: var(--muted, #77746c);
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .number-stepper-button {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .number-stepper-button {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+
+  .number-stepper-button:focus-visible {
+    outline-color: Highlight;
+  }
+}

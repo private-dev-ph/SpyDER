@@ -56,6 +56,8 @@ def export_showcase(output: Path) -> None:
         "workflow-editor.js",
         "workflow-notifications.js",
         "workflow-editor.css",
+        "form-controls.js",
+        "form-controls.css",
     ):
         (output / name).write_bytes(assets.joinpath(name).read_bytes())
     (output / "_headers").write_text(HEADERS, encoding="utf-8")
