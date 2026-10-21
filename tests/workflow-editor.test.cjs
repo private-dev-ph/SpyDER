@@ -134,9 +134,10 @@ test("workflow viewport clamps zoom and converts pointer coordinates to canvas u
   assert.equal(canvasPoint(140, 100, 2), 20);
 });
 
-test("event nodes expose safe default naming, attachment and duration settings", () => {
+test("event nodes expose safe defaults, attachment, and trigger timing settings", () => {
   assert.equal(TYPES.event.params.attachment, "none");
   assert.equal(TYPES.event.params.duration_seconds, 10);
+  assert.equal(TYPES.event.params.pre_event_seconds, 0);
   assert.match(TYPES.event.params.name_pattern, /\{workflow\}/);
   assert.match(
     source,
@@ -147,6 +148,59 @@ test("event nodes expose safe default naming, attachment and duration settings",
     source,
     /data-param="duration_seconds" type="number" min="1" max="300"/,
   );
+  assert.match(
+    source,
+    /data-param="pre_event_seconds" type="number" min="0" max="30" step="1"/,
+  );
+  assert.match(source, /Requires installed local app/);
+  assert.match(source, /Cloudflare showcase cannot record pre-trigger video/);
+});
+
+test("pre-event seconds default on legacy imports, round-trip, and validate range", () => {
+  const graph = faceTemplate(),
+    event = graph.nodes.find((item) => item.type === "event");
+  event.params.pre_event_seconds = 14;
+  assert.equal(
+    decodeWorkflow(encodeWorkflow(graph)).nodes.find((item) => item.type === "event")
+      .params.pre_event_seconds,
+    14,
+  );
+  delete event.params.pre_event_seconds;
+  assert.equal(
+    decodeWorkflow(encodeWorkflow(graph)).nodes.find((item) => item.type === "event")
+      .params.pre_event_seconds,
+    0,
+  );
+  for (const invalid of [-1, 31, 1.5, "2"]) {
+    const candidate = faceTemplate();
+    candidate.nodes.find((item) => item.type === "event").params.pre_event_seconds =
+      invalid;
+    assert.match(validate(candidate).join(" "), /Event name, attachment, or duration is invalid/);
+  }
+});
+
+test("pre-event control appears only for recording and preserves value while hidden", async () => {
+  const h = mountHarness();
+  await h.flush();
+  h.root.dispatch("click", h.target("button", { add: "event" }));
+  const id = [...h.root.innerHTML.matchAll(/data-node="([^"]+)"/g)][0][1];
+  h.root.dispatch("dblclick", h.target("[data-node]", { node: id }));
+  assert.doesNotMatch(h.root.innerHTML, /data-param="pre_event_seconds"/);
+  const attachment = h.target("[data-param]", { param: "attachment" });
+  attachment.value = "recording";
+  h.root.dispatch("change", attachment);
+  assert.match(h.root.innerHTML, /Before trigger \(seconds\)/);
+  assert.match(h.root.innerHTML, /After trigger \(seconds\)/);
+  const before = h.target("[data-param]", { param: "pre_event_seconds" });
+  before.value = "7";
+  h.root.dispatch("change", before);
+  attachment.value = "none";
+  h.root.dispatch("change", attachment);
+  assert.doesNotMatch(h.root.innerHTML, /data-param="pre_event_seconds"/);
+  attachment.value = "recording";
+  h.root.dispatch("change", attachment);
+  assert.match(h.root.innerHTML, /data-param="pre_event_seconds"[^>]*value="7"/);
+  h.window.spyderWorkflows.unmount();
 });
 
 test("toolbar node copy and paste stays a disabled draft", async () => {

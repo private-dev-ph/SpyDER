@@ -22,6 +22,7 @@ from spyder_cctv.config import CameraConfig, SettingsProfile, save_config
 from spyder_cctv.controls import unavailable_controls, validate_settings
 from spyder_cctv.cv.contracts import VisionConfig
 from spyder_cctv.motion_config import AnalysisConfig
+from spyder_cctv.pre_event import PreEventBuffer
 from spyder_cctv.preferences import Preferences
 from spyder_cctv.presence import PresenceLeases
 from spyder_cctv.storage import StorageSettings
@@ -43,6 +44,7 @@ class CameraWorker:
         encoder: Callable[[Any], bytes] = encode_jpeg,
         desired_settings: dict[str, float] | None = None,
         device_bindings: CameraBindings | None = None,
+        pre_event_buffer: PreEventBuffer | None = None,
     ) -> None:
         self.config = config
         self._capture_factory = capture_factory
@@ -55,6 +57,7 @@ class CameraWorker:
             lambda name: create_pipeline(name, self.config.vision)
         )
         self._encoder = encoder
+        self._pre_event_buffer = pre_event_buffer
         self._lock = threading.Lock()
         self._lifecycle = threading.Lock()
         self._closed = False
@@ -243,6 +246,8 @@ class CameraWorker:
                     raise RuntimeError("Camera is still stopping")
                 return
             self._stop.clear()
+            if self._pre_event_buffer is not None:
+                self._pre_event_buffer.clear(self.config.id)
             self._state, self._error = "starting", None
             self._jpeg, self._updated = None, None
             self._metadata, self._frames = {}, 0
@@ -263,6 +268,8 @@ class CameraWorker:
             if final:
                 self._closed = True
             self._stop.set()
+            if self._pre_event_buffer is not None:
+                self._pre_event_buffer.clear(self.config.id)
             if self._thread is not None and self._thread.is_alive():
                 self._state = "stopping"
             self._jpeg, self._updated = None, None
@@ -390,6 +397,8 @@ class CameraWorker:
                     self._reconnect_at = None
                     self._applied_revision = -1
                     self._capture_session = uuid4().hex
+                    if self._pre_event_buffer is not None:
+                        self._pre_event_buffer.clear(self.config.id)
         finally:
             with self._lock:
                 self._reconnect_at = None
@@ -545,6 +554,13 @@ class CameraWorker:
                     self._jpeg, self._metadata = jpeg, copy.deepcopy(metadata)
                     self._updated = time.monotonic()
                     self._frames += 1
+                    if self._pre_event_buffer is not None:
+                        self._pre_event_buffer.push(
+                            self.config.id,
+                            jpeg,
+                            self._updated,
+                            self._capture_session,
+                        )
                     if self._state != "running":
                         if self._reconnect_attempts:
                             self._recoveries += 1
@@ -569,6 +585,8 @@ class CameraWorker:
                         if reconnect
                         else "Video ended or capture unavailable"
                     )
+                    if self._pre_event_buffer is not None:
+                        self._pre_event_buffer.clear(self.config.id)
                     self._jpeg, self._updated = None, None
                     self._preview_raw = None
                     self._analysis_runtime = None
@@ -579,6 +597,8 @@ class CameraWorker:
             logger.warning("Capture or processing failed for camera %s", self.config.id)
             with self._lock:
                 self._state, self._error = "error", "Capture or processing failed"
+                if self._pre_event_buffer is not None:
+                    self._pre_event_buffer.clear(self.config.id)
         finally:
             if analysis is not None:
                 try:
@@ -621,6 +641,7 @@ class CameraManager:
         profiles: list[SettingsProfile] | None = None,
         idle_policy: bool = False,
         media_dir: Path | None = None,
+        pre_event_buffer: PreEventBuffer | None = None,
         **worker_options: Any,
     ) -> None:
         cameras = [
@@ -639,6 +660,9 @@ class CameraManager:
         if len({profile.name.casefold() for profile in profiles}) != len(profiles):
             raise ValueError("Profile names must be unique")
         self._profiles = {profile.id: profile for profile in profiles}
+        self.pre_event_buffer = (
+            pre_event_buffer if pre_event_buffer is not None else PreEventBuffer()
+        )
         for camera in cameras:
             self._desired(camera)  # Validate assignments before constructing any workers.
         self.app_data_dir = (
@@ -659,6 +683,7 @@ class CameraManager:
                 else None
             )
             worker_options = {**worker_options, "device_bindings": self._device_bindings}
+        worker_options = {**worker_options, "pre_event_buffer": self.pre_event_buffer}
         self.workers = {
             camera.id: CameraWorker(
                 camera,
@@ -908,6 +933,7 @@ class CameraManager:
                 updated = {key: value for key, value in self.workers.items() if key != camera_id}
                 self._persist(updated)
                 worker.request_stop(final=True)
+                self.pre_event_buffer.clear(camera_id)
                 self.workers = updated
                 self._intent.discard(camera_id)
                 self._policy_paused.discard(camera_id)
