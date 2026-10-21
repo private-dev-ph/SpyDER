@@ -33,6 +33,16 @@ threads and a two-second GOP. HEVC and AV1 are not enabled: this release priorit
 widely playable files and modest CPU requirements. Hardware encoding can be added
 later after capability testing on each supported platform.
 
+## Event clips and pre-event history
+
+Workflow Event nodes can attach a recording with up to 30 seconds of pre-event
+history and 1–300 seconds after the trigger. Buffering is opt-in, local, and
+RAM-limited; it is separate from the recording storage allowance. Clips still use
+the selected recording profile, MP4 recovery journal, and storage policy. Their
+pre-event samples are collected at up to 5 fps. History may be shorter after a
+start, pause, disconnect, or memory eviction. See [Events](user-guide/events.md#include-footage-before-a-trigger)
+for setup and the single-recorder limitation.
+
 ## Continuous sessions, manageable files
 
 Choose **5, 15, 30 or 60 minutes, or 3, 6, 12 or 24 hours** per clip.

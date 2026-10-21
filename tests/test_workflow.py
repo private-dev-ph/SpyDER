@@ -2485,3 +2485,141 @@ def test_debug_reports_code_errors_and_preview_does_not_override(service):
         service.list()["workflows"][0], "cam1", service.manager.cv, 21, preview_node_id="detect"
     )
     assert service.debug() == before
+
+
+@pytest.mark.parametrize("value", [-1, 31, True, 2.5, "5", None])
+def test_event_pre_roll_rejects_invalid_duration(service, value):
+    draft = graph(enabled=False)
+    draft["nodes"][1]["params"]["pre_event_seconds"] = value
+    with pytest.raises(ValueError, match="pre_event_seconds"):
+        service.save(draft)
+
+
+def test_event_pre_roll_legacy_default_and_catalog(service):
+    saved = service.save(graph(enabled=False))
+    assert saved["nodes"][1]["params"]["pre_event_seconds"] == 0
+    event = next(item for item in service.catalog() if item["type"] == "event")
+    assert event["params"]["pre_event_seconds"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 30,
+        "default": 0,
+    }
+
+
+def test_pre_roll_only_buffers_enabled_recording_workflows(service, tmp_path):
+    from spyder_cctv.pre_event import PreEventBuffer
+
+    history = service.manager.pre_event_buffer = PreEventBuffer()
+    draft = graph()
+    draft["nodes"][1]["params"].update(attachment="recording", pre_event_seconds=10)
+    service.save(draft)
+    assert list(history.status()["cameras"]) == ["cam1"]
+    now = time.monotonic()
+    history.push("cam1", b"image", now, "first")
+    assert history.snapshot("cam1", 10)
+    draft["enabled"] = False
+    service.save(draft)
+    assert history.status()["total_bytes"] == 0
+    assert not history.status()["cameras"]
+    draft["enabled"] = True
+    draft["nodes"][1]["params"]["attachment"] = "capture"
+    service.save(draft)
+    assert not history.status()["cameras"]
+    draft["nodes"][1]["params"]["attachment"] = "recording"
+    service.save(draft)
+    reloaded = WorkflowService(service.manager, service.recorder, tmp_path)
+    try:
+        assert "cam1" in reloaded.list()["pre_event_buffer"]["cameras"]
+    finally:
+        reloaded.close()
+    service._sync_pre_event_buffer()
+    service.remove(draft["id"])
+    assert not history.status()["cameras"]
+
+
+def test_pre_roll_uses_largest_request_per_camera(service):
+    from spyder_cctv.pre_event import PreEventBuffer
+
+    history = service.manager.pre_event_buffer = PreEventBuffer()
+    draft = graph()
+    draft["nodes"][1]["params"].update(attachment="recording", pre_event_seconds=5)
+    service.save(draft)
+    other = graph()
+    other["id"] = "second"
+    other["nodes"][1]["params"].update(attachment="recording", pre_event_seconds=20)
+    service.save(other)
+    # A frame older than the smaller request still survives the shared larger request.
+    now = time.monotonic()
+    history.push("cam1", b"old", now - 10, "first")
+    assert history.snapshot("cam1", 20)
+    service.remove("second")
+    assert not history.snapshot("cam1", 20)
+
+
+def test_pre_roll_clip_passes_trigger_and_waits_for_writer(service):
+    class TimelineRecorder:
+        def __init__(self):
+            self.calls = []
+            self.current = {"state": "idle", "camera_ids": [], "items": []}
+            self.started = threading.Event()
+
+        def status(self):
+            return dict(self.current)
+
+        def start(self, ids, **kwargs):
+            self.calls.append((ids, kwargs))
+            self.current.update(
+                state="recording", session_id="timeline", camera_ids=ids, writer_active=True
+            )
+            self.started.set()
+            return self.status()
+
+        def stop(self):
+            raise AssertionError("Completed timeline must not be stopped a second time")
+
+    recorder = service.recorder = TimelineRecorder()
+    service._stop.clear()
+    event = service.event_store.create(
+        name="Trigger", kind="workflow", camera_id="cam1", camera_name="Front"
+    )
+    thread = threading.Thread(
+        target=service._record_event_clip, args=(event["id"], "cam1", 2, 5, 123.0)
+    )
+    thread.start()
+    try:
+        assert recorder.started.wait(2)
+        assert recorder.calls == [
+            (
+                ["cam1"],
+                {"pre_event_seconds": 5, "event_trigger_time": 123.0, "post_event_seconds": 2},
+            )
+        ]
+        recorder.current.update(state="error")
+        thread.join(0.15)
+        assert thread.is_alive()  # Writer still saving the playable partial clip.
+        recorder.current.update(writer_active=False)
+        thread.join(2)
+        assert not thread.is_alive()
+    finally:
+        recorder.current.update(state="idle", writer_active=False)
+        service._stop.set()
+        thread.join(2)
+
+
+def test_pre_roll_same_membership_workflow_takeover_cancels_endpoint(service):
+    class OwnedRecorder:
+        def __init__(self):
+            self.cancelled = []
+
+        def status(self):
+            return {"state": "recording", "session_id": "clip", "camera_ids": ["cam1"]}
+
+        def cancel_event_limit(self, session_id):
+            self.cancelled.append(session_id)
+
+    recorder = service.recorder = OwnedRecorder()
+    service._event_clip_sessions.add("clip")
+    service._record("start", "other", "cam1")
+    assert recorder.cancelled == ["clip"]
+    assert "clip" in service._event_clip_transferred

@@ -85,7 +85,7 @@ _NODE_PARAMS = {
     "zone": {"roi"},
     "count": {"minimum"},
     "cooldown": {"seconds"},
-    "event": {"message", "name_pattern", "attachment", "duration_seconds"},
+    "event": {"message", "name_pattern", "attachment", "duration_seconds", "pre_event_seconds"},
     "notification": {"title", "message"},
     "capture": set(),
     "record": {"action"},
@@ -266,6 +266,7 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
             p.setdefault("name_pattern", "{workflow} · {camera} · {date} {time}")
             p.setdefault("attachment", "none")
             p.setdefault("duration_seconds", 10)
+            p.setdefault("pre_event_seconds", 0)
             if (
                 not isinstance(p["name_pattern"], str)
                 or not p["name_pattern"].strip()
@@ -276,6 +277,8 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
                 raise ValueError("attachment must be none, capture or recording")
             if type(p["duration_seconds"]) is not int or not 1 <= p["duration_seconds"] <= 300:
                 raise ValueError("duration_seconds must be between 1 and 300")
+            if type(p["pre_event_seconds"]) is not int or not 0 <= p["pre_event_seconds"] <= 30:
+                raise ValueError("pre_event_seconds must be between 0 and 30")
         elif kind == "notification":
             p.setdefault("title", "SpyDER detection")
             p.setdefault("message", "Matching face detected")
@@ -483,7 +486,31 @@ class WorkflowService:
         self._clip_threads: set[threading.Thread] = set()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="spyder-workflows", daemon=True)
+        self._sync_pre_event_buffer()
         self._thread.start()
+
+    def _sync_pre_event_buffer(self) -> None:
+        """Opt in existing camera workers without retaining or starting a camera."""
+        history = getattr(self.manager, "pre_event_buffer", None)
+        if history is None:
+            return
+        requirements: dict[str, int] = {}
+        for graph in self._graphs.values():
+            if not graph["enabled"]:
+                continue
+            seconds = max(
+                (
+                    node["params"].get("pre_event_seconds", 0)
+                    for node in graph["nodes"]
+                    if node["type"] == "event" and node["params"].get("attachment") == "recording"
+                ),
+                default=0,
+            )
+            if seconds:
+                for camera_id in self._camera_ids(graph):
+                    if camera_id in self.manager.workers:
+                        requirements[camera_id] = max(requirements.get(camera_id, 0), seconds)
+        history.configure(requirements)
 
     def list(self) -> dict[str, Any]:
         with self._lock:
@@ -494,6 +521,11 @@ class WorkflowService:
                 "runtime": copy.deepcopy(self._runtime),
                 "errors": copy.deepcopy(self._errors[-100:]),
                 "storage_error": self._storage_error,
+                "pre_event_buffer": (
+                    self.manager.pre_event_buffer.status()
+                    if getattr(self.manager, "pre_event_buffer", None) is not None
+                    else None
+                ),
             }
 
     def debug(self) -> dict[str, Any]:
@@ -669,6 +701,12 @@ class WorkflowService:
                         "minimum": 1,
                         "maximum": 300,
                         "default": 10,
+                    },
+                    "pre_event_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 30,
+                        "default": 0,
                     },
                 },
             },
@@ -857,6 +895,7 @@ class WorkflowService:
             if previous and previous["enabled"] and not normalized["enabled"]:
                 self._release_workflow_recordings(normalized["id"])
                 self._clear_graph_state(normalized["id"])
+            self._sync_pre_event_buffer()
             return copy.deepcopy(normalized)
 
     @staticmethod
@@ -1242,6 +1281,13 @@ class WorkflowService:
             self._release_workflow_recordings(workflow_id)
             self._clear_graph_state(workflow_id)
             self._debug.pop(workflow_id, None)
+            self._sync_pre_event_buffer()
+
+    def _transfer_event_clip(self, session_id: str) -> None:
+        self._event_clip_transferred.add(session_id)
+        cancel = getattr(self.recorder, "cancel_event_limit", None)
+        if cancel is not None:
+            cancel(session_id)
 
     def relinquish_recording(self, camera_ids: list[str]) -> None:
         """Transfer selected recording memberships to manual recorder control."""
@@ -1268,7 +1314,7 @@ class WorkflowService:
             with self._lock:
                 session_id = self.recorder.status().get("session_id")
                 if session_id in self._event_clip_sessions:
-                    self._event_clip_transferred.add(session_id)
+                    self._transfer_event_clip(session_id)
                 memberships = list(self.recorder.status().get("camera_ids", []))
                 result = self.recorder.stop()
                 self.relinquish_recording(memberships)
@@ -1285,7 +1331,7 @@ class WorkflowService:
         with self._lock:
             session_id = self.recorder.status().get("session_id")
             if session_id in self._event_clip_sessions:
-                self._event_clip_transferred.add(session_id)
+                self._transfer_event_clip(session_id)
             previous = list(self.recorder.status().get("camera_ids", []))
             result = (
                 self.recorder.start(camera_ids)
@@ -2107,6 +2153,7 @@ class WorkflowService:
     ) -> None:
         try:
             if kind == "event":
+                trigger_time = time.monotonic()
                 now = datetime.now().astimezone()
                 labels = sorted(
                     {
@@ -2165,7 +2212,13 @@ class WorkflowService:
                     self.event_store.set_attachment_status(event["id"], "pending")
                     clip_thread = threading.Thread(
                         target=self._record_event_clip,
-                        args=(event["id"], camera_id, params.get("duration_seconds", 10)),
+                        args=(
+                            event["id"],
+                            camera_id,
+                            params.get("duration_seconds", 10),
+                            params.get("pre_event_seconds", 0),
+                            trigger_time,
+                        ),
                         name="spyder-event-recording",
                         daemon=True,
                     )
@@ -2203,7 +2256,14 @@ class WorkflowService:
                 )
                 del self._errors[:-100]
 
-    def _record_event_clip(self, event_id: str, camera_id: str, duration: int) -> None:
+    def _record_event_clip(
+        self,
+        event_id: str,
+        camera_id: str,
+        duration: int,
+        pre_event_seconds: int = 0,
+        trigger_time: float | None = None,
+    ) -> None:
         """Record bounded clip; stop only same, unmodified recorder session."""
         if not self._attachment_lock.acquire(blocking=False):
             try:
@@ -2221,7 +2281,15 @@ class WorkflowService:
                 if initial.get("state") != "idle":
                     self.event_store.set_attachment_status(event_id, "error", "Recorder is busy")
                     return
-                started = self.recorder.start([camera_id])
+                if pre_event_seconds:
+                    started = self.recorder.start(
+                        [camera_id],
+                        pre_event_seconds=pre_event_seconds,
+                        event_trigger_time=trigger_time,
+                        post_event_seconds=duration,
+                    )
+                else:
+                    started = self.recorder.start([camera_id])
                 session_id = started.get("session_id") or self.recorder.status().get("session_id")
                 if not isinstance(session_id, str):
                     self.event_store.set_attachment_status(
@@ -2229,7 +2297,22 @@ class WorkflowService:
                     )
                     return
                 self._event_clip_sessions.add(session_id)
-            self._stop.wait(max(1, min(300, duration)))
+            if pre_event_seconds:
+                # The writer finishes the encoded timeline, including catch-up frames.
+                while not self._stop.wait(0.05):
+                    with self._lock:
+                        current = self.recorder.status()
+                        if (
+                            current.get("session_id") != session_id
+                            or (
+                                current.get("state") in ("idle", "error")
+                                and not current.get("writer_active", False)
+                            )
+                            or session_id in self._event_clip_transferred
+                        ):
+                            break
+            else:
+                self._stop.wait(max(1, min(300, duration)))
             with self._lock:
                 current = self.recorder.status()
                 can_stop = (
@@ -2284,7 +2367,7 @@ class WorkflowService:
     def _record_locked(self, action: str, graph_id: str, camera_id: str) -> None:
         state = self.recorder.status()
         if state.get("session_id") in self._event_clip_sessions:
-            self._event_clip_transferred.add(state["session_id"])
+            self._transfer_event_clip(state["session_id"])
         members = list(state.get("camera_ids", []))
         if action == "start":
             if camera_id in members:
@@ -2336,3 +2419,7 @@ class WorkflowService:
             clip_threads = list(self._clip_threads)
         for thread in clip_threads:
             thread.join(6.0)
+        with self._lock:
+            history = getattr(self.manager, "pre_event_buffer", None)
+            if history is not None:
+                history.configure({})

@@ -27,6 +27,37 @@ Choose no attachment, a capture, or a timed recording. A recording attachment be
 available after its clip finishes; failed capture/recording operations cannot provide
 an attachment. Recording profiles and storage limits also apply to workflow clips.
 
+## Include footage before a trigger
+
+In the installed Python app, choose **Event → Attachment → Recording** and set
+**Before trigger** to 1–30 seconds. Leave it at **0** (the default) to turn buffering
+off. **After trigger** controls the following 1–300 seconds. Save and enable the
+workflow, keep the target camera running, and allow the buffer to warm up before
+expecting a full pre-event clip. A cooldown upstream of the Event node avoids
+repeated recording attempts.
+
+SpyDER keeps compressed JPEG samples in local RAM at up to 5 fps. The shared ring
+buffer is capped at 64 MiB, with at most 8 MiB per camera. High-resolution frames,
+many cameras, memory pressure, and recent starts can shorten available history.
+The encoded MP4 follows your recording quality profile; resampling the history
+does not recover additional motion detail. Recording metadata reports requested
+and included pre-event seconds rather than guaranteeing the entire request.
+
+Only cameras targeted by enabled recording Event nodes are buffered. Buffering
+does not start a camera or keep it running by itself. Pausing, disconnecting, or
+reconnecting a camera clears its history; disabling or deleting the last workflow
+request clears that camera's buffer too. Keep **Pause cameras when unfocused** off
+if you need unattended coverage, and keep the local Python server running.
+Buffered history is volatile: footage that has not been written into a clip is
+lost if the application exits.
+
+There is one native recorder. A manual recording or another event clip can make
+an event attachment unavailable; the event still appears with an attachment error.
+Pre-event clips do not interrupt an existing recording. Taking manual control of
+an event clip cancels its automatic end time. The Cloudflare showcase can edit
+these workflow settings, but native pre-event recording requires the installed
+local app. No footage or frame buffer is sent to Cloudflare.
+
 ## Browse and manage
 
 Search, sort, filter, or group the event list, then use pagination and the scrollable
