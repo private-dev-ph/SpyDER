@@ -2,6 +2,8 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   TYPES,
+  FIELD_HELP,
+  fieldHelpMarkup,
   paletteGroups,
   modelPage,
   faceTemplate,
@@ -1475,7 +1477,7 @@ test("template button preselects local InsightFace model and makes matching filt
   assert.match(h.root.innerHTML, /InsightFace detection alert draft created/);
   assert.match(
     h.root.innerHTML,
-    /Classifier identity<select data-param="identity"/,
+    /Classifier identity<\/span><select data-param="identity"/,
   );
   h.root.dispatch("click", h.target("button", { save: "" }));
   await h.flush();
@@ -1742,7 +1744,7 @@ test("class identity mode offers connected model classes and keeps custom choice
   assert.match(h.root.innerHTML, /<option value="face"/);
   assert.match(
     h.root.innerHTML,
-    /Classifier identity or model class<select data-param="identity"/,
+    /Classifier identity or model class<\/span><select data-param="identity"/,
   );
   h.root.dispatch("click", h.target("button", { addRule: "" }));
   const field = h.target("[data-rule]", { rule: "0", ruleKey: "field" });
@@ -1750,7 +1752,7 @@ test("class identity mode offers connected model classes and keeps custom choice
   h.root.dispatch("change", field);
   assert.match(
     h.root.innerHTML,
-    /data-rule="0" data-rule-key="value"><option value="">Choose an identity/,
+    /data-rule="0" data-rule-key="value" aria-describedby="[^"]+"><option value="">Choose an identity/,
   );
   h.window.spyderWorkflows.unmount();
 });
@@ -1811,7 +1813,7 @@ test("class identity without metadata retains editable text and import preserves
   h.root.dispatch("change", source);
   assert.match(
     h.root.innerHTML,
-    /Model class \(optional\)<input data-param="identity"/,
+    /Model class \(optional\)<\/span><input data-param="identity"/,
   );
   assert.match(h.root.innerHTML, /No class metadata available/);
   const graph = insightfaceTemplate();
@@ -3081,4 +3083,60 @@ test("loading pre-event template creates disabled draft and undo restores unsave
   );
   assert.equal(h.calls.length, 0);
   h.window.spyderWorkflows.unmount();
+});
+
+test("node field help covers every parameter and moves explanations into hidden tooltips", () => {
+  for (const [type, schema] of Object.entries(TYPES)) {
+    for (const field of Object.keys(schema.params)) {
+      if (field !== "rules")
+        assert.ok(FIELD_HELP[field], `${type}.${field} has no help`);
+    }
+  }
+  const original =
+    '<label>After trigger<input data-param="duration_seconds" type="number" min="1" max="300" step="1" value="20"></label><p>Existing explanation.</p>';
+  const result = fieldHelpMarkup(original, { id: "event-test", type: "event" });
+  assert.match(result, /we-field-label">After trigger<\/span><input/);
+  assert.match(result, /aria-describedby="we-help-event-test-params-1"/);
+  assert.match(result, /data-field-help="we-help-event-test-params-1"/);
+  assert.match(result, /aria-expanded="false"/);
+  assert.match(result, /role="tooltip" hidden/);
+  assert.match(result, /whole seconds from 1 to 300/);
+  assert.match(result, /<span>Existing explanation\.<\/span>/);
+  assert.doesNotMatch(result, /<p>/);
+  assert.match(result, /type="number" min="1" max="300" step="1" value="20"/);
+});
+
+test("field help includes rules and connection fields with unique safe identifiers", () => {
+  const html =
+    '<label>Field<select data-rule="0" data-rule-key="field"><option>Class</option></select></label>' +
+    '<label>Value<input data-rule="0" data-rule-key="value" value="person"></label>' +
+    '<label>Label<input data-edge-label="a|b" maxlength="80"></label>';
+  const result = fieldHelpMarkup(
+    html,
+    { id: 'node-"bad', type: "filter" },
+    "connections",
+  );
+  assert.match(result, /Class compares label/);
+  assert.match(result, /Confidence comparisons accept a number from 0 to 1/);
+  assert.match(result, /Optional connection label/);
+  const ids = [...result.matchAll(/role="tooltip" hidden/g)];
+  assert.equal(ids.length, 3);
+  assert.equal(
+    new Set([...result.matchAll(/id="(we-help-[^"]+)"/g)].map((m) => m[1]))
+      .size,
+    3,
+  );
+  assert.doesNotMatch(result, /id="we-help-node-"bad/);
+});
+
+test("field help preserves existing descriptions and keeps live statuses visible", () => {
+  const result = fieldHelpMarkup(
+    '<label>Title<input data-param="title" aria-describedby="existing-help"></label><p role="status">Delivery unavailable</p>',
+    { id: "alert", type: "notification" },
+  );
+  assert.match(
+    result,
+    /aria-describedby="existing-help we-help-alert-params-1"/,
+  );
+  assert.match(result, /<\/div><p role="status">Delivery unavailable<\/p>/);
 });

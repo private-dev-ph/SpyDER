@@ -320,6 +320,70 @@ try {
   await assertCenteredClose(
     "[data-settings-modal] header [data-close-settings]",
   );
+  const beforeHelp = await evaluate(
+    "localStorage.getItem('spyder.workflow-editor.draft')",
+  );
+  const helpFields = await evaluate(
+    "(() => {const p=document.querySelector('.we-node-settings');return {fields:p.querySelectorAll('label:has(input),label:has(select),label:has(textarea)').length,helpers:p.querySelectorAll('[data-field-help]').length};})()",
+  );
+  assert.equal(helpFields.fields, helpFields.helpers);
+  await evaluate(
+    "document.querySelector('[data-param=duration_seconds]').closest('.we-help-field').querySelector('[data-field-help]').focus()",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.we-field-tooltip:not([hidden])').textContent.includes('whole seconds from 1 to 300')",
+    ),
+    true,
+  );
+  assert.equal(
+    await evaluate(
+      "(() => {const r=document.querySelector('.we-field-tooltip:not([hidden])').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;})()",
+    ),
+    true,
+  );
+  await command(
+    "Input.dispatchKeyEvent",
+    {
+      type: "keyDown",
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    },
+    sessionId,
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.we-field-tooltip:not([hidden])')===null",
+    ),
+    true,
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-settings-modal]')!==null"),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('[data-param=pre_event_seconds]').closest('.we-help-field').querySelector('[data-field-help]').click()",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.we-field-tooltip:not([hidden])').textContent.includes('64 MiB')",
+    ),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('[data-param=pre_event_seconds]').closest('.we-help-field').querySelector('[data-field-help]').click()",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.we-field-tooltip:not([hidden])')===null",
+    ),
+    true,
+  );
+  assert.equal(
+    await evaluate("localStorage.getItem('spyder.workflow-editor.draft')"),
+    beforeHelp,
+  );
   await evaluate(
     "document.querySelector('[data-settings-modal] header [data-close-settings]').click()",
   );

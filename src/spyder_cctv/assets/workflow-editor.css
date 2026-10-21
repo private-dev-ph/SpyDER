@@ -1751,3 +1751,95 @@
 .we-preview-controls button:hover:not(:disabled) {
   background: var(--rail);
 }
+
+/* Help remains available for disabled fields and never becomes part of their label. */
+.we-help-field {
+  position: relative;
+  min-width: 0;
+  margin-block: 12px;
+}
+.we-modal .we-help-field label {
+  margin: 0;
+}
+.we-field-label {
+  display: block;
+  padding-inline-end: 30px;
+  line-height: 1.5;
+}
+.we-help-button {
+  position: absolute;
+  inset-block-start: -3px;
+  inset-inline-end: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--accent);
+  background: transparent;
+  cursor: help;
+}
+.we-help-button .icon {
+  width: 18px;
+  height: 18px;
+}
+.we-help-button:hover,
+.we-help-button[aria-expanded="true"] {
+  background: var(--rail);
+  border-color: var(--control-border);
+}
+.we-field-tooltip {
+  position: fixed;
+  z-index: 1200;
+  display: grid;
+  gap: 9px;
+  width: min(370px, calc(100vw - 24px));
+  max-height: min(340px, calc(100dvh - 24px));
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--control-border);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 8px 28px #0003;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+.we-field-tooltip strong {
+  font-size: 13px;
+}
+.we-field-tooltip > span {
+  color: var(--muted);
+}
+.we-field-tooltip pre {
+  margin: 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.we-node-connections li > .we-help-field {
+  flex: 1 1 100%;
+}
+@media (pointer: coarse) {
+  .we-help-button {
+    width: 36px;
+    height: 36px;
+    inset-block-start: -7px;
+  }
+  .we-field-label {
+    padding-inline-end: 40px;
+  }
+}
+@media (forced-colors: active) {
+  .we-help-button {
+    border-color: ButtonText;
+  }
+  .we-field-tooltip {
+    border-color: CanvasText;
+  }
+}

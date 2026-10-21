@@ -844,9 +844,141 @@
     if (id === "face-event") return faceTemplate();
     throw new Error("Unknown workflow template");
   }
+  const FIELD_HELP = {
+    camera_id:
+      "Choose a configured camera as this node's source. Connecting it to CAM supplies that camera's frames and detections; it does not start the camera.",
+    model_id:
+      "Select a local uploaded model or a built-in detector. Model OUT connects to MODEL IN. Classifier OUT connects to CLASSIFIER IN. Model weights must be available locally before activation.",
+    engine:
+      "Choose the detection engine. Any observes the camera's active engine. OpenCV uses the built-in person detector; YOLO and InsightFace need compatible local models.",
+    threshold:
+      "Minimum classifier score for accepting an identity. Accepts a number from 0 to 1. Higher values reject more uncertain classifications.",
+    output:
+      "Match the classifier's exported output: probabilities are normalized scores; logits require conversion. Choose the format used when the model was exported.",
+    preprocessing:
+      "Match the model's expected image preparation. ArcFace applies its normalization; Embedded is for models that already contain preprocessing.",
+    confirmations:
+      "Number of consecutive reliable results needed before showing a new identity. Accepts a whole number from 1 to 15.",
+    switch_confirmations:
+      "Consecutive results needed to switch an established identity. Accepts a whole number from the initial confirmation count to 30.",
+    margin:
+      "Minimum score advantage over the runner-up class. Accepts a number from 0 to 1; 0.15 means a 15 percentage-point lead.",
+    label:
+      "Match a detected class label, such as person or face. Select a model class when available, or type its exact label. Leave empty to accept any class.",
+    confidence:
+      "Minimum detection confidence, from 0 to 1. Zero also accepts detections with unknown scores. Detector scores may not be calibrated probabilities.",
+    identity_source:
+      "Choose whether identity matching reads the recognized identity or the model's class label. This changes which detection property is compared.",
+    identity:
+      "Match an identity name or model class, according to Identity source. Use an available dropdown choice or an exact custom name. Leave empty to accept any identity.",
+    match:
+      "All rules requires every additional rule to match (AND). Any rule accepts a detection matching at least one additional rule (OR).",
+    roi: "Enter four comma-separated normalized coordinates: x1, y1, x2, y2. Values range from 0 to 1, with x1 < x2 and y1 < y2. The region limits which detections pass.",
+    minimum:
+      "Minimum number of matching detections needed to continue this branch. Accepts a whole number of at least 1.",
+    seconds:
+      "Minimum delay between actions for each camera and this cooldown node. Accepts seconds from 1 to 3600. Use enough time for recording clips to finish.",
+    name_pattern:
+      "Name saved events using text and tokens: {workflow}, {camera}, {date}, {time}, {node}, {kind}, {label}. Maximum 200 characters. Unknown tokens stay literal.",
+    attachment:
+      "Choose no media, a JPEG frame capture, or a timed recording attached to the event. Recording requires an idle local recorder; existing recordings are not interrupted.",
+    duration_seconds:
+      "Footage to record after the trigger, in whole seconds from 1 to 300. The clip is attached to the event after it finishes.",
+    pre_event_seconds:
+      "Footage requested before the trigger, in whole seconds from 0 to 30. Zero disables buffering. Enable the workflow and keep the camera running so local history can warm up.",
+    message:
+      "Text stored with an Event or displayed by a Notification. Accepts up to 500 characters. Compatible upstream signals can supply a live value.",
+    title:
+      "Browser/desktop notification title. Accepts 1 to 128 characters. Notification delivery needs permission and an open SpyDER page.",
+    action:
+      "Start adds this camera to recording. Stop releases recording owned by this workflow. Actions use the shared local recorder and do not stop manually owned recordings.",
+    language:
+      "Choose restricted Python or JavaScript for the Code node. Review imported code before enabling the workflow.",
+    source:
+      "Write code that assigns a detection list to output. Inputs are detections and read-only context. Up to 8000 characters; execution and output are bounded, with no imports, files, or network access.",
+    rule_field:
+      "Choose the detection property for this rule: Class compares label, Identity compares identity, and Confidence compares a numeric score.",
+    rule_operator:
+      "Choose the comparison. Is / If identity includes matches; Is not / If not identity excludes them. At least / At most compares confidence numerically.",
+    rule_value:
+      "Enter or select the class or identity to compare. Confidence comparisons accept a number from 0 to 1. Available model labels appear as choices.",
+    edge_label:
+      "Optional connection label, up to 80 characters. This only describes the wire; it does not change the data or workflow behavior.",
+    node_input:
+      "Select a compatible upstream node, then choose Add IN connection. Multiple compatible inputs can be connected.",
+    node_output:
+      "Select a compatible downstream node, then choose Add OUT connection. One output can feed multiple branches.",
+    test_input:
+      "Enter a JSON array of sample detections for a local code test. This tests the code on sample data, without starting a camera or executing downstream action nodes.",
+  };
+  function fieldHelpMarkup(html, node, scope = "params") {
+    const escape = (value) =>
+      String(value).replace(
+        /[&<>"']/g,
+        (char) =>
+          ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          })[char],
+      );
+    let count = 0;
+    return html.replace(
+      /<label\b([^>]*)>([\s\S]*?)<\/label>(\s*<p(?![^>]*\brole\s*=)(?:\s[^>]*)?>[\s\S]*?<\/p>)?(\s*<pre>[\s\S]*?<\/pre>)?/g,
+      (whole, attributes, body, explanation = "", example = "") => {
+        const control = /<(input|select|textarea)\b([^>]*)>/.exec(body);
+        if (!control) return whole;
+        const attrs = control[2];
+        const param = /data-param="([^"]+)"/.exec(attrs)?.[1];
+        const rule = /data-rule-key="([^"]+)"/.exec(attrs)?.[1];
+        const key =
+          param ||
+          (rule
+            ? `rule_${rule === "field" ? "field" : rule === "operator" ? "operator" : "value"}`
+            : attrs.includes("data-edge-label")
+              ? "edge_label"
+              : attrs.includes("data-node-input")
+                ? "node_input"
+                : attrs.includes("data-node-output")
+                  ? "node_output"
+                  : attrs.includes("data-test-input")
+                    ? "test_input"
+                    : "");
+        const caption =
+          body
+            .slice(0, control.index)
+            .replace(/<[^>]*>/g, "")
+            .trim() ||
+          key.replaceAll("_", " ") ||
+          "Field";
+        const id = `we-help-${String(node.id).replace(/[^A-Za-z0-9_-]/g, "-")}-${scope}-${++count}`;
+        const describedControl = /\baria-describedby="[^"]*"/.test(control[0])
+          ? control[0].replace(
+              /aria-describedby="([^"]*)"/,
+              (_, ids) => `aria-describedby="${ids} ${id}"`,
+            )
+          : control[0].replace(/>$/, ` aria-describedby="${id}">`);
+        const guided =
+          `<span class="we-field-label">${body.slice(0, control.index)}</span>` +
+          describedControl +
+          body.slice(control.index + control[0].length);
+        const details = explanation
+          .replace(/^\s*<p[^>]*>/, "")
+          .replace(/<\/p>$/, "");
+        const help =
+          (Object.hasOwn(FIELD_HELP, key) ? FIELD_HELP[key] : "") ||
+          `Set ${caption}. ${control[1] === "select" ? "Choose an available option." : "Enter a value matching this field."}`;
+        return `<div class="we-help-field"><label${attributes}>${guided}</label><button type="button" class="we-help-button" data-field-help="${id}" aria-label="Help for ${escape(caption)}" aria-expanded="false" aria-controls="${id}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".8" fill="currentColor" stroke="none"/></svg></button><div class="we-field-tooltip" id="${id}" role="tooltip" hidden><strong>${escape(caption)}</strong><span>${escape(help)}</span>${details ? `<span>${details}</span>` : ""}${example}</div></div>`;
+      },
+    );
+  }
   if (typeof module !== "undefined" && module.exports)
     module.exports = {
       TYPES,
+      FIELD_HELP,
+      fieldHelpMarkup,
       NODE_GROUPS,
       paletteGroups,
       modelPage,
@@ -946,6 +1078,8 @@
         debugStates = {},
         copiedNode = null,
         pasteCount = 0,
+        activeHelp = "",
+        helpPinned = false,
         importGeneration = 0,
         templatePickerOpen = false,
         templateQuery = "";
@@ -1099,7 +1233,9 @@
         }</aside>`;
       }
       function mappedFields(n) {
-        const html = parameterFields(n);
+        const html = n
+          ? fieldHelpMarkup(parameterFields(n), n)
+          : parameterFields(n);
         if (!n) return html;
         return html.replace(
           /<label([^>]*)>([\s\S]*?)<\/label>/g,
@@ -1858,6 +1994,12 @@
                 if (classes.length)
                   return `<label>Class<select data-param="label"><option value="">Any class</option>${[...new Set([...classes, ...(v ? [v] : [])])].map((c) => `<option value="${esc(c)}" ${c === v ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>`;
               }
+              if (k === "confidence")
+                return `<label>Minimum confidence<input data-param="confidence" type="number" min="0" max="1" step="0.01" value="${esc(v)}"></label>`;
+              if (k === "minimum")
+                return `<label>Minimum count<input data-param="minimum" type="number" min="1" step="1" value="${esc(v)}"></label>`;
+              if (k === "seconds")
+                return `<label>Cooldown (seconds)<input data-param="seconds" type="number" min="1" max="3600" step="1" value="${esc(v)}"></label>`;
               return `<label>${k === "roi" ? "ROI x1, y1, x2, y2" : esc(k)}<input data-param="${esc(k)}" value="${esc(Array.isArray(v) ? v.join(",") : v)}" ${typeof v === "number" ? 'type="number" step="any"' : ""}></label>`;
             })
             .join("") +
@@ -1889,7 +2031,64 @@
         graph = candidate;
         changed();
       }
+      function closeFieldHelp() {
+        if (!activeHelp) return;
+        const tooltip = root.querySelector(`#${activeHelp}`);
+        if (tooltip) tooltip.hidden = true;
+        root
+          .querySelector(`[data-field-help="${activeHelp}"]`)
+          ?.setAttribute("aria-expanded", "false");
+        activeHelp = "";
+        helpPinned = false;
+      }
+      function showFieldHelp(button, pin = false) {
+        const id = button.dataset.fieldHelp;
+        if (!id) return;
+        if (activeHelp !== id) closeFieldHelp();
+        activeHelp = id;
+        helpPinned = helpPinned || pin;
+        const tooltip = root.querySelector(`#${id}`);
+        if (!tooltip) return;
+        tooltip.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+        const anchor = button.getBoundingClientRect();
+        tooltip.style.left = "12px";
+        tooltip.style.top = "12px";
+        const bounds = tooltip.getBoundingClientRect();
+        const width =
+          window.innerWidth || document.documentElement?.clientWidth || 800;
+        const height =
+          window.innerHeight || document.documentElement?.clientHeight || 600;
+        tooltip.style.left = `${Math.max(12, Math.min(anchor.right - bounds.width, width - bounds.width - 12))}px`;
+        tooltip.style.top = `${Math.max(12, anchor.bottom + bounds.height + 8 <= height - 12 ? anchor.bottom + 8 : anchor.top - bounds.height - 8)}px`;
+      }
+      const helpOver = (e) => {
+        const button = e.target.closest?.("[data-field-help]");
+        if (button) showFieldHelp(button);
+      };
+      const helpOut = (e) => {
+        if (!activeHelp || helpPinned) return;
+        const tooltip = root.querySelector(`#${activeHelp}`);
+        const field = tooltip?.closest?.(".we-help-field");
+        if (
+          field?.contains?.(e.relatedTarget) ||
+          field?.contains?.(document.activeElement)
+        )
+          return;
+        closeFieldHelp();
+      };
+      const helpFocusOut = (e) => {
+        if (!activeHelp) return;
+        const field = root
+          .querySelector(`#${activeHelp}`)
+          ?.closest?.(".we-help-field");
+        if (!field?.contains?.(e.relatedTarget)) closeFieldHelp();
+      };
+      const helpScroll = (e) => {
+        if (!e.target.closest?.(".we-field-tooltip")) closeFieldHelp();
+      };
       function render(preserveCanvas = false) {
+        closeFieldHelp();
         const pickerFocus =
           templatePickerOpen &&
           document.activeElement?.closest?.("[data-template-modal]")
@@ -2065,7 +2264,7 @@
         if (settings)
           root.insertAdjacentHTML(
             "beforeend",
-            `<div class="we-modal-backdrop" data-settings-modal><section class="we-modal we-node-modal" role="dialog" aria-modal="true" aria-labelledby="we-settings-title"><header><h3 id="we-settings-title">${esc(TYPES[settings.type]?.label || settings.type)} settings</h3><button type="button" class="button secondary dialog-close" data-close-settings aria-label="Close settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></header>${demo ? '<p class="we-debug-unavailable" role="status">Latest node status unavailable in showcase.</p>' : statusFor(settings.id) ? `<p class="we-node-latest-status" role="status">${esc(formatNodeStatus(statusFor(settings.id)))} · ${esc(statusFor(settings.id).last_run_at || "")}</p>` : '<p class="we-node-latest-status" role="status">No recent run status available.</p>'}<p data-signal-status role="status">${esc(notice)}</p><div class="we-node-layout">${signalPanel(settings, "in")}<section class="we-node-settings" aria-label="Node settings">${selected === settings.id ? params : ""}${nodeConnections(settings)}${settings.type === "code" ? `<div class="we-code-actions"><button class="button secondary" data-code-test ${demo ? "disabled" : ""}>Test code locally</button><span role="status">${esc(codeError)}</span></div>${testPane ? `<section data-test-pane><p>Runs locally. Sample detections are editable.</p><label>Sample detections JSON<textarea data-test-input>${esc(JSON.stringify([{ label: "person", confidence: 0.93, bbox: [20, 30, 90, 180] }], null, 2))}</textarea></label><button class="button primary" data-run-test ${testRunning ? "disabled" : ""}>${testRunning ? "Running…" : "Run test"}</button><pre data-test-result role="status"></pre></section>` : ""}` : ""}</section>${signalPanel(settings, "out")}</div><button class="button secondary" data-close-settings>Done</button></section></div>`,
+            `<div class="we-modal-backdrop" data-settings-modal><section class="we-modal we-node-modal" role="dialog" aria-modal="true" aria-labelledby="we-settings-title"><header><h3 id="we-settings-title">${esc(TYPES[settings.type]?.label || settings.type)} settings</h3><button type="button" class="button secondary dialog-close" data-close-settings aria-label="Close settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></header>${demo ? '<p class="we-debug-unavailable" role="status">Latest node status unavailable in showcase.</p>' : statusFor(settings.id) ? `<p class="we-node-latest-status" role="status">${esc(formatNodeStatus(statusFor(settings.id)))} · ${esc(statusFor(settings.id).last_run_at || "")}</p>` : '<p class="we-node-latest-status" role="status">No recent run status available.</p>'}<p data-signal-status role="status">${esc(notice)}</p><div class="we-node-layout">${signalPanel(settings, "in")}<section class="we-node-settings" aria-label="Node settings">${selected === settings.id ? params : ""}${fieldHelpMarkup(nodeConnections(settings), settings, "connections")}${settings.type === "code" ? `<div class="we-code-actions"><button class="button secondary" data-code-test ${demo ? "disabled" : ""}>Test code locally</button><span role="status">${esc(codeError)}</span></div>${testPane ? `<section data-test-pane><p>Runs locally. Sample detections are editable.</p>${fieldHelpMarkup(`<label>Sample detections JSON<textarea data-test-input>${esc(JSON.stringify([{ label: "person", confidence: 0.93, bbox: [20, 30, 90, 180] }], null, 2))}</textarea></label>`, settings, "test")}<button class="button primary" data-run-test ${testRunning ? "disabled" : ""}>${testRunning ? "Running…" : "Run test"}</button><pre data-test-result role="status"></pre></section>` : ""}` : ""}</section>${signalPanel(settings, "out")}</div><button class="button secondary" data-close-settings>Done</button></section></div>`,
           );
         root.insertAdjacentHTML("beforeend", templatePanel());
         if (templatePickerOpen) {
@@ -2826,6 +3025,16 @@
         changed();
       };
       const click = async (e) => {
+        const help = e.target.closest?.("[data-field-help]");
+        if (help) {
+          e.preventDefault();
+          if (activeHelp === help.dataset.fieldHelp && helpPinned)
+            closeFieldHelp();
+          else showFieldHelp(help, true);
+          return;
+        }
+        if (activeHelp && !e.target.closest?.(".we-field-tooltip"))
+          closeFieldHelp();
         const signal = e.target.closest("[data-signal-node]");
         if (signal) {
           chosenSignal = signalFrom(signal);
@@ -3301,6 +3510,8 @@
         root.querySelector("[data-close-settings]")?.focus?.();
       };
       const focusin = (e) => {
+        const help = e.target.closest?.("[data-field-help]");
+        if (help) showFieldHelp(help);
         if (
           e.target.matches?.(
             "[data-param],[data-rule],[data-camera],[data-name],[data-edge-label]",
@@ -3311,6 +3522,12 @@
           selectedEdge = e.target.dataset.deleteEdge;
       };
       const keydown = (e) => {
+        if (e.key === "Escape" && activeHelp) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeFieldHelp();
+          return;
+        }
         if (templatePickerOpen) {
           if (e.key === "Escape") {
             e.preventDefault();
@@ -3898,6 +4115,11 @@
       root.addEventListener("dblclick", doubleClick);
       root.addEventListener("keydown", keydown);
       root.addEventListener("focusin", focusin);
+      root.addEventListener("focusout", helpFocusOut);
+      root.addEventListener("pointerover", helpOver);
+      root.addEventListener("pointerout", helpOut);
+      root.addEventListener("scroll", helpScroll, true);
+      window.addEventListener("resize", closeFieldHelp);
       root.addEventListener("pointerdown", pointerDown);
       document.addEventListener("pointermove", pointerMove);
       document.addEventListener("pointerup", pointerUp);
@@ -3961,6 +4183,12 @@
         root.removeEventListener("dblclick", doubleClick);
         root.removeEventListener("keydown", keydown);
         root.removeEventListener("focusin", focusin);
+        root.removeEventListener("focusout", helpFocusOut);
+        root.removeEventListener("pointerover", helpOver);
+        root.removeEventListener("pointerout", helpOut);
+        root.removeEventListener("scroll", helpScroll, true);
+        window.removeEventListener("resize", closeFieldHelp);
+        closeFieldHelp();
         root.removeEventListener("pointerdown", pointerDown);
         document.removeEventListener("pointermove", pointerMove);
         document.removeEventListener("pointerup", pointerUp);
