@@ -1,7 +1,9 @@
 """Concurrent camera lifecycle with bounded latest-frame storage."""
 
 import copy
+import hashlib
 import logging
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -14,7 +16,8 @@ import cv2
 from platformdirs import user_data_path
 
 from spyder_cctv.analysis_runtime import AnalysisRuntime
-from spyder_cctv.capture import Capture, OpenCVCapture, encode_jpeg
+from spyder_cctv.camera_bindings import CameraBindings
+from spyder_cctv.capture import CameraIdentityError, Capture, OpenCVCapture, encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile, save_config
 from spyder_cctv.controls import unavailable_controls, validate_settings
 from spyder_cctv.cv.contracts import VisionConfig
@@ -39,9 +42,14 @@ class CameraWorker:
         pipeline_factory: Callable[[str], Pipeline] | None = None,
         encoder: Callable[[Any], bytes] = encode_jpeg,
         desired_settings: dict[str, float] | None = None,
+        device_bindings: CameraBindings | None = None,
     ) -> None:
         self.config = config
         self._capture_factory = capture_factory
+        self._device_bindings = device_bindings
+        self._device_id: str | None = None
+        self._device_index: int | None = None
+        self._connection_notice: str | None = None
         self._uses_default_pipeline = pipeline_factory is None
         self._pipeline_factory = pipeline_factory or (
             lambda name: create_pipeline(name, self.config.vision)
@@ -311,6 +319,13 @@ class CameraWorker:
                 if self.config.vision is not None
                 else None,
                 "capture_session": self._capture_session,
+                "device_binding": {
+                    "bound": self._device_id is not None,
+                    "fingerprint": hashlib.sha256(self._device_id.encode()).hexdigest()[:12]
+                    if self._device_id is not None
+                    else None,
+                    "current_index": self._device_index,
+                },
                 "reconnection": {
                     "enabled": self._can_reconnect(),
                     "attempt": self._reconnect_attempts,
@@ -381,6 +396,14 @@ class CameraWorker:
                 if self._state != "error":
                     self._state, self._error = "stopped", None
 
+    def _bind_device(self, device_id: str) -> None:
+        with self._lock:
+            if self._device_id is not None and self._device_id.casefold() != device_id.casefold():
+                raise CameraIdentityError("Camera identity changed; reconnect refused")
+            self._device_id = device_id.casefold()
+        if self._device_bindings is not None:
+            self._device_bindings.bind(self.config.id, self.config.source, device_id)
+
     def _run_capture(self) -> bool:
         reconnect = False
         capture = None
@@ -392,7 +415,23 @@ class CameraWorker:
         vision_error = False
         try:
             try:
-                capture = self._capture_factory(self.config.source)
+                self._connection_notice = None
+                if self._capture_factory is OpenCVCapture:
+                    source = self.config.source
+                    if isinstance(source, int) and self._device_bindings is not None:
+                        saved = self._device_bindings.get(self.config.id, source)
+                        if self._device_id is None:
+                            self._device_id = saved
+                    capture = OpenCVCapture(
+                        source, device_id=self._device_id, on_device_bound=self._bind_device
+                    )
+                    with self._lock:
+                        self._device_index = capture.device_index
+                else:
+                    capture = self._capture_factory(self.config.source)
+            except CameraIdentityError as error:
+                self._connection_notice = str(error)
+                raise _CaptureDisconnected from None
             except Exception:
                 raise _CaptureDisconnected from None
             while not self._stop.is_set():
@@ -402,6 +441,9 @@ class CameraWorker:
                     ok, frame = capture.read()
                     if not ok or frame is None:
                         raise _CaptureDisconnected
+                except CameraIdentityError as error:
+                    self._connection_notice = str(error)
+                    raise _CaptureDisconnected from None
                 except Exception:
                     raise _CaptureDisconnected from None
                 with self._lock:
@@ -520,7 +562,10 @@ class CameraWorker:
                     self._connected_since = None
                     self._state = "reconnecting" if reconnect else "error"
                     self._error = (
-                        "Camera disconnected; reconnecting automatically"
+                        (
+                            self._connection_notice
+                            or "Camera disconnected; reconnecting automatically"
+                        )
                         if reconnect
                         else "Video ended or capture unavailable"
                     )
@@ -596,6 +641,24 @@ class CameraManager:
         self._profiles = {profile.id: profile for profile in profiles}
         for camera in cameras:
             self._desired(camera)  # Validate assignments before constructing any workers.
+        self.app_data_dir = (
+            config_path.parent
+            if config_path
+            else (
+                Path(media_dir).parent if media_dir else user_data_path("SpyDER", appauthor=False)
+            )
+        ).resolve()
+        self._device_bindings = None
+        if (
+            sys.platform == "win32"
+            and worker_options.get("capture_factory", OpenCVCapture) is OpenCVCapture
+        ):
+            self._device_bindings = CameraBindings(
+                self.app_data_dir / "camera-devices.json"
+                if config_path is not None or media_dir is not None
+                else None
+            )
+            worker_options = {**worker_options, "device_bindings": self._device_bindings}
         self.workers = {
             camera.id: CameraWorker(
                 camera,
@@ -611,13 +674,6 @@ class CameraManager:
         self._preferences = Preferences(
             config_path.with_name("preferences.json") if config_path is not None else None
         )
-        self.app_data_dir = (
-            config_path.parent
-            if config_path
-            else (
-                Path(media_dir).parent if media_dir else user_data_path("SpyDER", appauthor=False)
-            )
-        ).resolve()
         self.storage_settings = StorageSettings(
             self.app_data_dir / "storage.json", self.app_data_dir / "media"
         )
@@ -856,6 +912,8 @@ class CameraManager:
                 self._intent.discard(camera_id)
                 self._policy_paused.discard(camera_id)
                 self._recording.discard(camera_id)
+            if self._device_bindings is not None:
+                self._device_bindings.remove(camera_id)
 
     def control(self, camera_id: str, action: str) -> dict[str, Any]:
         with self._mutations:
