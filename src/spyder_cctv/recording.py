@@ -117,13 +117,57 @@ class RecordingService:
         self._recovery = {"recovered": [], "pending": [], "durability_warning": None}
         self._active_metadata = None
         self._last_checkpoint = 0.0
+        self._requested_pre_event_seconds = 0
+        self._pre_event_seconds = 0.0
+        self._pre_event_snapshot: tuple[Any, ...] = ()
+        self._event_trigger_time: float | None = None
+        self._event_end_time: float | None = None
+        self._event_next_time: float | None = None
         self.allowance = RecordingAllowance(self)
         self._recover_interrupted()
 
     def start(
-        self, camera_ids: list[str], *, expected_revision: int | None = None
+        self,
+        camera_ids: list[str],
+        *,
+        expected_revision: int | None = None,
+        pre_event_seconds: int = 0,
+        event_trigger_time: float | None = None,
+        post_event_seconds: int | None = None,
     ) -> dict[str, Any]:
         ids = self._validate_ids(camera_ids)
+        if (
+            isinstance(pre_event_seconds, bool)
+            or not isinstance(pre_event_seconds, int)
+            or not 0 <= pre_event_seconds <= 30
+        ):
+            raise ValueError("pre_event_seconds must be an integer from 0 to 30")
+        if pre_event_seconds:
+            if len(ids) != 1:
+                raise ValueError("Pre-event recording supports one camera")
+            if (
+                isinstance(post_event_seconds, bool)
+                or not isinstance(post_event_seconds, int)
+                or not 1 <= post_event_seconds <= 300
+            ):
+                raise ValueError("post_event_seconds must be an integer from 1 to 300")
+            trigger = time.monotonic() if event_trigger_time is None else float(event_trigger_time)
+            if not math.isfinite(trigger) or trigger > time.monotonic():
+                raise ValueError("event_trigger_time must be finite and no later than now")
+            buffer = getattr(self.manager, "pre_event_buffer", None)
+            if buffer is None:
+                raise RuntimeError("Pre-event frame buffer is unavailable")
+            history = tuple(buffer.snapshot(ids[0], pre_event_seconds, before=trigger))
+            timeline_start = history[0].timestamp if history else trigger
+            actual_pre_event_seconds = max(
+                0.0, min(float(pre_event_seconds), trigger - timeline_start)
+            )
+        else:
+            trigger = None
+            post_event_seconds = None
+            history = ()
+            timeline_start = None
+            actual_pre_event_seconds = 0.0
         with self._lock:
             self._ensure_open()
             self._check_revision(expected_revision)
@@ -167,10 +211,18 @@ class RecordingService:
                 self._segment_frames = 0
                 self._segment_index = 0
                 self._profile = describe_settings(self._settings)
-                self._started = time.monotonic()
+                self._started = timeline_start if timeline_start is not None else time.monotonic()
                 self._stopped_at = 0.0
                 self._last_elapsed = 0.0
                 self._session_id = uuid.uuid4().hex
+                self._requested_pre_event_seconds = pre_event_seconds
+                self._pre_event_seconds = actual_pre_event_seconds
+                self._pre_event_snapshot = history
+                self._event_trigger_time = trigger
+                self._event_end_time = (
+                    trigger + post_event_seconds if trigger is not None else None
+                )
+                self._event_next_time = timeline_start
                 self._segment_id = self._session_id
                 self._session_filename = f"{self._segment_id}.mp4"
                 self._temp_path = self.output_dir / f".{self._session_id}.partial.mp4"
@@ -209,6 +261,7 @@ class RecordingService:
             self._camera_ids = ids
             if not ids:
                 self._state = "stopping"
+            self._cancel_event_limit_locked()
             for camera_id in before:
                 if camera_id not in ids:
                     self._release(camera_id)
@@ -271,11 +324,14 @@ class RecordingService:
             )
             return {
                 "state": self._state,
+                "writer_active": self._thread is not None,
                 "control_revision": self._control_revision,
                 "session_id": self._session_id,
                 "camera_ids": list(self._camera_ids),
                 "elapsed_seconds": round(elapsed, 3),
                 "frames": self._frames,
+                "requested_pre_event_seconds": self._requested_pre_event_seconds,
+                "pre_event_seconds": round(self._pre_event_seconds, 3),
                 "width": self._profile["width"],
                 "height": self._profile["height"],
                 "fps": self._profile["fps"],
@@ -312,6 +368,26 @@ class RecordingService:
             self._settings = validated
             self._profile = describe_settings(validated)
             return self.status()
+
+    def cancel_event_limit(self, session_id: str) -> bool:
+        """Cancel automatic event stop for a transferred recording session."""
+        with self._lock:
+            if session_id != self._session_id or self._event_end_time is None:
+                return False
+            self._cancel_event_limit_locked()
+            self._control_revision += 1
+            return True
+
+    def _cancel_event_limit_locked(self) -> None:
+        if self._event_end_time is None:
+            return
+        now = time.monotonic()
+        self._event_end_time = None
+        self._event_next_time = None
+        self._pre_event_snapshot = ()
+        if self._started:
+            self._started = now - self._frames / max(1, self._profile["fps"])
+        self._wake.set()
 
     def media_path(self, item_id: str) -> Path:
         with self._lock:
@@ -395,6 +471,43 @@ class RecordingService:
                     break
                 if not self._recording_space_available():
                     break
+                with self._lock:
+                    event_next = self._event_next_time
+                    event_end = self._event_end_time
+                if event_next is not None and event_end is not None:
+                    now = time.monotonic()
+                    due = max(
+                        0,
+                        int((min(now, event_end) - event_next) * self._profile["fps"] + 1e-7)
+                        + 1,
+                    )
+                    for _ in range(due):
+                        target = event_next
+                        if target > event_end or not self._recording_space_available():
+                            break
+                        event_images = self._event_samples(selected, target)
+                        composite = self._compose(
+                            event_images,
+                            selected,
+                            width=self._profile["width"],
+                            height=self._profile["height"],
+                            timestamp=target,
+                        )
+                        if not self._write_composite(composite):
+                            break
+                        event_next += 1 / self._profile["fps"]
+                        with self._lock:
+                            self._event_next_time = event_next
+                    now = time.monotonic()
+                    if now >= event_end and event_next > event_end:
+                        with self._lock:
+                            self._stopped_at = event_end
+                            self._state = "stopping"
+                        break
+                    wait_until = min(event_next, event_end)
+                    self._wake.wait(max(0.0, wait_until - now))
+                    self._wake.clear()
+                    continue
                 samples = self._samples(selected)
                 composite = self._compose(
                     samples, selected, width=self._profile["width"], height=self._profile["height"]
@@ -409,29 +522,10 @@ class RecordingService:
                     + 1,
                 )
                 for _ in range(due):
-                    if not self._recording_space_available():
+                    if not self._recording_space_available() or not self._write_composite(
+                        composite
+                    ):
                         break
-                    if self._writer is None:
-                        self._open_writer()
-                    self._writer.write(composite)
-                    with self._lock:
-                        self._frames += 1
-                        self._segment_frames += 1
-                    if time.monotonic() - self._last_checkpoint >= 5:
-                        checkpoint = getattr(self._writer, "checkpoint", None)
-                        if checkpoint is not None:
-                            try:
-                                checkpoint()
-                            except OSError:
-                                self._recovery["durability_warning"] = (
-                                    "Disk checkpoint failed; check drive permissions and health"
-                                )
-                                logger.warning(
-                                    "Recording durability checkpoint failed", exc_info=True
-                                )
-                        self._last_checkpoint = time.monotonic()
-                    if self._segment_frames >= self._segment_frame_limit():
-                        self._finish_segment()
                 remaining = max(
                     0.0, 1.0 / self._profile["fps"] - (time.monotonic() - frame_started)
                 )
@@ -453,6 +547,75 @@ class RecordingService:
     def _segment_frame_limit(self) -> int:
         return self._profile["fps"] * self._settings["segment_minutes"] * 60
 
+    def _event_samples(self, camera_ids: list[str], target: float) -> list[np.ndarray | None]:
+        with self._lock:
+            initial = self._pre_event_snapshot
+            seconds = self._requested_pre_event_seconds
+        images: list[np.ndarray | None] = []
+        buffer = getattr(self.manager, "pre_event_buffer", None)
+        now = time.monotonic()
+        for camera_id in camera_ids:
+            freshness = self._freshness_window(camera_id)
+            candidates = [frame for frame in initial if frame.timestamp <= target]
+            if buffer is not None:
+                try:
+                    candidates.extend(buffer.snapshot(camera_id, seconds, before=target))
+                except (KeyError, RuntimeError, ValueError):
+                    pass
+            newest = max(candidates, key=lambda frame: frame.timestamp, default=None)
+            if newest is None or target - newest.timestamp > freshness:
+                # Workflow ownership can clear the ring while recording continues.
+                try:
+                    worker = self.manager.get_worker(camera_id)
+                    jpeg = worker.jpeg()
+                    age = worker.status().get("frame_age_seconds")
+                    stamp = now - float(age) if age is not None else math.inf
+                    if jpeg and stamp <= target and target - stamp <= freshness:
+                        image = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+                    else:
+                        image = None
+                except (KeyError, RuntimeError, ValueError, TypeError):
+                    image = None
+            else:
+                image = None
+            if newest is not None and target - newest.timestamp <= freshness:
+                image = cv2.imdecode(np.frombuffer(newest.jpeg, np.uint8), cv2.IMREAD_COLOR)
+            images.append(image)
+        return images
+
+    def _freshness_window(self, camera_id: str) -> float:
+        try:
+            fps = float(self.manager.get_worker(camera_id).config.fps)
+        except (KeyError, AttributeError, TypeError, ValueError):
+            return 0.5
+        if not math.isfinite(fps) or fps <= 0:
+            return 0.5
+        return min(2.0, max(0.5, 2.0 / fps))
+
+    def _write_composite(self, composite: np.ndarray) -> bool:
+        if not self._recording_space_available():
+            return False
+        if self._writer is None:
+            self._open_writer()
+        self._writer.write(composite)
+        with self._lock:
+            self._frames += 1
+            self._segment_frames += 1
+        if time.monotonic() - self._last_checkpoint >= 5:
+            checkpoint = getattr(self._writer, "checkpoint", None)
+            if checkpoint is not None:
+                try:
+                    checkpoint()
+                except OSError:
+                    self._recovery["durability_warning"] = (
+                        "Disk checkpoint failed; check drive permissions and health"
+                    )
+                    logger.warning("Recording durability checkpoint failed", exc_info=True)
+            self._last_checkpoint = time.monotonic()
+        if self._segment_frames >= self._segment_frame_limit():
+            self._finish_segment()
+        return True
+
     def _open_writer(self) -> None:
         self._segment_id = self._session_id if self._segment_index == 0 else uuid.uuid4().hex
         self._session_filename = f"{self._segment_id}.mp4"
@@ -466,6 +629,8 @@ class RecordingService:
             profile=self._settings["profile"],
             codec="H.264",
             format_version=1,
+            requested_pre_event_seconds=self._requested_pre_event_seconds,
+            pre_event_seconds=round(self._pre_event_seconds, 3),
         )
         active = self.output_dir / f".{self._segment_id}.active.json"
         self._write_atomic(active, json.dumps(self._active_metadata).encode("utf-8"))
@@ -501,6 +666,8 @@ class RecordingService:
                 fps=self._profile["fps"],
                 bitrate_kbps=self._profile["bitrate_kbps"],
                 created_at=self._active_metadata["created_at"],
+                requested_pre_event_seconds=self._requested_pre_event_seconds,
+                pre_event_seconds=round(self._pre_event_seconds, 3),
             )
             # A small recovery journal bridges the video rename and catalog update.
             journal = self.output_dir / f".{self._segment_id}.recording.json"
@@ -560,6 +727,10 @@ class RecordingService:
                 self._state = "idle"
                 self._error = self._stop_notice
             self._camera_ids = []
+            self._pre_event_snapshot = ()
+            self._event_trigger_time = None
+            self._event_end_time = None
+            self._event_next_time = None
             if self._started:
                 self._last_elapsed = self._stopped_at - self._started
             self._started = 0.0
@@ -626,6 +797,12 @@ class RecordingService:
                         size_bytes=source.stat().st_size,
                         recovered=True,
                         keep_forever=True,
+                        requested_pre_event_seconds=self._pre_event_values(
+                            raw, float(metadata.get("duration_seconds", 0))
+                        )[0],
+                        pre_event_seconds=self._pre_event_values(
+                            raw, float(metadata.get("duration_seconds", 0))
+                        )[1],
                     )
                     journal = self.output_dir / f".{ident}.recording.json"
                     self._write_atomic(journal, json.dumps(item).encode("utf-8"))
@@ -689,6 +866,7 @@ class RecordingService:
         *,
         width: int = WIDTH,
         height: int = HEIGHT,
+        timestamp: float | None = None,
     ) -> np.ndarray:
         count = max(1, len(images))
         columns = math.ceil(math.sqrt(count))
@@ -723,7 +901,12 @@ class RecordingService:
                     cv2.LINE_AA,
                 )
         if labels:
-            stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+            if timestamp is None:
+                shown_time = datetime.now(UTC)
+            else:
+                wall_offset = time.time() - time.monotonic()
+                shown_time = datetime.fromtimestamp(timestamp + wall_offset, UTC)
+            stamp = shown_time.strftime("%Y-%m-%d %H:%M:%S UTC")
             cv2.putText(
                 canvas,
                 stamp,
@@ -888,6 +1071,9 @@ class RecordingService:
         }
         if duration is not None:
             item["duration_seconds"] = duration
+            requested_pre, actual_pre = self._pre_event_values(raw, float(duration))
+            item["requested_pre_event_seconds"] = requested_pre
+            item["pre_event_seconds"] = actual_pre
             if type(raw.get("keep_forever")) is bool:
                 item["keep_forever"] = raw["keep_forever"]
             for flag in ("compression_attempted", "compressed", "recovered"):
@@ -920,6 +1106,20 @@ class RecordingService:
                 if type(value) in (int, float) and math.isfinite(value) and 0 < value <= maximum:
                     item[key] = value
         return item
+
+    @staticmethod
+    def _pre_event_values(raw: dict[str, Any], duration: float) -> tuple[int, float]:
+        requested = raw.get("requested_pre_event_seconds", 0)
+        actual = raw.get("pre_event_seconds", 0)
+        if type(requested) is not int or not 0 <= requested <= 30:
+            requested = 0
+        try:
+            actual = float(actual)
+        except (TypeError, ValueError, OverflowError):
+            actual = 0.0
+        if not math.isfinite(actual) or actual < 0:
+            actual = 0.0
+        return requested, round(min(float(requested), actual, max(0.0, duration)), 3)
 
     def _save_catalog(self) -> None:
         data = json.dumps({"items": list(self._items.values())}, indent=2).encode("utf-8")
