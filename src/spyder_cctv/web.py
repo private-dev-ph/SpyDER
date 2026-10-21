@@ -292,6 +292,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/workflow-editor.css",
                 "/event-library.js",
                 "/event-library.css",
+                "/form-controls.js",
+                "/form-controls.css",
             ):
                 asset = path.removeprefix("/")
                 content_type = {

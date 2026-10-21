@@ -40,6 +40,8 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "workflow-editor.js",
         "workflow-notifications.js",
         "workflow-editor.css",
+        "form-controls.js",
+        "form-controls.css",
         "_headers",
     }
     html = (output / "index.html").read_text(encoding="utf-8")

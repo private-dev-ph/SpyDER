@@ -128,7 +128,17 @@ try {
       if (await evaluate(expression)) return;
       await delay(100);
     }
-    throw new Error("Timed out: " + expression);
+    const state = await evaluate(
+      "({ready:document.readyState,workflow:!!window.spyderWorkflows,app:!!window.spyder,cameras:window.spyder?.cameras?.().length,text:document.body.innerText.slice(0,500)})",
+    );
+    throw new Error(
+      "Timed out: " +
+        expression +
+        "; state=" +
+        JSON.stringify(state) +
+        "; requests=" +
+        JSON.stringify(networkPaths),
+    );
   }
   const click = (text) =>
     evaluate(
@@ -384,6 +394,29 @@ try {
     await evaluate("localStorage.getItem('spyder.workflow-editor.draft')"),
     beforeHelp,
   );
+  await command(
+    "Emulation.setDeviceMetricsOverride",
+    { width: 390, height: 520, deviceScaleFactor: 1, mobile: true },
+    sessionId,
+  );
+  await evaluate(
+    "var mobileHelp=document.querySelector('[data-param=pre_event_seconds]').closest('.we-help-field').querySelector('[data-field-help]');mobileHelp.scrollIntoView({block:'center'});mobileHelp.click()",
+  );
+  assert.equal(
+    await evaluate(
+      "(() => {const t=document.querySelector('.we-field-tooltip:not([hidden])'),r=t.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&!!document.elementFromPoint(r.left+24,r.top+24)?.closest('.we-field-tooltip');})()",
+    ),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('[data-param=pre_event_seconds]').closest('.we-help-field').querySelector('[data-field-help]').click()",
+  );
+  await command(
+    "Emulation.setDeviceMetricsOverride",
+    { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
+    sessionId,
+  );
+
   await evaluate(
     "document.querySelector('[data-settings-modal] header [data-close-settings]').click()",
   );
@@ -395,6 +428,57 @@ try {
   assert.equal(
     await evaluate("document.querySelector('[data-name]').value"),
     "Unfinished workflow",
+  );
+  // Stepper edits use the same draft and Undo path as typing a numeric value.
+  await evaluate(
+    "document.querySelector('[data-open-templates]').click();document.querySelector('[data-load-template=pre-event-person]').click();document.querySelector('.we-node-event').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
+  );
+  await until(
+    "!!document.querySelector('[data-param=duration_seconds].themed-number-input')",
+  );
+  await delay(100);
+  assert.equal(
+    await evaluate(`(() => {
+    const input=document.querySelector('[data-param=duration_seconds]');
+    input.scrollIntoView({block:'center'});
+    return input.value;
+  })()`),
+    "20",
+  );
+  await delay(100);
+  assert.equal(
+    await evaluate(`(() => {
+    const input=document.querySelector('[data-param=duration_seconds]');
+    const controls=[...document.querySelectorAll('[data-number-stepper]')].find(e=>e.querySelector('button').getAttribute('aria-controls')===input.id);
+    const r=input.getBoundingClientRect(),s=controls.getBoundingClientRect();
+    return s.left>=r.left && s.right<=r.right+1 && s.top>=r.top-1 && s.bottom<=r.bottom+1;
+  })()`),
+    true,
+  );
+  await evaluate(`(() => {
+    const input=document.querySelector('[data-param=duration_seconds]');
+    document.querySelector('[aria-controls="'+input.id+'"][data-direction="1"]').click();
+  })()`);
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[data-param=duration_seconds]').value",
+    ),
+    "21",
+  );
+  assert.equal(
+    await evaluate(
+      "JSON.parse(localStorage.getItem('spyder.workflow-editor.draft')).nodes.find(n=>n.type==='event').params.duration_seconds",
+    ),
+    21,
+  );
+  await evaluate(
+    "document.querySelector('[data-settings-modal] header [data-close-settings]').click();document.querySelector('[data-undo]').click()",
+  );
+  assert.equal(
+    await evaluate(
+      "JSON.parse(localStorage.getItem('spyder.workflow-editor.draft')).nodes.find(n=>n.type==='event').params.duration_seconds",
+    ),
+    20,
   );
   await command(
     "Emulation.setDeviceMetricsOverride",
