@@ -40,6 +40,7 @@
         name_pattern: "{workflow} · {camera} · {date} {time} · {node}",
         attachment: "none",
         duration_seconds: 10,
+        pre_event_seconds: 0,
       },
     },
     notification: {
@@ -625,7 +626,10 @@
           !["none", "capture", "recording"].includes(n.params?.attachment) ||
           !Number.isInteger(n.params?.duration_seconds) ||
           n.params.duration_seconds < 1 ||
-          n.params.duration_seconds > 300)
+          n.params.duration_seconds > 300 ||
+          !Number.isInteger(n.params?.pre_event_seconds ?? 0) ||
+          (n.params?.pre_event_seconds ?? 0) < 0 ||
+          (n.params?.pre_event_seconds ?? 0) > 30)
       )
         errors.push("Event name, attachment, or duration is invalid.");
       if (
@@ -1636,6 +1640,12 @@
           Object.entries(n.params || {})
             .filter(([k]) => !["rules", "match"].includes(k))
             .map(([k, v]) => {
+              if (
+                n.type === "event" &&
+                k === "pre_event_seconds" &&
+                n.params.attachment !== "recording"
+              )
+                return "";
               if (n.type === "model" && k === "model_id") {
                 const choices = [...BUILTIN_MODELS, ...library];
                 return `<label>Model<select data-param="model_id"><option value="">Choose model</option><optgroup label="InsightFace built-in detectors">${BUILTIN_MODELS.map((model) => `<option value="${model.id}" ${v === model.id ? "selected" : ""}>${esc(model.name)}</option>`).join("")}</optgroup><optgroup label="Uploaded and registered models">${library.map((model) => `<option value="${esc(model.id)}" ${v === model.id ? "selected" : ""}>${esc(model.name)} | ${esc(model.engine)}</option>`).join("")}</optgroup>${v && !choices.some((model) => model.id === v) ? `<option selected value="${esc(v)}">Unavailable: choose replacement</option>` : ""}</select></label><p>Choose the detector here, then connect Model OUT to Detections MODEL IN. For RetinaFace, select a compatible uploaded or registered ONNX detector.</p>${builtinModel(v) ? detectorPanel(n) : ""}`;
@@ -1673,9 +1683,11 @@
               if (n.type === "event" && k === "name_pattern")
                 return `<label>Event name pattern<input data-param="name_pattern" maxlength="200" value="${esc(v)}"></label><p>Tokens: {workflow}, {camera}, {date}, {time}, {node}, {kind}, {label}. Unknown tokens stay literal.</p>`;
               if (n.type === "event" && k === "attachment")
-                return `<label>Attachment<select data-param="attachment"><option value="none" ${v === "none" ? "selected" : ""}>None</option><option value="capture" ${v === "capture" ? "selected" : ""}>Capture</option><option value="recording" ${v === "recording" ? "selected" : ""}>Recording</option></select></label><p>Clips need an idle recorder. Existing recordings are never interrupted. Duration controls appear below.</p>`;
+                return `<label>Attachment<select data-param="attachment"><option value="none" ${v === "none" ? "selected" : ""}>None</option><option value="capture" ${v === "capture" ? "selected" : ""}>Capture</option><option value="recording" ${v === "recording" ? "selected" : ""}>Recording</option></select></label><p>Clips need an idle recorder. Existing recordings are never interrupted.</p>`;
               if (n.type === "event" && k === "duration_seconds")
-                return `<label>Duration (seconds)<input data-param="duration_seconds" type="number" min="1" max="300" step="1" value="${esc(v)}"></label>`;
+                return `<label>After trigger (seconds)<input data-param="duration_seconds" type="number" min="1" max="300" step="1" value="${esc(v)}"></label>`;
+              if (n.type === "event" && k === "pre_event_seconds")
+                return `<label>Before trigger (seconds)<input data-param="pre_event_seconds" type="number" min="0" max="30" step="1" value="${esc(v)}"></label><p>Pre-trigger history uses a best-effort 5 fps RAM buffer, up to 64 MiB total and 8 MiB per camera. Buffer warms after camera start and clears on start or reconnect. Applies only to cameras in enabled workflows. Requires installed local app; Cloudflare showcase cannot record pre-trigger video.</p>`;
               if (n.type === "filter" && k === "identity")
                 return [
                   ...upstreamClasses(n.id),
@@ -2529,6 +2541,7 @@
             "identity_source",
             "engine",
             "detector",
+            "attachment",
           ].includes(k)
         ) {
           render();
