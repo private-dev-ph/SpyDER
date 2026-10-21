@@ -2623,3 +2623,29 @@ def test_pre_roll_same_membership_workflow_takeover_cancels_endpoint(service):
     service._record("start", "other", "cam1")
     assert recorder.cancelled == ["clip"]
     assert "clip" in service._event_clip_transferred
+
+
+def test_failed_manual_takeover_preserves_event_clip_endpoint(service):
+    class RejectedRecorder:
+        def __init__(self):
+            self.cancelled = []
+
+        def status(self):
+            return {"state": "recording", "session_id": "clip", "camera_ids": ["cam1"]}
+
+        def select(self, ids):
+            raise KeyError("Camera does not exist")
+
+        def cancel_event_limit(self, session_id):
+            self.cancelled.append(session_id)
+
+    recorder = service.recorder = RejectedRecorder()
+    service._event_clip_sessions.add("clip")
+    with pytest.raises(KeyError):
+        service.manual_recording("select", ["missing"])
+    assert not recorder.cancelled
+    assert "clip" not in service._event_clip_transferred
+    with pytest.raises(KeyError):
+        service._record("start", "other", "missing")
+    assert not recorder.cancelled
+    assert "clip" not in service._event_clip_transferred

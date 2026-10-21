@@ -1687,7 +1687,7 @@
               if (n.type === "event" && k === "duration_seconds")
                 return `<label>After trigger (seconds)<input data-param="duration_seconds" type="number" min="1" max="300" step="1" value="${esc(v)}"></label>`;
               if (n.type === "event" && k === "pre_event_seconds")
-                return `<label>Before trigger (seconds)<input data-param="pre_event_seconds" type="number" min="0" max="30" step="1" value="${esc(v)}"></label><p>Pre-trigger history uses a best-effort 5 fps RAM buffer, up to 64 MiB total and 8 MiB per camera. Buffer warms after camera start and clears on start or reconnect. Applies only to cameras in enabled workflows. Requires installed local app; Cloudflare showcase cannot record pre-trigger video.</p>`;
+                return `<label>Before trigger (seconds)<input data-param="pre_event_seconds" type="number" min="0" max="30" step="1" value="${esc(v)}"></label><p>Set 0 to disable buffering. Pre-trigger history uses a best-effort 5 fps RAM buffer, up to 64 MiB total and 8 MiB per camera. Buffer warms after camera start and clears on start or reconnect. Applies only to cameras in enabled workflows. Requires installed local app; Cloudflare showcase cannot record pre-trigger video.</p>`;
               if (n.type === "filter" && k === "identity")
                 return [
                   ...upstreamClasses(n.id),

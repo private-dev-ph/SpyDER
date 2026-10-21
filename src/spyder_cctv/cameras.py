@@ -22,7 +22,7 @@ from spyder_cctv.config import CameraConfig, SettingsProfile, save_config
 from spyder_cctv.controls import unavailable_controls, validate_settings
 from spyder_cctv.cv.contracts import VisionConfig
 from spyder_cctv.motion_config import AnalysisConfig
-from spyder_cctv.pre_event import PreEventBuffer
+from spyder_cctv.pre_event import BufferedFrame, PreEventBuffer
 from spyder_cctv.preferences import Preferences
 from spyder_cctv.presence import PresenceLeases
 from spyder_cctv.storage import StorageSettings
@@ -360,6 +360,18 @@ class CameraWorker:
             if time.monotonic() - self._updated > max(2.0, 2.0 / self.config.fps):
                 return None
             return self._jpeg
+
+    def recording_sample(self) -> BufferedFrame | None:
+        """Read encoded pixels and their capture timestamp as one atomic sample."""
+        with self._lock:
+            if (
+                self._state != "running"
+                or self._updated is None
+                or self._jpeg is None
+                or time.monotonic() - self._updated > max(2.0, 2.0 / self.config.fps)
+            ):
+                return None
+            return BufferedFrame(self._updated, self._jpeg, self._capture_session)
 
     def _can_reconnect(self) -> bool:
         source = self.config.source
