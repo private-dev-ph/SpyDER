@@ -119,7 +119,10 @@ class RecordingService:
         self._last_checkpoint = 0.0
         self._requested_pre_event_seconds = 0
         self._pre_event_seconds = 0.0
+        self._available_pre_event_seconds = 0.0
+        self._segment_pre_event_seconds = 0.0
         self._pre_event_snapshot: tuple[Any, ...] = ()
+        self._event_decode_cache: dict[str, tuple[float, str, np.ndarray | None]] = {}
         self._event_trigger_time: float | None = None
         self._event_end_time: float | None = None
         self._event_next_time: float | None = None
@@ -152,8 +155,11 @@ class RecordingService:
             ):
                 raise ValueError("post_event_seconds must be an integer from 1 to 300")
             trigger = time.monotonic() if event_trigger_time is None else float(event_trigger_time)
-            if not math.isfinite(trigger) or trigger > time.monotonic():
-                raise ValueError("event_trigger_time must be finite and no later than now")
+            now = time.monotonic()
+            if not math.isfinite(trigger) or trigger > now or now - trigger > 60:
+                raise ValueError(
+                    "event_trigger_time must be finite and no more than 60 seconds old"
+                )
             buffer = getattr(self.manager, "pre_event_buffer", None)
             if buffer is None:
                 raise RuntimeError("Pre-event frame buffer is unavailable")
@@ -216,8 +222,11 @@ class RecordingService:
                 self._last_elapsed = 0.0
                 self._session_id = uuid.uuid4().hex
                 self._requested_pre_event_seconds = pre_event_seconds
-                self._pre_event_seconds = actual_pre_event_seconds
+                self._pre_event_seconds = 0.0
+                self._available_pre_event_seconds = actual_pre_event_seconds
+                self._segment_pre_event_seconds = 0.0
                 self._pre_event_snapshot = history
+                self._event_decode_cache.clear()
                 self._event_trigger_time = trigger
                 self._event_end_time = (
                     trigger + post_event_seconds if trigger is not None else None
@@ -332,6 +341,7 @@ class RecordingService:
                 "frames": self._frames,
                 "requested_pre_event_seconds": self._requested_pre_event_seconds,
                 "pre_event_seconds": round(self._pre_event_seconds, 3),
+                "available_pre_event_seconds": round(self._available_pre_event_seconds, 3),
                 "width": self._profile["width"],
                 "height": self._profile["height"],
                 "fps": self._profile["fps"],
@@ -385,6 +395,7 @@ class RecordingService:
         self._event_end_time = None
         self._event_next_time = None
         self._pre_event_snapshot = ()
+        self._event_decode_cache.clear()
         if self._started:
             self._started = now - self._frames / max(1, self._profile["fps"])
         self._wake.set()
@@ -483,7 +494,11 @@ class RecordingService:
                     )
                     for _ in range(due):
                         target = event_next
-                        if target > event_end or not self._recording_space_available():
+                        if (
+                            target > event_end
+                            or not self._owns_event_frame(event_end, target)
+                            or not self._recording_space_available()
+                        ):
                             break
                         event_images = self._event_samples(selected, target)
                         composite = self._compose(
@@ -493,17 +508,51 @@ class RecordingService:
                             height=self._profile["height"],
                             timestamp=target,
                         )
-                        if not self._write_composite(composite):
+                        if not self._owns_event_frame(event_end, target):
+                            break
+                        pre_seconds = 0.0
+                        with self._lock:
+                            trigger = self._event_trigger_time
+                            timeline_start = self._started
+                        if trigger is not None and event_images and event_images[0] is not None:
+                            pre_seconds = max(
+                                0.0,
+                                min(trigger, target + 1 / self._profile["fps"])
+                                - max(timeline_start, target),
+                            )
+                        if not self._write_composite(composite, pre_event_seconds=pre_seconds):
                             break
                         event_next += 1 / self._profile["fps"]
                         with self._lock:
+                            if (
+                                self._state != "recording"
+                                or self._event_end_time != event_end
+                                or self._event_next_time != target
+                            ):
+                                break
                             self._event_next_time = event_next
+                    with self._lock:
+                        event_active = (
+                            self._state == "recording" and self._event_end_time == event_end
+                        )
+                        event_next = self._event_next_time
+                    if not event_active or event_next is None:
+                        continue
                     now = time.monotonic()
                     if now >= event_end and event_next > event_end:
+                        finish_event = False
                         with self._lock:
-                            self._stopped_at = event_end
-                            self._state = "stopping"
-                        break
+                            if (
+                                self._state == "recording"
+                                and self._event_end_time == event_end
+                                and self._event_next_time == event_next
+                            ):
+                                self._stopped_at = event_end
+                                self._state = "stopping"
+                                finish_event = True
+                        if finish_event:
+                            break
+                        continue
                     wait_until = min(event_next, event_end)
                     self._wake.wait(max(0.0, wait_until - now))
                     self._wake.clear()
@@ -547,13 +596,20 @@ class RecordingService:
     def _segment_frame_limit(self) -> int:
         return self._profile["fps"] * self._settings["segment_minutes"] * 60
 
+    def _owns_event_frame(self, event_end: float, target: float) -> bool:
+        with self._lock:
+            return (
+                self._state == "recording"
+                and self._event_end_time == event_end
+                and self._event_next_time == target
+            )
+
     def _event_samples(self, camera_ids: list[str], target: float) -> list[np.ndarray | None]:
         with self._lock:
             initial = self._pre_event_snapshot
             seconds = self._requested_pre_event_seconds
         images: list[np.ndarray | None] = []
         buffer = getattr(self.manager, "pre_event_buffer", None)
-        now = time.monotonic()
         for camera_id in camera_ids:
             freshness = self._freshness_window(camera_id)
             candidates = [frame for frame in initial if frame.timestamp <= target]
@@ -564,24 +620,33 @@ class RecordingService:
                     pass
             newest = max(candidates, key=lambda frame: frame.timestamp, default=None)
             if newest is None or target - newest.timestamp > freshness:
-                # Workflow ownership can clear the ring while recording continues.
                 try:
                     worker = self.manager.get_worker(camera_id)
-                    jpeg = worker.jpeg()
-                    age = worker.status().get("frame_age_seconds")
-                    stamp = now - float(age) if age is not None else math.inf
-                    if jpeg and stamp <= target and target - stamp <= freshness:
-                        image = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-                    else:
-                        image = None
+                    sample = getattr(worker, "recording_sample", None)
+                    newest = sample() if callable(sample) else None
                 except (KeyError, RuntimeError, ValueError, TypeError):
-                    image = None
+                    newest = None
+            if (
+                newest is None
+                or newest.timestamp > target
+                or target - newest.timestamp > freshness
+            ):
+                images.append(None)
             else:
-                image = None
-            if newest is not None and target - newest.timestamp <= freshness:
-                image = cv2.imdecode(np.frombuffer(newest.jpeg, np.uint8), cv2.IMREAD_COLOR)
-            images.append(image)
+                images.append(self._decode_event_frame(camera_id, newest))
         return images
+
+    def _decode_event_frame(self, camera_id: str, frame: Any) -> np.ndarray | None:
+        key = (frame.timestamp, frame.capture_session)
+        with self._lock:
+            cached = self._event_decode_cache.get(camera_id)
+            if cached is not None and cached[:2] == key:
+                return cached[2]
+        image = cv2.imdecode(np.frombuffer(frame.jpeg, np.uint8), cv2.IMREAD_COLOR)
+        with self._lock:
+            if self._event_end_time is not None and self._state == "recording":
+                self._event_decode_cache[camera_id] = (key[0], key[1], image)
+        return image
 
     def _freshness_window(self, camera_id: str) -> float:
         try:
@@ -592,7 +657,13 @@ class RecordingService:
             return 0.5
         return min(2.0, max(0.5, 2.0 / fps))
 
-    def _write_composite(self, composite: np.ndarray) -> bool:
+    @staticmethod
+    def _wall_time(timestamp: float) -> datetime:
+        return datetime.fromtimestamp(timestamp + time.time() - time.monotonic(), UTC)
+
+    def _write_composite(
+        self, composite: np.ndarray, *, pre_event_seconds: float = 0.0
+    ) -> bool:
         if not self._recording_space_available():
             return False
         if self._writer is None:
@@ -601,6 +672,9 @@ class RecordingService:
         with self._lock:
             self._frames += 1
             self._segment_frames += 1
+            if self._segment_index == 0 and pre_event_seconds > 0:
+                self._segment_pre_event_seconds += pre_event_seconds
+                self._pre_event_seconds = self._segment_pre_event_seconds
         if time.monotonic() - self._last_checkpoint >= 5:
             checkpoint = getattr(self._writer, "checkpoint", None)
             if checkpoint is not None:
@@ -630,7 +704,14 @@ class RecordingService:
             codec="H.264",
             format_version=1,
             requested_pre_event_seconds=self._requested_pre_event_seconds,
-            pre_event_seconds=round(self._pre_event_seconds, 3),
+            pre_event_seconds=round(
+                self._available_pre_event_seconds if self._segment_index == 0 else 0.0, 3
+            ),
+            **(
+                {"created_at": self._wall_time(self._started).isoformat()}
+                if self._requested_pre_event_seconds and self._segment_index == 0
+                else {}
+            ),
         )
         active = self.output_dir / f".{self._segment_id}.active.json"
         self._write_atomic(active, json.dumps(self._active_metadata).encode("utf-8"))
@@ -651,6 +732,7 @@ class RecordingService:
         if self._segment_frames and temp_path is not None and temp_path.is_file():
             sync_file(temp_path)
             final_path = self.output_dir / self._session_filename
+            segment_pre_event_seconds = self._segment_pre_event_seconds
             item = self._new_item(
                 self._segment_id,
                 "recording",
@@ -667,7 +749,7 @@ class RecordingService:
                 bitrate_kbps=self._profile["bitrate_kbps"],
                 created_at=self._active_metadata["created_at"],
                 requested_pre_event_seconds=self._requested_pre_event_seconds,
-                pre_event_seconds=round(self._pre_event_seconds, 3),
+                pre_event_seconds=round(segment_pre_event_seconds, 3),
             )
             # A small recovery journal bridges the video rename and catalog update.
             journal = self.output_dir / f".{self._segment_id}.recording.json"
@@ -677,6 +759,7 @@ class RecordingService:
                 self._items[self._segment_id] = item
                 self._save_catalog()
                 self._segment_index += 1
+                self._segment_pre_event_seconds = 0.0
             try:
                 _retry_sharing_violation(
                     lambda: (self.output_dir / f".{self._segment_id}.active.json").unlink(
@@ -728,6 +811,7 @@ class RecordingService:
                 self._error = self._stop_notice
             self._camera_ids = []
             self._pre_event_snapshot = ()
+            self._event_decode_cache.clear()
             self._event_trigger_time = None
             self._event_end_time = None
             self._event_next_time = None
@@ -904,8 +988,7 @@ class RecordingService:
             if timestamp is None:
                 shown_time = datetime.now(UTC)
             else:
-                wall_offset = time.time() - time.monotonic()
-                shown_time = datetime.fromtimestamp(timestamp + wall_offset, UTC)
+                shown_time = RecordingService._wall_time(timestamp)
             stamp = shown_time.strftime("%Y-%m-%d %H:%M:%S UTC")
             cv2.putText(
                 canvas,

@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -70,18 +71,14 @@ def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(se
     history = manager.pre_event_buffer
     history.configure({"red": 2})
     trigger = time.monotonic()
+    wall_offset = time.time() - trigger
     red = encode_color((20, 20, 230))
-    for offset in (0.3, 0.1):
+    for offset in (1.0, 0.78, 0.56, 0.34, 0.12):
         history.push("red", red, trigger - offset, "camera-session")
-
-    started = service.start(
-        ["red"], pre_event_seconds=2, event_trigger_time=trigger, post_event_seconds=1
-    )
-    assert started["requested_pre_event_seconds"] == 2
-    assert started["pre_event_seconds"] >= 0.25
-
     green = encode_color((20, 220, 20))
     finish = threading.Event()
+    publisher_started = threading.Event()
+    publishers = []
 
     def publish_post_frames():
         while not finish.is_set():
@@ -92,8 +89,25 @@ def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(se
                 pass
             time.sleep(0.22)
 
-    publisher = threading.Thread(target=publish_post_frames, daemon=True)
-    publisher.start()
+    original_snapshot = history.snapshot
+
+    def snapshot_then_publish(*args, **kwargs):
+        snapshot = original_snapshot(*args, **kwargs)
+        if not publisher_started.is_set():
+            publisher_started.set()
+            publisher = threading.Thread(target=publish_post_frames, daemon=True)
+            publishers.append(publisher)
+            publisher.start()
+        return snapshot
+
+    history.snapshot = snapshot_then_publish
+    started = service.start(
+        ["red"], pre_event_seconds=2, event_trigger_time=trigger, post_event_seconds=1
+    )
+    assert started["requested_pre_event_seconds"] == 2
+    assert 0 <= started["pre_event_seconds"] <= started["available_pre_event_seconds"]
+    assert 0.8 <= started["available_pre_event_seconds"] <= 1.0
+
     try:
         wait_for(
             lambda: service.status()["state"] == "idle"
@@ -101,15 +115,18 @@ def test_real_encoder_writes_red_history_then_green_post_and_catalog_metadata(se
         )
     finally:
         finish.set()
-        publisher.join(2)
+        for publisher in publishers:
+            publisher.join(2)
     item = next(item for item in service.status()["items"] if item["kind"] == "recording")
+    item_start = datetime.fromisoformat(item["created_at"]).timestamp()
+    assert abs(item_start - (trigger - 1.0 + wall_offset)) < 0.5
     frames = decoded_frames(service.media_path(item["id"]))
     assert len(frames) >= 4
     center = [frame[100:-50, 100:-50] for frame in frames]
     assert center[0][:, :, 2].mean() > center[0][:, :, 1].mean() * 2
     assert center[-1][:, :, 1].mean() > center[-1][:, :, 2].mean() * 2
     assert item["requested_pre_event_seconds"] == 2
-    assert item["pre_event_seconds"] >= 0.25
+    assert 0.5 <= item["pre_event_seconds"] <= 1.0
 
     restored = RecordingService(manager, output)
     try:
@@ -129,7 +146,10 @@ def test_partial_history_reports_actual_duration_and_no_history_is_zero(service_
     partial = service.start(
         ["red"], pre_event_seconds=5, event_trigger_time=trigger, post_event_seconds=1
     )
-    assert 0.3 <= partial["pre_event_seconds"] <= 0.4
+    assert 0 <= partial["pre_event_seconds"] <= partial["available_pre_event_seconds"]
+    assert 0.3 <= partial["available_pre_event_seconds"] <= 0.4
+    wait_for(lambda: service.status()["frames"] >= 1)
+    assert service.status()["pre_event_seconds"] > 0
     service.stop(timeout=4)
     wait_for(lambda: not service.status()["writer_active"])
 
@@ -156,6 +176,11 @@ def test_validation_requires_one_camera_and_valid_durations(service_rig):
     for post in (None, 0, 301, True, 1.0):
         with pytest.raises(ValueError, match="post_event_seconds"):
             service.start(["red"], pre_event_seconds=1, post_event_seconds=post)
+    for trigger in (time.monotonic() - 61, time.monotonic() + 1):
+        with pytest.raises(ValueError, match="event_trigger_time"):
+            service.start(
+                ["red"], pre_event_seconds=1, event_trigger_time=trigger, post_event_seconds=1
+            )
     assert service.status()["state"] == "idle"
 
 
@@ -165,7 +190,7 @@ def test_select_same_membership_and_explicit_takeover_cancel_auto_finish(service
     history.configure({"red": 1})
     trigger = time.monotonic()
     history.push("red", encode_color((20, 20, 230)), trigger, "s")
-    started = service.start(
+    service.start(
         ["red"], pre_event_seconds=1, event_trigger_time=trigger, post_event_seconds=2
     )
     # Same membership still transfers ownership and cancels pre-event mode.
@@ -173,6 +198,36 @@ def test_select_same_membership_and_explicit_takeover_cancel_auto_finish(service
     assert service._event_end_time is None
     time.sleep(2.1)
     assert service.status()["state"] == "recording"
+    service.stop(timeout=5)
+    wait_for(lambda: not service.status()["writer_active"])
+
+
+def test_select_during_blocked_event_sampling_cannot_restore_auto_stop(service_rig, monkeypatch):
+    manager, service, _ = service_rig
+    history = manager.pre_event_buffer
+    history.configure({"red": 1})
+    trigger = time.monotonic()
+    history.push("red", encode_color((20, 20, 230)), trigger, "s")
+    entered = threading.Event()
+    release = threading.Event()
+    sample = service._event_samples
+
+    def blocked_sample(camera_ids, target):
+        entered.set()
+        release.wait(4)
+        return sample(camera_ids, target)
+
+    monkeypatch.setattr(service, "_event_samples", blocked_sample)
+    service.start(
+        ["red"], pre_event_seconds=1, event_trigger_time=trigger, post_event_seconds=1
+    )
+    assert entered.wait(3)
+    service.select(["red"])
+    time.sleep(1.1)
+    release.set()
+    wait_for(lambda: service.status()["frames"] >= 1)
+    assert service.status()["state"] == "recording"
+    assert service._event_end_time is None
     service.stop(timeout=5)
     wait_for(lambda: not service.status()["writer_active"])
 
@@ -213,3 +268,57 @@ def test_catalog_clamps_recovered_actual_history_to_duration(service_rig):
         assert recovered["pre_event_seconds"] <= recovered["duration_seconds"]
     finally:
         restored.close()
+
+
+def test_later_segments_do_not_claim_pre_event_frames(service_rig):
+    manager, service, _ = service_rig
+    history = manager.pre_event_buffer
+    history.configure({"red": 2})
+    trigger = time.monotonic()
+    red = encode_color((20, 20, 230))
+    for offset in (0.9, 0.68, 0.46, 0.24):
+        history.push("red", red, trigger - offset, "s")
+    green = encode_color((20, 220, 20))
+    finish = threading.Event()
+    publisher_started = threading.Event()
+    publishers = []
+
+    def publish():
+        while not finish.is_set():
+            try:
+                history.push("red", green, time.monotonic(), "s")
+            except ValueError:
+                pass
+            time.sleep(0.22)
+
+    original_snapshot = history.snapshot
+
+    def snapshot_then_publish(*args, **kwargs):
+        snapshot = original_snapshot(*args, **kwargs)
+        if not publisher_started.is_set():
+            publisher_started.set()
+            publisher = threading.Thread(target=publish, daemon=True)
+            publishers.append(publisher)
+            publisher.start()
+        return snapshot
+
+    history.snapshot = snapshot_then_publish
+    service._segment_frame_limit = lambda: 2
+    started = service.start(
+        ["red"], pre_event_seconds=2, event_trigger_time=trigger, post_event_seconds=1
+    )
+    try:
+        wait_for(lambda: service.status()["state"] == "idle")
+    finally:
+        finish.set()
+        for publisher in publishers:
+            publisher.join(2)
+    items = [
+        item
+        for item in service.status()["items"]
+        if item.get("kind") == "recording" and item.get("session_id") == started["session_id"]
+    ]
+    items.sort(key=lambda item: item["segment_index"])
+    assert len(items) >= 2
+    assert items[0]["pre_event_seconds"] > 0
+    assert all(item["pre_event_seconds"] == 0 for item in items[1:])
