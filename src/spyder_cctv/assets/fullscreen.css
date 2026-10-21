@@ -291,8 +291,8 @@
     transform: none;
   }
   .wall-fullscreen .tile-actions button {
-    min-width: 40px;
-    min-height: 40px;
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

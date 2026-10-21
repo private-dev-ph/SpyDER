@@ -169,7 +169,7 @@
 .we-zoom-controls output {
   min-width: 4ch;
   text-align: center;
-  color: var(--text);
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
 .we-zoom-controls .button {
@@ -1761,20 +1761,27 @@
 .we-modal .we-help-field label {
   margin: 0;
 }
+.we-field-drop > .we-help-field {
+  margin: 0 0 8px;
+}
 .we-field-label {
-  display: block;
-  padding-inline-end: 30px;
+  display: flex;
+  align-items: center;
+  min-height: var(--icon-control-size);
+  padding-inline-end: calc(var(--icon-control-size) + 8px);
   line-height: 1.5;
 }
 .we-help-button {
   position: absolute;
-  inset-block-start: -3px;
+  inset-block-start: 0;
   inset-inline-end: 0;
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 4px;
+  width: var(--icon-control-size);
+  height: var(--icon-control-size);
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
   border: 1px solid transparent;
   border-radius: 50%;
   color: var(--accent);
@@ -1782,8 +1789,9 @@
   cursor: help;
 }
 .we-help-button .icon {
-  width: 18px;
-  height: 18px;
+  width: var(--icon-glyph-size);
+  height: var(--icon-glyph-size);
+  margin: 0;
 }
 .we-help-button:hover,
 .we-help-button[aria-expanded="true"] {
@@ -1824,16 +1832,6 @@
 }
 .we-node-connections li > .we-help-field {
   flex: 1 1 100%;
-}
-@media (pointer: coarse) {
-  .we-help-button {
-    width: 36px;
-    height: 36px;
-    inset-block-start: -7px;
-  }
-  .we-field-label {
-    padding-inline-end: 40px;
-  }
 }
 @media (forced-colors: active) {
   .we-help-button {

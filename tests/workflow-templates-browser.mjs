@@ -337,6 +337,30 @@ try {
     "(() => {const p=document.querySelector('.we-node-settings');return {fields:p.querySelectorAll('label:has(input),label:has(select),label:has(textarea)').length,helpers:p.querySelectorAll('[data-field-help]').length};})()",
   );
   assert.equal(helpFields.fields, helpFields.helpers);
+  async function assertHelpAlignment(size) {
+    const failures =
+      await evaluate(`(() => [...document.querySelectorAll('.we-help-button')].flatMap(b=>{
+      const r=b.getBoundingClientRect(),i=b.querySelector('svg').getBoundingClientRect(),
+        f=b.closest('.we-help-field'),c=f.querySelector('.we-field-label').getBoundingClientRect(),
+        input=f.querySelector('input,select,textarea').getBoundingClientRect();
+      return Math.abs(r.x+r.width/2-i.x-i.width/2)<1 && Math.abs(r.y+r.height/2-i.y-i.height/2)<1
+        && Math.abs(r.y+r.height/2-c.y-c.height/2)<1 && r.width===${size} && r.height===${size}
+        && r.bottom<=input.top+1 && (!f.querySelector('.we-field-drop')) ? [] : [b.ariaLabel];
+    }))()`);
+    assert.deepEqual(
+      failures,
+      [],
+      "Help controls center on icons/captions and stay clear of inputs",
+    );
+  }
+  for (const theme of ["light", "dark"]) {
+    await evaluate(
+      `document.documentElement.dataset.theme=${JSON.stringify(theme)}`,
+    );
+    await assertHelpAlignment(36);
+  }
+  await evaluate("document.documentElement.dataset.theme='light'");
+
   await evaluate(
     "document.querySelector('[data-param=duration_seconds]').closest('.we-help-field').querySelector('[data-field-help]').focus()",
   );
@@ -399,9 +423,19 @@ try {
     { width: 390, height: 520, deviceScaleFactor: 1, mobile: true },
     sessionId,
   );
-  await evaluate(
-    "var mobileHelp=document.querySelector('[data-param=pre_event_seconds]').closest('.we-help-field').querySelector('[data-field-help]');mobileHelp.scrollIntoView({block:'center'});mobileHelp.click()",
+  await command(
+    "Emulation.setTouchEmulationEnabled",
+    { enabled: true },
+    sessionId,
   );
+  await assertHelpAlignment(44);
+  await evaluate(
+    "var mobileHelp=document.querySelector('[data-param=pre_event_seconds]').closest('.we-help-field').querySelector('[data-field-help]');mobileHelp.scrollIntoView({block:'center'})",
+  );
+  await evaluate(
+    "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+  );
+  await evaluate("mobileHelp.click()");
   assert.equal(
     await evaluate(
       "(() => {const t=document.querySelector('.we-field-tooltip:not([hidden])'),r=t.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&!!document.elementFromPoint(r.left+24,r.top+24)?.closest('.we-field-tooltip');})()",
@@ -410,6 +444,11 @@ try {
   );
   await evaluate(
     "document.querySelector('[data-param=pre_event_seconds]').closest('.we-help-field').querySelector('[data-field-help]').click()",
+  );
+  await command(
+    "Emulation.setTouchEmulationEnabled",
+    { enabled: false },
+    sessionId,
   );
   await command(
     "Emulation.setDeviceMetricsOverride",
@@ -480,6 +519,50 @@ try {
     ),
     20,
   );
+  await evaluate(
+    `document.querySelector('.we-node-event').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));document.querySelector('.we-signals[aria-label="IN signals"] [data-signal-name=camera_id]').click()`,
+  );
+  await evaluate("document.querySelector('[data-use-signal=message]').click()");
+  assert.equal(
+    await evaluate("document.querySelector('[data-param=message]').disabled"),
+    true,
+  );
+  await assertHelpAlignment(36);
+  await evaluate(
+    "document.querySelector('[data-param=message]').closest('.we-help-field').querySelector('[data-field-help]').click()",
+  );
+  assert.equal(
+    await evaluate(
+      "!!document.querySelector('.we-field-tooltip:not([hidden])')",
+    ),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('[data-settings-modal] header [data-close-settings]').click();document.querySelector('[data-undo]').click()",
+  );
+  for (const type of [
+    "camera",
+    "model",
+    "classifier",
+    "detections",
+    "filter",
+    "zone",
+    "count",
+    "cooldown",
+    "notification",
+    "preview",
+    "capture",
+    "record",
+    "code",
+  ]) {
+    await evaluate(
+      `document.querySelector('[data-add=${type}]').click();document.querySelector('.we-node.selected').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`,
+    );
+    await assertHelpAlignment(36);
+    await evaluate(
+      "document.querySelector('[data-settings-modal] header [data-close-settings]').click()",
+    );
+  }
   await command(
     "Emulation.setDeviceMetricsOverride",
     { width: 390, height: 520, deviceScaleFactor: 1, mobile: true },
@@ -559,13 +642,58 @@ try {
     ),
     true,
   );
+
+  for (const viewport of [
+    { width: 1280, height: 800, mobile: false },
+    { width: 390, height: 520, mobile: true },
+    { width: 1024, height: 320, mobile: false },
+  ]) {
+    await command(
+      "Emulation.setDeviceMetricsOverride",
+      { ...viewport, deviceScaleFactor: 1 },
+      sessionId,
+    );
+    for (const theme of ["light", "dark"]) {
+      await evaluate(
+        `document.documentElement.dataset.theme=${JSON.stringify(theme)}`,
+      );
+      for (const route of [
+        "control-room",
+        "vision-lab",
+        "camera-setup",
+        "recordings",
+        "events",
+        "layouts",
+        "system",
+      ]) {
+        await evaluate(`location.hash=${JSON.stringify(route)}`);
+        await delay(100);
+        const audit =
+          await evaluate(`(() => ({overflow:document.documentElement.scrollWidth>innerWidth+1,
+          icons:[...document.querySelectorAll('.icon-button > svg,.dialog-close > svg,.video-focus > svg')].filter(i=>i.getClientRects().length).flatMap(i=>{
+            const b=i.parentElement,r=b.getBoundingClientRect(),s=i.getBoundingClientRect();
+            return Math.abs(r.x+r.width/2-s.x-s.width/2)<1&&Math.abs(r.y+r.height/2-s.y-s.height/2)<1?[]:[b.ariaLabel||b.title||b.className];
+          })}))()`);
+        assert.equal(
+          audit.overflow,
+          false,
+          `${route}/${theme}/${viewport.width}: horizontal overflow`,
+        );
+        assert.deepEqual(
+          audit.icons,
+          [],
+          `${route}/${theme}/${viewport.width}: icon centering`,
+        );
+      }
+    }
+  }
   assert.deepEqual(await evaluate("templateErrors"), []);
   assert.equal(
     networkPaths.some((url) => url.startsWith("/api/")),
     false,
   );
   console.log(
-    "PASS: templates and themed controls: dropdowns, red/white checkboxes, centered SVG close buttons, uploads, light/dark, keyboard, mobile/short windows, and no API requests.",
+    "PASS: templates and themed controls: dropdowns, red/white checkboxes, centered help/caption and SVG controls, uploads, all node settings, seven workspaces in light/dark at desktop/mobile/short sizes, keyboard/touch, Undo, and no API requests.",
   );
 } finally {
   socket?.close();

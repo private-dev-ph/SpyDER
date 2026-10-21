@@ -911,7 +911,12 @@
     test_input:
       "Enter a JSON array of sample detections for a local code test. This tests the code on sample data, without starting a camera or executing downstream action nodes.",
   };
-  function fieldHelpMarkup(html, node, scope = "params") {
+  function fieldHelpMarkup(
+    html,
+    node,
+    scope = "params",
+    decorate = (field) => field,
+  ) {
     const escape = (value) =>
       String(value).replace(
         /[&<>"']/g,
@@ -970,7 +975,9 @@
         const help =
           (Object.hasOwn(FIELD_HELP, key) ? FIELD_HELP[key] : "") ||
           `Set ${caption}. ${control[1] === "select" ? "Choose an available option." : "Enter a value matching this field."}`;
-        return `<div class="we-help-field"><label${attributes}>${guided}</label><button type="button" class="we-help-button" data-field-help="${id}" aria-label="Help for ${escape(caption)}" aria-expanded="false" aria-controls="${id}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".8" fill="currentColor" stroke="none"/></svg></button><div class="we-field-tooltip" id="${id}" role="tooltip" hidden><strong>${escape(caption)}</strong><span>${escape(help)}</span>${details ? `<span>${details}</span>` : ""}${example}</div></div>`;
+        return decorate(
+          `<div class="we-help-field"><label${attributes}>${guided}</label><button type="button" class="we-help-button" data-field-help="${id}" aria-label="Help for ${escape(caption)}" aria-expanded="false" aria-controls="${id}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".8" fill="currentColor" stroke="none"/></svg></button><div class="we-field-tooltip" id="${id}" role="tooltip" hidden><strong>${escape(caption)}</strong><span>${escape(help)}</span>${details ? `<span>${details}</span>` : ""}${example}</div></div>`,
+        );
       },
     );
   }
@@ -1233,34 +1240,29 @@
         }</aside>`;
       }
       function mappedFields(n) {
-        const html = n
-          ? fieldHelpMarkup(parameterFields(n), n)
-          : parameterFields(n);
-        if (!n) return html;
-        return html.replace(
-          /<label([^>]*)>([\s\S]*?)<\/label>/g,
-          (whole, attributes, body) => {
-            const param = /data-param="([^"]+)"/.exec(body),
-              rule = /data-rule="(\d+)" data-rule-key="value"/.exec(body);
-            const field = param?.[1] || (rule ? `rules.${rule[1]}.value` : "");
-            if (!fieldType(n, field)) return whole;
-            const binding = n.bindings?.[field],
-              source = graph.nodes.find((s) => s.id === binding?.node);
-            const content = binding
-              ? whole.replace(/<(input|select|textarea)\b/, "<$1 disabled")
-              : whole;
-            const compatible =
-              chosenSignal &&
-              (chosenSignal.mode === "fixed"
-                ? upstreamIds(graph, n.id).has(chosenSignal.node) &&
-                  ["strings", "text"].includes(fieldType(n, field))
-                : canBind(graph, n, field, {
-                    node: chosenSignal.node,
-                    signal: chosenSignal.signal,
-                  }));
-            return `<div class="we-field-drop ${binding ? "is-linked" : ""}" data-bind-field="${esc(field)}">${content}${binding ? `<div class="we-binding"><span>LIVE · ${esc(TYPES[source?.type]?.label || binding.node)}.${esc(binding.signal)}</span><button type="button" class="button secondary" data-unbind="${esc(field)}" aria-label="Unlink ${esc(field)}">Unlink</button></div>` : "<small>Drop a compatible signal here</small>"}${compatible ? `<button type="button" class="button secondary we-use-signal" data-use-signal="${esc(field)}">Use selected ${chosenSignal.mode === "fixed" ? "class" : "signal"}</button>` : ""}</div>`;
-          },
-        );
+        if (!n) return parameterFields(n);
+        return fieldHelpMarkup(parameterFields(n), n, "params", (whole) => {
+          const body = whole;
+          const param = /data-param="([^"]+)"/.exec(body),
+            rule = /data-rule="(\d+)" data-rule-key="value"/.exec(body);
+          const field = param?.[1] || (rule ? `rules.${rule[1]}.value` : "");
+          if (!fieldType(n, field)) return whole;
+          const binding = n.bindings?.[field],
+            source = graph.nodes.find((s) => s.id === binding?.node);
+          const content = binding
+            ? whole.replace(/<(input|select|textarea)\b/, "<$1 disabled")
+            : whole;
+          const compatible =
+            chosenSignal &&
+            (chosenSignal.mode === "fixed"
+              ? upstreamIds(graph, n.id).has(chosenSignal.node) &&
+                ["strings", "text"].includes(fieldType(n, field))
+              : canBind(graph, n, field, {
+                  node: chosenSignal.node,
+                  signal: chosenSignal.signal,
+                }));
+          return `<div class="we-field-drop ${binding ? "is-linked" : ""}" data-bind-field="${esc(field)}">${content}${binding ? `<div class="we-binding"><span>LIVE · ${esc(TYPES[source?.type]?.label || binding.node)}.${esc(binding.signal)}</span><button type="button" class="button secondary" data-unbind="${esc(field)}" aria-label="Unlink ${esc(field)}">Unlink</button></div>` : "<small>Drop a compatible signal here</small>"}${compatible ? `<button type="button" class="button secondary we-use-signal" data-use-signal="${esc(field)}">Use selected ${chosenSignal.mode === "fixed" ? "class" : "signal"}</button>` : ""}</div>`;
+        });
       }
       function signalFrom(element) {
         return {
