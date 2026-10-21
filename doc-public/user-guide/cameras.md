@@ -34,10 +34,28 @@ processing. Old frames and detection results are cleared during the outage. An a
 composite recording continues with an unavailable-camera tile; the feed rejoins the
 same recording when it recovers. Missing footage cannot be reconstructed.
 
-Native webcam indices are assigned by the operating system and can change when
-USB devices are unplugged or reordered. Verify the named feeds after hardware
-changes. Stable Linux `/dev/v4l/by-id/` and `/dev/v4l/by-path/` sources also support
-reconnection.
+On Windows, a numeric webcam index selects the device for its first binding.
+SpyDER then remembers that camera's unique driver `DevicePath` in the local
+`camera-devices.json` file, alongside the application configuration. Later starts
+and reconnects follow the saved device even if Windows changes its index. An absent
+webcam stays offline rather than substituting another webcam. Device IDs stay on
+this computer and are excluded from portable configuration backups.
+
+When Windows reorders devices, affected DirectShow streams briefly release and
+reopen their handles together. This avoids reusing another camera's occupied OpenCV
+capture slot; an active composite recording continues with offline placeholders.
+Saved tuning is reapplied to the matched device. A camera cannot claim a device
+already assigned to another view, including a paused view.
+
+Existing views created before device binding was added bind to the currently
+selected webcam on their first start after updating. Verify their names once.
+To intentionally assign a different webcam, remove and add that view again. A USB
+port/driver change can give a device a new ID and require this reassignment.
+On Linux, stable `/dev/v4l/by-id/` or `/dev/v4l/by-path/` sources are recommended over
+indices when devices may be unplugged.
+
+See [Microsoft's device identity documentation](https://learn.microsoft.com/en-us/windows/win32/directshow/selecting-a-capture-device)
+and [OpenCV's DirectShow backend](https://github.com/opencv/opencv/blob/4.x/modules/videoio/src/cap_dshow.cpp).
 
 A driver or stream backend can block while opening or reading. Reconnection begins
 when that backend returns; SpyDER never opens a second handle to bypass a blocked

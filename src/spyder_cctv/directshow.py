@@ -46,6 +46,131 @@ def _query(pointer: ct.c_void_p, interface_id: str) -> ct.c_void_p:
     return result if code == 0 else ct.c_void_p()
 
 
+class _VariantValue(ct.Union):
+    _fields_ = [("bstr", ct.c_void_p), ("integer", ct.c_longlong), ("record", ct.c_void_p * 2)]
+
+
+class _Variant(ct.Structure):
+    _fields_ = [("vt", ct.c_ushort), ("reserved", ct.c_ushort * 3), ("value", _VariantValue)]
+
+
+def enumerate_video_devices() -> list[str | None]:
+    """Return DirectShow DevicePath identities in OpenCV's enumeration order.
+
+    Unknown identities retain their index slot, but cannot be selected safely.
+    Metadata enumeration binds property bags only, never a second capture graph.
+    """
+    ole = ct.WinDLL("ole32")
+    ole.CoInitializeEx.argtypes = (ct.c_void_p, ct.c_ulong)
+    ole.CoInitializeEx.restype = ct.c_long
+    code = ole.CoInitializeEx(None, 0)
+    initialized = code in (0, 1)
+    if code not in (0, 1, -2147417850):
+        raise RuntimeError("Cannot initialize camera enumeration")
+    enumerator, devices = ct.c_void_p(), ct.c_void_p()
+    try:
+        ole.CoCreateInstance.argtypes = (
+            ct.POINTER(GUID),
+            ct.c_void_p,
+            ct.c_ulong,
+            ct.POINTER(GUID),
+            ct.POINTER(ct.c_void_p),
+        )
+        ole.CoCreateInstance.restype = ct.c_long
+        system = GUID.parse("62be5d10-60eb-11d0-bd3b-00a0c911ce86")
+        interface = GUID.parse("29840822-5b84-11d0-bd3b-00a0c911ce86")
+        category = GUID.parse("860bb310-5d01-11d0-bd3b-00a0c911ce86")
+        if (
+            ole.CoCreateInstance(
+                ct.byref(system), None, 1, ct.byref(interface), ct.byref(enumerator)
+            )
+            != 0
+        ):
+            raise RuntimeError("Cannot enumerate camera identities")
+        code = _call(
+            enumerator,
+            3,
+            (ct.POINTER(GUID), ct.POINTER(ct.c_void_p), ct.c_ulong),
+            ct.byref(category),
+            ct.byref(devices),
+            0,
+        )
+        if code == 1:  # S_FALSE means no video devices, not an error.
+            return []
+        if code != 0:
+            raise RuntimeError("Cannot enumerate camera identities")
+        identities = []
+        while len(identities) < 256:
+            moniker, fetched = ct.c_void_p(), ct.c_ulong()
+            code = _call(
+                devices,
+                3,
+                (ct.c_ulong, ct.POINTER(ct.c_void_p), ct.POINTER(ct.c_ulong)),
+                1,
+                ct.byref(moniker),
+                ct.byref(fetched),
+            )
+            if code == 1:
+                _release(moniker)
+                return identities
+            if code != 0 or fetched.value != 1:
+                _release(moniker)
+                raise RuntimeError("Cannot enumerate camera identities")
+            try:
+                identities.append(_device_path(moniker))
+            finally:
+                _release(moniker)
+        raise RuntimeError("Too many camera devices")
+    finally:
+        _release(devices)
+        _release(enumerator)
+        if initialized:
+            ole.CoUninitialize()
+
+
+def _device_path(moniker: ct.c_void_p) -> str | None:
+    bag = ct.c_void_p()
+    interface = GUID.parse("55272a00-42cb-11ce-8135-00aa004bb851")
+    try:
+        if (
+            _call(
+                moniker,
+                9,
+                (ct.c_void_p, ct.c_void_p, ct.POINTER(GUID), ct.POINTER(ct.c_void_p)),
+                None,
+                None,
+                ct.byref(interface),
+                ct.byref(bag),
+            )
+            != 0
+        ):
+            return None
+        automation = ct.WinDLL("oleaut32")
+        automation.VariantInit.argtypes = (ct.POINTER(_Variant),)
+        automation.VariantInit.restype = None
+        automation.VariantClear.argtypes = (ct.POINTER(_Variant),)
+        automation.VariantClear.restype = ct.c_long
+        value = _Variant()
+        automation.VariantInit(ct.byref(value))
+        try:
+            code = _call(
+                bag,
+                3,
+                (ct.c_wchar_p, ct.POINTER(_Variant), ct.c_void_p),
+                "DevicePath",
+                ct.byref(value),
+                None,
+            )
+            if code != 0 or value.vt != 8 or not value.value.bstr:  # VT_BSTR
+                return None
+            path = ct.wstring_at(value.value.bstr)
+            return path.casefold() if 0 < len(path) <= 4096 else None
+        finally:
+            automation.VariantClear(ct.byref(value))
+    finally:
+        _release(bag)
+
+
 class DirectShowControls:
     # IAMCameraControl: Pan=0, Tilt=1, Zoom=3. IAMVideoProcAmp: Brightness=0,
     # Contrast=1, Saturation=3. FOV is not part of either standard interface.
