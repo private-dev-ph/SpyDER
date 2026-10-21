@@ -317,8 +317,8 @@
   opacity: 1;
 }
 .tile-priority-tools .icon-button {
-  width: 34px;
-  height: 34px;
+  width: var(--icon-control-size);
+  height: var(--icon-control-size);
   background: #171313dc;
   color: #fff;
   border: 1px solid #fff8;
@@ -501,8 +501,8 @@
 }
 @media (max-width: 600px) {
   .tile-priority-tools .icon-button {
-    width: 38px;
-    height: 38px;
+    width: max(38px, var(--icon-control-size));
+    height: max(38px, var(--icon-control-size));
   }
   .tile-priority-tools {
     gap: 3px;

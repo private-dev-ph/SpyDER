@@ -1,5 +1,8 @@
 /* Warm neutral surfaces keep the supplied reds and golds readable in both themes. */
 :root {
+  --icon-control-size: 36px;
+  --icon-glyph-size: 20px;
+  --dialog-close-size: 40px;
   color-scheme: light;
   --canvas: #f7f5ef;
   --surface: #fffefa;
@@ -137,10 +140,12 @@ select:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 .icon-button {
+  padding: 0;
+  line-height: 1;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: var(--icon-control-size);
+  height: var(--icon-control-size);
   border: 1px solid var(--border);
   border-radius: 50%;
   background: var(--surface);
@@ -246,8 +251,9 @@ select:focus-visible {
   flex-shrink: 0;
 }
 .icon-button .icon {
-  width: 20px;
-  height: 20px;
+  width: var(--icon-glyph-size);
+  height: var(--icon-glyph-size);
+  margin: 0;
 }
 main {
   padding: 40px 38px 24px;
@@ -625,6 +631,8 @@ select,
   text-transform: uppercase;
 }
 .video-focus {
+  padding: 0;
+  line-height: 1;
   display: grid;
   place-items: center;
   pointer-events: auto;
@@ -632,8 +640,8 @@ select,
   background: #0007;
   border: 1px solid #ffffff40;
   border-radius: 5px;
-  width: 36px;
-  height: 36px;
+  width: var(--icon-control-size);
+  height: var(--icon-control-size);
   font-size: 18px;
 }
 .camera-footer {
@@ -1153,10 +1161,9 @@ button:disabled {
   }
 }
 @media (pointer: coarse) {
-  .icon-button,
-  .video-focus {
-    width: 44px;
-    height: 44px;
+  :root {
+    --icon-control-size: 44px;
+    --dialog-close-size: 44px;
   }
   .tile-actions button {
     min-height: 40px;
@@ -1361,9 +1368,9 @@ textarea::placeholder {
 :root .dialog-close {
   display: inline-grid;
   place-items: center;
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
+  width: var(--dialog-close-size);
+  min-width: var(--dialog-close-size);
+  height: var(--dialog-close-size);
   padding: 0;
   line-height: 1;
   flex-shrink: 0;

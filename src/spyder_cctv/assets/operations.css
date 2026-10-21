@@ -86,7 +86,7 @@
   font-weight: 600;
 }
 .operations-panel[data-state="healthy"] .health-summary {
-  color: var(--text);
+  color: var(--ink);
 }
 .operations-panel[data-state="error"] .health-summary {
   color: var(--accent);
