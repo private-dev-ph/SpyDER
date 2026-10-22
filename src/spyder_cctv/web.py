@@ -1010,6 +1010,27 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         200,
                         workflows.preview(data["workflow"], data["node_id"], data.get("camera_id")),
                     )
+                elif (
+                    len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "enabled"
+                ):
+                    data = self.body(1048576)
+                    if not {"enabled", "expected_workflow"} <= set(data) or set(data) - {
+                        "enabled",
+                        "expected_workflow",
+                        "disable_motion",
+                    }:
+                        raise ValueError("Send enabled state and expected_workflow")
+                    self.json(
+                        200,
+                        {
+                            "workflow": workflows.set_enabled(
+                                parts[2],
+                                data["enabled"],
+                                data["expected_workflow"],
+                                disable_motion=data.get("disable_motion", False),
+                            )
+                        },
+                    )
                 elif len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "rename":
                     data = self.body()
                     if set(data) != {"name"}:

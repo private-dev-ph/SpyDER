@@ -370,3 +370,33 @@
   font-size: 10px;
   font-weight: 700;
 }
+
+.wm-toggle-confirm {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(480px, calc(100% - 28px));
+  max-height: calc(100% - 20px);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 60px #0006;
+}
+.wm-toggle-confirm > div {
+  display: flex;
+  justify-content: end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wm-toggle-confirm p,
+.wm-toggle-confirm li {
+  color: var(--muted);
+  line-height: 1.5;
+}
+.wm-actions {
+  flex-wrap: wrap;
+}

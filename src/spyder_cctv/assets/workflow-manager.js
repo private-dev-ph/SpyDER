@@ -124,7 +124,7 @@
     const dialog = doc.createElement("dialog");
     dialog.className = "workflow-manager";
     dialog.setAttribute("aria-labelledby", "wm-title");
-    dialog.innerHTML = `<div class="wm-shell" aria-busy="false"><header class="wm-header"><div><h2 id="wm-title">Workflows</h2><p class="wm-summary" aria-live="polite">Loading workflows…</p></div><button type="button" class="wm-close" aria-label="Close workflow manager"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"></use></svg></button></header><div class="wm-toolbar"><label class="wm-search">Search workflows<input type="search" name="query" autocomplete="off" placeholder="Find a workflow…"></label><label>Status<select name="status"><option value="">All statuses</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option><option value="empty">Empty drafts</option></select></label><label>Camera<select name="camera"><option value="">All cameras</option></select></label><label>Engine<select name="engine"><option value="">All engines</option></select></label><label>Sort<select name="sort"><option value="name">Name A–Z</option><option value="name_desc">Name Z–A</option><option value="enabled">Enabled first</option></select></label><button type="button" class="wm-primary" data-create>New workflow</button></div><p class="wm-error" role="alert" tabindex="-1" hidden></p><p class="wm-activity" role="status" aria-live="polite"></p><section class="wm-list" aria-label="Workflow results" tabindex="0"><div class="wm-rows"></div></section><footer class="wm-footer"><span class="wm-range"></span><div><button type="button" data-prev>Previous</button><span class="wm-page"></span><button type="button" data-next>Next</button><label>Rows<select name="size"><option>25</option><option>50</option></select></label></div></footer><section class="wm-guard" hidden role="alertdialog" aria-labelledby="wm-guard-title"><h3 id="wm-guard-title">Unsaved workflow edits</h3><p>Continuing will discard your current draft.</p><div><button type="button" data-keep>Keep editing</button><button type="button" class="wm-danger" data-discard>Discard edits &amp; continue</button></div></section><section class="wm-delete-confirm" hidden role="alertdialog" aria-labelledby="wm-delete-title"><h3 id="wm-delete-title"></h3><p></p><div><button type="button" data-cancel-delete>Cancel</button><button type="button" class="wm-danger" data-confirm-delete>Delete workflow</button></div></section></div>`;
+    dialog.innerHTML = `<div class="wm-shell" aria-busy="false"><header class="wm-header"><div><h2 id="wm-title">Workflows</h2><p class="wm-summary" aria-live="polite">Loading workflows…</p></div><button type="button" class="wm-close" aria-label="Close workflow manager"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"></use></svg></button></header><div class="wm-toolbar"><label class="wm-search">Search workflows<input type="search" name="query" autocomplete="off" placeholder="Find a workflow…"></label><label>Status<select name="status"><option value="">All statuses</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option><option value="empty">Empty drafts</option></select></label><label>Camera<select name="camera"><option value="">All cameras</option></select></label><label>Engine<select name="engine"><option value="">All engines</option></select></label><label>Sort<select name="sort"><option value="name">Name A–Z</option><option value="name_desc">Name Z–A</option><option value="enabled">Enabled first</option></select></label><button type="button" class="wm-primary" data-create>New workflow</button></div><p class="wm-error" role="alert" tabindex="-1" hidden></p><p class="wm-activity" role="status" aria-live="polite"></p><section class="wm-list" aria-label="Workflow results" tabindex="0"><div class="wm-rows"></div></section><footer class="wm-footer"><span class="wm-range"></span><div><button type="button" data-prev>Previous</button><span class="wm-page"></span><button type="button" data-next>Next</button><label>Rows<select name="size"><option>25</option><option>50</option></select></label></div></footer><section class="wm-toggle-confirm" hidden role="alertdialog" aria-labelledby="wm-toggle-title"><h3 id="wm-toggle-title">Review camera changes</h3><p></p><ul></ul><div><button type="button" data-cancel-toggle>Cancel</button><button type="button" class="wm-primary" data-confirm-toggle>Enable saved workflow</button></div></section><section class="wm-guard" hidden role="alertdialog" aria-labelledby="wm-guard-title"><h3 id="wm-guard-title">Unsaved workflow edits</h3><p>Continuing will discard your current draft.</p><div><button type="button" data-keep>Keep editing</button><button type="button" class="wm-danger" data-discard>Discard edits &amp; continue</button></div></section><section class="wm-delete-confirm" hidden role="alertdialog" aria-labelledby="wm-delete-title"><h3 id="wm-delete-title"></h3><p></p><div><button type="button" data-cancel-delete>Cancel</button><button type="button" class="wm-danger" data-confirm-delete>Delete workflow</button></div></section></div>`;
     doc.body.append(dialog);
     const q = (s) => dialog.querySelector(s);
     let closed = false,
@@ -133,7 +133,8 @@
       page = 1,
       rows = [],
       pending = null,
-      busy = false;
+      busy = false,
+      toggleReview = null;
     const filters = () => ({
       query: q('[name="query"]').value,
       status: q('[name="status"]').value,
@@ -156,7 +157,8 @@
       for (const button of dialog.querySelectorAll(
         "[data-action], [data-create], .wm-rename button",
       ))
-        button.disabled = value;
+        button.disabled =
+          value || (button.dataset.action === "toggle" && !!callbacks.demo);
     }
     function guard(selector, visible) {
       q(selector).hidden = !visible;
@@ -219,7 +221,7 @@
         rows
           .map(
             (item) =>
-              `<article class="wm-row ${callbacks.currentId?.() === item.id ? "is-current" : ""}" data-id="${esc(item.id)}"><div class="wm-main"><strong>${esc(item.name || "Untitled workflow")}</strong>${callbacks.currentId?.() === item.id ? '<span class="wm-current">Editing</span>' : ""}<code>${esc(item.id)}</code><span class="wm-status ${item.enabled ? "is-enabled" : "is-disabled"}">${item.enabled ? "Enabled" : "Disabled"}</span></div><div class="wm-meta"><span>Camera: ${esc((item.camera_ids || []).map((id) => callbacks.cameras?.().find((c) => c.id === id)?.name || id).join(", ") || "None")}</span><span>Engines: ${esc((item.engines || []).join(", ") || "None")}</span><span>${Number(item.node_count) || 0} nodes · ${Number(item.edge_count) || 0} connections</span></div><div class="wm-actions"><button type="button" data-action="open" data-id="${esc(item.id)}">Open</button><details><summary aria-label="More actions for ${esc(item.name || item.id)}">More</summary><div><button type="button" data-action="rename" data-id="${esc(item.id)}">Rename</button><button type="button" data-action="duplicate" data-id="${esc(item.id)}">Duplicate</button><button type="button" data-action="export" data-id="${esc(item.id)}">Export</button><button type="button" class="wm-danger" data-action="delete" data-id="${esc(item.id)}">Delete</button></div></details></div></article>`,
+              `<article class="wm-row ${callbacks.currentId?.() === item.id ? "is-current" : ""}" data-id="${esc(item.id)}"><div class="wm-main"><strong>${esc(item.name || "Untitled workflow")}</strong>${callbacks.currentId?.() === item.id ? '<span class="wm-current">Editing</span>' : ""}<code>${esc(item.id)}</code><span class="wm-status ${item.enabled ? "is-enabled" : "is-disabled"}">${item.enabled ? "Enabled" : "Disabled"}</span></div><div class="wm-meta"><span>Camera: ${esc((item.camera_ids || []).map((id) => callbacks.cameras?.().find((c) => c.id === id)?.name || id).join(", ") || "None")}</span><span>Engines: ${esc((item.engines || []).join(", ") || "None")}</span><span>${Number(item.node_count) || 0} nodes · ${Number(item.edge_count) || 0} connections</span></div><div class="wm-actions"><button type="button" data-action="toggle" data-id="${esc(item.id)}" aria-label="${item.enabled ? "Disable" : "Enable"} ${esc(item.name || item.id)}" ${callbacks.demo ? 'disabled title="Workflow execution requires the installed local app"' : ""}>${item.enabled ? "Disable" : "Enable"}</button><button type="button" data-action="open" data-id="${esc(item.id)}">Open</button><details><summary aria-label="More actions for ${esc(item.name || item.id)}">More</summary><div><button type="button" data-action="rename" data-id="${esc(item.id)}">Rename</button><button type="button" data-action="duplicate" data-id="${esc(item.id)}">Duplicate</button><button type="button" data-action="export" data-id="${esc(item.id)}">Export</button><button type="button" class="wm-danger" data-action="delete" data-id="${esc(item.id)}">Delete</button></div></details></div></article>`,
           )
           .join("") ||
         `<p class="wm-empty">${filters().query ? "No workflows match this search." : "No workflows yet."}</p>`;
@@ -244,6 +246,58 @@
       clearTimeout(timer);
       page = 1;
       timer = setTimeout(refresh, 200);
+    }
+    function confirmToggle(review) {
+      if (closed) return Promise.resolve(false);
+      const section = q(".wm-toggle-confirm");
+      section.querySelector("p").textContent =
+        `Enabling ${review.name} changes these cameras. Only the saved workflow will run; unsaved edits remain in the editor.`;
+      const list = section.querySelector("ul");
+      list.replaceChildren();
+      for (const camera of review.cameras || []) {
+        const row = doc.createElement("li");
+        row.textContent = `${camera.name || camera.id}: ${camera.disable_motion ? "motion analysis will be disabled" : "Motion pipeline will be replaced"}${camera.target_engine ? " · " + camera.target_engine : ""}`;
+        list.append(row);
+      }
+      guard(".wm-toggle-confirm", true);
+      return new Promise((resolve) => {
+        toggleReview = resolve;
+        const finish = (value) => {
+          guard(".wm-toggle-confirm", false);
+          toggleReview = null;
+          resolve(value);
+        };
+        q("[data-cancel-toggle]").onclick = () => finish(false);
+        q("[data-confirm-toggle]").onclick = () => finish(true);
+        q("[data-cancel-toggle]").focus();
+      });
+    }
+    async function toggle(item) {
+      if (!item || busy || closed || callbacks.demo || !callbacks.onToggle)
+        return;
+      error();
+      setBusy(true);
+      try {
+        const result = await callbacks.onToggle(
+          item.id,
+          !item.enabled,
+          confirmToggle,
+        );
+        if (!closed && result !== false) await refresh();
+      } catch (e) {
+        if (!closed)
+          error(e?.message || "Workflow state could not be changed.");
+      } finally {
+        if (!closed) {
+          setBusy(false);
+          if (q(".wm-error").hidden) {
+            const target = [
+              ...dialog.querySelectorAll('[data-action="toggle"]'),
+            ].find((button) => button.dataset.id === item.id);
+            (target || q(".wm-list")).focus();
+          }
+        }
+      }
     }
     async function act(name, id) {
       const fn = callbacks[name];
@@ -284,6 +338,8 @@
     function close() {
       if (closed) return;
       closed = true;
+      toggleReview?.(false);
+      toggleReview = null;
       clearTimeout(timer);
       controller?.abort();
       dialog.close();
@@ -338,6 +394,8 @@
       const button = e.target.closest("[data-action]");
       if (!button || busy || closed) return;
       const { action, id } = button.dataset;
+      if (action === "toggle")
+        return toggle(rows.find((item) => item.id === id));
       if (action === "open") return proceed("onOpen", id);
       if (action === "duplicate") return proceed("onDuplicate", id);
       if (action === "delete") {

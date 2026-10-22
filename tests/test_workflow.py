@@ -2899,6 +2899,7 @@ def test_workflow_load_rejects_storage_over_byte_cap(service, monkeypatch):
     with pytest.raises(ValueError, match="Workflow file exceeds"):
         service._load()
 
+
 def test_workflow_load_rejects_more_than_5000_entries(service):
     rows = [
         {
@@ -2914,3 +2915,34 @@ def test_workflow_load_rejects_more_than_5000_entries(service):
     service._path.write_text(json.dumps({"workflows": rows}), encoding="utf-8")
     with pytest.raises(ValueError, match="Cannot load workflow file"):
         service._load()
+
+
+def test_library_toggle_changes_only_saved_state_and_rejects_stale_review(service):
+    saved = service.save(graph(enabled=False))
+    enabled = service.set_enabled(saved["id"], True, saved)
+    assert enabled == {**saved, "enabled": True}
+    assert service.library()["counts"]["enabled"] == 1
+    with pytest.raises(ValueError, match="changed since review"):
+        service.set_enabled(saved["id"], False, saved)
+    disabled = service.set_enabled(saved["id"], False, enabled)
+    assert disabled == saved
+    assert service.library()["counts"]["disabled"] == 1
+
+
+def test_disabling_saved_workflow_does_not_require_available_camera_or_models(service, monkeypatch):
+    saved = service.save(graph())
+    monkeypatch.setattr(
+        service,
+        "activation_preview",
+        lambda *_: (_ for _ in ()).throw(AssertionError("Disabling must not configure cameras")),
+    )
+    assert service.set_enabled(saved["id"], False, saved)["enabled"] is False
+
+
+def test_library_toggle_rolls_back_failed_persistence(service, monkeypatch):
+    saved = service.save(graph(enabled=False))
+    monkeypatch.setattr(service, "_persist", lambda: (_ for _ in ()).throw(OSError("disk")))
+    with pytest.raises(OSError):
+        service.set_enabled(saved["id"], True, saved)
+    assert service.get(saved["id"]) == saved
+    assert service.library()["counts"]["enabled"] == 0

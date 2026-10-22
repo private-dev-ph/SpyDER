@@ -987,6 +987,31 @@ class WorkflowService:
                 "requires_motion_confirmation": any(item["disable_motion"] for item in cameras),
             }
 
+    def set_enabled(
+        self,
+        workflow_id: str,
+        enabled: bool,
+        expected: dict[str, Any],
+        *,
+        disable_motion: bool = False,
+    ) -> dict[str, Any]:
+        """Change only the saved activation state, rejecting a stale library review."""
+        if (
+            type(enabled) is not bool
+            or type(disable_motion) is not bool
+            or not isinstance(expected, dict)
+        ):
+            raise ValueError("Send enabled state and the reviewed saved workflow")
+        with self._lock:
+            current = self._graphs.get(workflow_id)
+            if current is None:
+                raise KeyError(workflow_id)
+            if current != expected:
+                raise ValueError("Workflow changed since review. Refresh and try again.")
+            if current["enabled"] == enabled:
+                return copy.deepcopy(current)
+            return self.save({**current, "enabled": enabled}, disable_motion=disable_motion)
+
     def save(self, graph: dict[str, Any], *, disable_motion: bool = False) -> dict[str, Any]:
         if type(disable_motion) is not bool:
             raise ValueError("disable_motion must be boolean")
@@ -1001,7 +1026,9 @@ class WorkflowService:
             old_settings: dict[str, dict[str, Any] | None] = {}
             options: dict[str, dict[str, Any]] = {}
             old_analysis: dict[str, dict[str, Any]] = {}
-            preview = self.activation_preview(normalized)
+            preview = (
+                self.activation_preview(normalized) if normalized["enabled"] else {"cameras": []}
+            )
             affected = [item for item in preview["cameras"] if item["disable_motion"]]
             if affected and not disable_motion:
                 names = ", ".join(item["name"] for item in affected)
