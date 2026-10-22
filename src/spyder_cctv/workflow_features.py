@@ -212,6 +212,8 @@ class WorkflowFeatures:
         run = self.history_detail(ident)
         if run.get("graph_complete") is False:
             raise ValueError("Configuration snapshot is incomplete; replay is unavailable")
+        if run.get("trace_complete") is False:
+            raise ValueError("Node trace is incomplete; replay is unavailable")
         context = run.get("context")
         if not isinstance(context, dict) or not isinstance(context.get("cv"), dict):
             raise ValueError("Replay requires a diagnostic run with retained detection inputs")
@@ -223,6 +225,12 @@ class WorkflowFeatures:
         for key in ("_runtime", "_debug", "_cooldowns", "_last_action", "_record_owned"):
             setattr(sandbox, key, {})
         sandbox._errors = []
+        sandbox._replay_sources = {
+            node["id"]: copy.deepcopy(node["outputs"])
+            for node in run.get("nodes", [])
+            if node.get("type") in ("camera", "model", "classifier", "detections")
+            and isinstance(node.get("outputs"), list)
+        }
         models = context.get("models", {})
         sandbox._model_descriptor = lambda model_id: copy.deepcopy(models.get(model_id))
         sandbox._model_matches = lambda descriptor, *_args: bool(descriptor.get("matched", True))
