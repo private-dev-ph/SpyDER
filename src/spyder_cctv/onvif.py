@@ -28,8 +28,17 @@ DEFAULT_TIMEOUT = 2.0
 MAX_PULSE_MS = 1000
 SOAP_NS = "http://www.w3.org/2003/05/soap-envelope"
 WSA_NS = "http://www.w3.org/2005/08/addressing"
+DISCOVERY_WSA_NS = "http://schemas.xmlsoap.org/ws/2004/08/addressing"
 WSSE_NS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
 WSU_NS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
+PASSWORD_DIGEST_TYPE = (
+    "http://docs.oasis-open.org/wss/2004/01/"
+    "oasis-200401-wss-username-token-profile-1.0#PasswordDigest"
+)
+NONCE_ENCODING_TYPE = (
+    "http://docs.oasis-open.org/wss/2004/01/"
+    "oasis-200401-wss-soap-message-security-1.0#Base64Binary"
+)
 DEVICE_NS = "http://www.onvif.org/ver10/device/wsdl"
 MEDIA_NS = "http://www.onvif.org/ver10/media/wsdl"
 PTZ_NS = "http://www.onvif.org/ver20/ptz/wsdl"
@@ -72,8 +81,18 @@ def _first(element: ET.Element, name: str) -> ET.Element | None:
     return next(iter(_children(element, name)), None)
 
 
+def _first_casefold(element: ET.Element, name: str) -> ET.Element | None:
+    wanted = name.casefold()
+    return next((item for item in element.iter() if _local(item.tag).casefold() == wanted), None)
+
+
 def _text(element: ET.Element, name: str, default: str = "") -> str:
     item = _first(element, name)
+    return (item.text or "").strip() if item is not None else default
+
+
+def _text_casefold(element: ET.Element, name: str, default: str = "") -> str:
+    item = _first_casefold(element, name)
     return (item.text or "").strip() if item is not None else default
 
 
@@ -122,7 +141,9 @@ def _validated_addresses(host: str) -> tuple[str, ...]:
     return tuple(safe)
 
 
-def _endpoint(value: str) -> tuple[str, int, str, str, tuple[str, ...]]:
+def _endpoint(
+    value: str, *, literal_only: bool = False
+) -> tuple[str, int, str, str, tuple[str, ...]]:
     try:
         if not isinstance(value, str) or len(value) > 4096 or any(ord(char) < 32 for char in value):
             raise ValueError
@@ -136,7 +157,10 @@ def _endpoint(value: str) -> tuple[str, int, str, str, tuple[str, ...]]:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         if not 1 <= port <= 65535:
             raise ValueError
-        addresses = _validated_addresses(parsed.hostname)
+        if literal_only:
+            addresses = _validated_addresses(str(ipaddress.ip_address(parsed.hostname)))
+        else:
+            addresses = _validated_addresses(parsed.hostname)
     except (ValueError, UnicodeError):
         raise OnvifError("Invalid ONVIF endpoint") from None
     if not parsed.path.startswith("/") or len(parsed.path) > 2048 or "\\" in parsed.path:
@@ -275,8 +299,8 @@ def _soap(action: str, body: str, username: str, password: str) -> bytes:
     ).decode()
     token = (
         f'<wsse:UsernameToken><wsse:Username>{_xml_escape(username)}</wsse:Username>'
-        f'<wsse:Password Type="{WSSE_NS}#PasswordDigest">{digest}</wsse:Password>'
-        f'<wsse:Nonce EncodingType="{WSSE_NS}#Base64Binary">'
+        f'<wsse:Password Type="{PASSWORD_DIGEST_TYPE}">{digest}</wsse:Password>'
+        f'<wsse:Nonce EncodingType="{NONCE_ENCODING_TYPE}">'
         f'{base64.b64encode(nonce).decode()}</wsse:Nonce>'
         f'<wsu:Created>{created}</wsu:Created></wsse:UsernameToken>'
     )
@@ -357,15 +381,13 @@ class OnvifBackend:
         timeout = min(3.0, max(0.1, float(timeout)))
         message_id = f"urn:uuid:{uuid4()}"
         probe = (
-            f'<e:Envelope xmlns:e="{SOAP_NS}" xmlns:w="{WSA_NS}" '
-            'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery">'
+            f'<e:Envelope xmlns:e="{SOAP_NS}" xmlns:w="{DISCOVERY_WSA_NS}" '
+            f'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" '
+            f'xmlns:dn="http://www.onvif.org/ver10/network/wsdl">'
             f'<e:Header><w:MessageID>{message_id}</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>'
             '<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>'
             '<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>'
         ).encode()
-        # Include namespace used by the QName in Probe/Types.
-        probe = probe.replace(b'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"',
-                              b'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl"')
         found: dict[str, dict[str, str]] = {}
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         try:
@@ -390,7 +412,7 @@ class OnvifBackend:
                     endpoint = None
                     for item in xaddrs:
                         try:
-                            _endpoint(item)
+                            _endpoint(item, literal_only=True)
                             endpoint = item
                             break
                         except OnvifError:
@@ -399,7 +421,9 @@ class OnvifBackend:
                         continue
                     name = next((urllib.parse.unquote(s.rsplit("/", 1)[-1]) for s in scopes.split()
                                  if "/name/" in s), "ONVIF camera")
-                    _scheme, _port, host, _path, _addresses = _endpoint(endpoint)
+                    _scheme, _port, host, _path, _addresses = _endpoint(
+                        endpoint, literal_only=True
+                    )
                     key = host.casefold()
                     found.setdefault(
                         key, {"endpoint": endpoint, "name": name[:80], "scopes": scopes[:512]}
@@ -596,15 +620,15 @@ class OnvifBackend:
 
     @staticmethod
     def _space(space: ET.Element, two_axis: bool) -> dict[str, float] | None:
-        uri = space.attrib.get("URI", "")
-        x = _first(space, "XRange")
-        y = _first(space, "YRange") if two_axis else None
+        uri = _text_casefold(space, "URI") or space.attrib.get("URI", "")
+        x = _first_casefold(space, "XRange")
+        y = _first_casefold(space, "YRange") if two_axis else None
         if not uri or x is None:
             return None
         try:
-            xmin, xmax = float(_text(x, "Min")), float(_text(x, "Max"))
+            xmin, xmax = float(_text_casefold(x, "Min")), float(_text_casefold(x, "Max"))
             ymin, ymax = (
-                (float(_text(y, "Min")), float(_text(y, "Max")))
+                (float(_text_casefold(y, "Min")), float(_text_casefold(y, "Max")))
                 if y is not None
                 else (0.0, 0.0)
             )
@@ -612,11 +636,17 @@ class OnvifBackend:
                 map(lambda value: value == value and abs(value) < 1e6, (xmin, xmax, ymin, ymax))
             ):
                 return None
+            if xmin >= xmax or not xmin <= 0 <= xmax:
+                return None
+            if two_axis and (ymin >= ymax or not ymin <= 0 <= ymax):
+                return None
             return {"uri": uri[:512], "xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax}
         except (ValueError, TypeError):
             return None
 
     def _session(self, session_id: str) -> _Session:
+        if not isinstance(session_id, str) or not 1 <= len(session_id) <= 128:
+            raise OnvifError("ONVIF session expired")
         with self._lock:
             self._expire_locked()
             session = self._sessions.get(session_id)
@@ -867,6 +897,8 @@ class OnvifBackend:
                 "moving": bool(session.moving)}
 
     def close(self, session_id: str) -> None:
+        if not isinstance(session_id, str) or not 1 <= len(session_id) <= 128:
+            return
         with self._lock:
             session = self._sessions.pop(session_id, None)
         if session:
