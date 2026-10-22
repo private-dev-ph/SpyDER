@@ -61,6 +61,11 @@ class ConfigurationBackup:
         if workflow_data.get("storage_error"):
             raise ValueError("Cannot export because workflow storage is invalid")
         workflows = workflow_data.get("workflows", [])
+        if any(node["type"] == "subflow" for graph in workflows for node in graph["nodes"]):
+            raise ValueError(
+                "Export subflow workflows using workflow bundle export; "
+                "configuration backups do not include subflow definitions."
+            )
         for graph in workflows:
             graph["enabled"] = False
         recorder_lock = getattr(self.recorder, "_lock", None)
@@ -416,6 +421,8 @@ class ConfigurationBackup:
         ):
             raise ValueError("Invalid workflows section")
         graphs = [_validate_graph(g) for g in wf["workflows"]]
+        if any(node["type"] == "subflow" for graph in graphs for node in graph["nodes"]):
+            raise ValueError("Import reusable subflows using workflow bundle import.")
         if len({g["id"] for g in graphs}) != len(graphs):
             raise ValueError("Duplicate workflow id")
         for graph in graphs:

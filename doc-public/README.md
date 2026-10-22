@@ -35,6 +35,9 @@ Start with [Getting started](getting-started.md) for a working local installatio
   lives, backup boundaries, and local network behavior.
 - [Portfolio and presentation assets](portfolio.md): screenshots, emblem, and showcase metadata.
 
+- [Reusable subflows and execution history](user-guide/subflows-and-history.md):
+  versioned logic, diagnostic dry runs, local storage, and retention.
+
 ## Developer documentation
 
 - [Development guide](development/guide.md): one environment, edit/restart behavior,
