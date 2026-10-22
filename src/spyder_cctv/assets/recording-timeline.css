@@ -1,0 +1,95 @@
+.recording-timeline {
+  --recording-accent: var(--accent, #be1a1a);
+  --recording-surface: var(--surface, #fffefa);
+  --recording-rail: var(--rail, #f0ede4);
+  --recording-ink: var(--ink, #201d1a);
+  --recording-muted: var(--muted, #726d64);
+  --recording-control: var(--control-border, #8c8274);
+  --recording-border: var(--border, #e4dfd4);
+  --recording-focus: var(--focus, #830000);
+  --recording-danger: var(--danger, #bc0202);
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  color: var(--recording-ink);
+}
+
+.recording-timeline *, .recording-timeline *::before, .recording-timeline *::after { box-sizing: border-box; }
+.recording-timeline button, .recording-timeline input, .recording-timeline select { font: inherit; }
+.recording-timeline button, .recording-timeline select, .recording-timeline input:not([type="range"]):not([type="checkbox"]) {
+  min-height: 2.5rem;
+  border: 1px solid var(--recording-control);
+  border-radius: .55rem;
+  background: var(--recording-surface);
+  color: var(--recording-ink);
+}
+.recording-timeline button { padding: .45rem .75rem; cursor: pointer; }
+.recording-timeline .icon { width: 1rem; height: 1rem; margin-right: .3rem; vertical-align: -.15rem; }
+.recording-timeline button:disabled { cursor: default; opacity: .52; }
+.recording-timeline :focus-visible { outline: 3px solid var(--recording-focus); outline-offset: 2px; }
+.recording-timeline-heading { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; flex-wrap: wrap; }
+.recording-timeline-heading > div { font-size: 1.25rem; font-weight: 750; }
+.recording-timeline-heading p, .recording-timeline-note, .recording-timeline-state { color: var(--recording-muted); margin: 0; }
+.recording-timeline-toolbar { display: flex; align-items: end; gap: .65rem; flex-wrap: wrap; }
+.recording-timeline-toolbar label, .recording-timeline-player-controls > label { display: grid; gap: .25rem; color: var(--recording-muted); font-size: .82rem; }
+.recording-timeline-toolbar input, .recording-timeline-toolbar select, .recording-timeline-player-controls select { padding: .4rem .55rem; }
+.recording-timeline-stage { display: grid; gap: .65rem; min-width: 0; }
+.recording-timeline-player { display: grid; place-items: center; min-height: clamp(11rem, 38vw, 29rem); overflow: hidden; border: 1px solid var(--recording-border); border-radius: .8rem; background: #111; color: white; }
+.recording-timeline-player > * { max-width: 100%; }
+.recording-timeline-player video { width: 100%; max-height: min(68vh, 34rem); background: #111; }
+.recording-timeline-empty { padding: 1rem; text-align: center; color: var(--recording-muted); }
+.recording-timeline-player-detail { display: flex; justify-content: space-between; gap: .75rem; min-width: 0; align-items: baseline; }
+.recording-timeline-loaded { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recording-timeline-clock { flex: 0 0 auto; color: var(--recording-muted); font-size: .85rem; }
+.recording-timeline-player-controls { display: flex; gap: .5rem; align-items: end; flex-wrap: wrap; }
+.recording-timeline .primary { border-color: var(--recording-accent); background: var(--recording-accent); color: #fff; font-weight: 650; }
+.recording-timeline .secondary { background: var(--recording-surface); color: var(--recording-ink); }
+.recording-timeline-check { display: flex !important; align-items: center; min-height: 2.5rem; }
+.recording-timeline-check input { accent-color: var(--recording-accent); }
+.recording-timeline-rail-header, .recording-timeline-list-head { display: flex; justify-content: space-between; align-items: center; gap: .75rem; }
+.recording-timeline-zoom { display: flex; gap: .35rem; }
+.recording-timeline-zoom button { min-height: 2rem; padding: .3rem .55rem; }
+.recording-timeline-zoom button[aria-pressed="true"] { border-color: var(--recording-accent); color: var(--recording-accent); font-weight: 700; }
+.recording-timeline-track-wrap { position: relative; display: grid; gap: .25rem; }
+.recording-timeline-track { position: relative; height: 3.6rem; overflow: hidden; border: 1px solid var(--recording-border); border-radius: .6rem; background-color: var(--recording-rail); cursor: crosshair; }
+.recording-timeline-bins, .recording-timeline-markers { position: absolute; inset: 0; pointer-events: none; }
+.recording-timeline-bin { position: absolute; top: 26%; bottom: 26%; border-radius: 2px; background: var(--recording-accent); opacity: .9; }
+.recording-timeline-event-marker { position: absolute; top: 0; bottom: 0; width: 2px; background: #e2a323; }
+.recording-timeline-playhead { position: absolute; z-index: 2; top: 0; bottom: 0; width: 2px; background: var(--recording-ink); box-shadow: 0 0 0 1px var(--recording-surface); pointer-events: none; }
+.recording-timeline-range { position: absolute; z-index: 3; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
+.recording-timeline-event-list { display: flex; gap: .35rem; flex-wrap: wrap; max-height: 5.5rem; overflow: auto; }
+.recording-timeline-event-button { min-height: 1.9rem !important; padding: .25rem .45rem !important; font-size: .78rem !important; }
+.recording-timeline-range:focus-visible { opacity: .01; outline: 3px solid var(--recording-focus); outline-offset: -3px; }
+.recording-timeline-axis { display: flex; justify-content: space-between; color: var(--recording-muted); font-size: .78rem; }
+.recording-timeline-note { font-size: .78rem; }
+.recording-timeline-list-head { border-bottom: 1px solid var(--recording-border); padding-bottom: .4rem; }
+.recording-timeline-list-head h3 { margin: 0; font-size: 1rem; }
+.recording-timeline-clips { display: grid; gap: .45rem; }
+.recording-timeline-clip { display: flex; justify-content: space-between; align-items: center; gap: .75rem; min-width: 0; padding: .65rem; border: 1px solid var(--recording-border); border-radius: .65rem; background: var(--recording-surface); }
+.recording-timeline-clip.is-selected { border-color: var(--recording-accent); box-shadow: inset 3px 0 var(--recording-accent); }
+.recording-timeline-clip-info { display: grid; gap: .2rem; min-width: 0; }
+.recording-timeline-clip-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recording-timeline-clip-info span { color: var(--recording-muted); font-size: .82rem; }
+.recording-timeline-clip-actions { display: flex; flex: 0 0 auto; gap: .4rem; }
+.recording-timeline-clip-actions button { min-height: 2.1rem; padding: .3rem .55rem; font-size: .85rem; }
+.recording-timeline-pagination { display: flex; justify-content: center; align-items: center; gap: .65rem; }
+.recording-timeline-pagination button { min-height: 2.1rem; padding: .3rem .6rem; }
+.recording-timeline .field-help { color: var(--recording-muted); font-size: .82rem; }
+
+@media (max-width: 560px) {
+  .recording-timeline { gap: .75rem; }
+  .recording-timeline-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .recording-timeline-toolbar label { min-width: 0; }
+  .recording-timeline-toolbar input, .recording-timeline-toolbar select { width: 100%; min-width: 0; }
+  .recording-timeline-player-detail { align-items: start; flex-direction: column; gap: .2rem; }
+  .recording-timeline-rail-header { align-items: start; flex-direction: column; }
+  .recording-timeline-clip { align-items: start; flex-direction: column; }
+  .recording-timeline-clip-actions { width: 100%; }
+  .recording-timeline-clip-actions button { flex: 1; }
+}
+
+@media (max-height: 520px) and (min-width: 561px) {
+  .recording-timeline { gap: .6rem; }
+  .recording-timeline-player { min-height: 8rem; }
+  .recording-timeline-player video { max-height: 38vh; }
+}
