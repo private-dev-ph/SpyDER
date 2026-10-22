@@ -92,7 +92,9 @@ Remove attached cameras before disconnecting their session.
 
 Select a connected profile to use supported PTZ controls. Each direction or zoom
 click sends a 250 ms movement pulse. The request includes a camera-side timeout,
-and a server timer sends Stop afterward. **Stop** is available explicitly.
+and a server timer sends Stop afterward. The camera-side timeout is one second;
+normal 250 ms pulses rely on the earlier server Stop. Devices whose timeout range
+excludes one second may reject movement. **Stop** is available explicitly.
 Unsupported movements stay disabled; read-only cameras can still stream.
 
 PTZ movement depends on the camera advertising continuous velocity spaces for
