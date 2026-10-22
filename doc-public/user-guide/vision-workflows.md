@@ -245,3 +245,8 @@ not a full backup of the installation.
 The Cloudflare showcase permits editing/import/export of drafts but does not execute
 native models, code, previews, or workflow actions. See the [showcase capability
 comparison](../deployment/cloudflare.md#capabilities).
+
+## Reusable logic and previous executions
+
+See [subflows and execution history](subflows-and-history.md) for versioned reusable
+workflow definitions, run inspection, diagnostic dry runs, and retention settings.

@@ -7,6 +7,7 @@ import platform
 import re
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -287,6 +288,9 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/vision-lab.js",
                 "/vision-lab.css",
                 "/workflow-editor.js",
+                "/workflow-tools.js",
+                "/workflow-run-view.js",
+                "/workflow-tools.css",
                 "/workflow-manager.js",
                 "/workflow-store.js",
                 "/workflow-preview.js",
@@ -454,6 +458,68 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     )
                 except ValueError as error:
                     self.json(400, {"error": str(error)})
+            elif path == "/api/workflows/history" or path.startswith("/api/workflows/history/"):
+                try:
+                    parts = path.strip("/").split("/")
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise ValueError("Duplicate history query parameter")
+                    values = {key: value[0] for key, value in query.items()}
+                    if len(parts) == 3:
+                        allowed = {
+                            "query",
+                            "workflow_id",
+                            "camera_id",
+                            "state",
+                            "since",
+                            "until",
+                            "page",
+                            "size",
+                        }
+                        if set(values) - allowed:
+                            raise ValueError("Unknown history filter")
+                        for key in ("page", "size"):
+                            if key in values:
+                                values[key] = int(values[key])
+                        self.json(200, workflows.history.list(**values))
+                    elif len(parts) in (4, 5) and (len(parts) == 4 or parts[4] == "export"):
+                        if values:
+                            raise ValueError("Unexpected history query")
+                        self.json(200, workflows.history_detail(parts[3]))
+                    else:
+                        self.json(404, {"error": "Unknown history route"})
+                except KeyError:
+                    self.json(404, {"error": "Unknown execution"})
+                except (ValueError, TypeError) as error:
+                    self.json(400, {"error": str(error)})
+                except (OSError, RuntimeError, sqlite3.Error):
+                    self.json(503, {"error": "Execution history is unavailable"})
+            elif path == "/api/workflows/subflows" or path.startswith("/api/workflows/subflows/"):
+                try:
+                    parts = path.strip("/").split("/")
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    if set(query) - {"version"} or any(len(value) != 1 for value in query.values()):
+                        raise ValueError("Invalid subflow query")
+                    if len(parts) == 3 and not query:
+                        self.json(200, workflows.subflow_catalog())
+                    elif parts == ["api", "workflows", "subflows", "export"] and not query:
+                        with workflows._lock:
+                            definitions = workflows.subflows.export_definitions()
+                        self.json(
+                            200,
+                            {"format": "spyder-subflows", "version": 1, "subflows": definitions},
+                        )
+                    elif len(parts) == 4:
+                        version = int(query["version"][0]) if "version" in query else None
+                        self.json(200, workflows.get_subflow(parts[3], version))
+                    else:
+                        self.json(404, {"error": "Unknown subflow route"})
+                except KeyError:
+                    self.json(404, {"error": "Unknown subflow version"})
+                except (ValueError, TypeError) as error:
+                    self.json(400, {"error": str(error)})
+                except (OSError, RuntimeError) as error:
+                    self.json(503, {"error": str(error)})
             elif path == "/api/workflows":
                 try:
                     query = parse_qs(
@@ -967,6 +1033,49 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     if not data or set(data) - {"name", "classes"}:
                         raise ValueError("Send name and/or classes")
                     self.json(200, models.update_metadata(parts[2], **data))
+                elif parts == ["api", "workflows", "subflows"]:
+                    data = self.body(4 * 1024 * 1024)
+                    if set(data) != {"subflow"}:
+                        raise ValueError("Send a subflow definition")
+                    self.json(200, workflows.publish_subflow(data["subflow"]))
+                elif (
+                    len(parts) == 5
+                    and parts[:3] == ["api", "workflows", "subflows"]
+                    and parts[4] == "remove"
+                ):
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    workflows.remove_subflow(parts[3])
+                    self.json(200, {"removed": parts[3]})
+                elif parts == ["api", "workflows", "export"]:
+                    data = self.body(4 * 1024 * 1024)
+                    if set(data) != {"workflow"}:
+                        raise ValueError("Send a workflow graph")
+                    self.json(200, workflows.export_bundle(data["workflow"]))
+                elif parts == ["api", "workflows", "import"]:
+                    data = self.body(16 * 1024 * 1024)
+                    if set(data) != {"bundle"}:
+                        raise ValueError("Send a workflow bundle")
+                    self.json(200, workflows.import_bundle(data["bundle"]))
+                elif parts == ["api", "workflows", "history", "settings"]:
+                    self.json(200, workflows.history.configure(self.body()))
+                elif parts == ["api", "workflows", "history", "delete"]:
+                    data = self.body()
+                    if set(data) != {"ids"}:
+                        raise ValueError("Send execution ids")
+                    self.json(200, {"deleted": workflows.history.delete(data["ids"])})
+                elif parts == ["api", "workflows", "history", "clear"]:
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(200, {"deleted": workflows.history.clear()})
+                elif (
+                    len(parts) == 5
+                    and parts[:3] == ["api", "workflows", "history"]
+                    and parts[4] == "replay"
+                ):
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(200, workflows.replay_history(parts[3]))
                 elif parts == ["api", "workflows", "code", "test"]:
                     data = self.body(1048576)
                     if set(data) - {"source", "detections", "context", "language"} or not {
@@ -1216,6 +1325,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         else "Invalid details. Check camera selection, fields or settings (0-100%)."
                     },
                 )
+            except sqlite3.Error:
+                self.json(503, {"error": "Execution history storage is unavailable"})
             except OSError:
                 self.json(
                     500,
