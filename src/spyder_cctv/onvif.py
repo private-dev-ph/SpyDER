@@ -26,6 +26,7 @@ MAX_SESSIONS = 32
 SESSION_TTL = 24 * 60 * 60
 DEFAULT_TIMEOUT = 2.0
 MAX_PULSE_MS = 1000
+CAMERA_MOVE_TIMEOUT_MS = 1000
 SOAP_NS = "http://www.w3.org/2003/05/soap-envelope"
 WSA_NS = "http://www.w3.org/2005/08/addressing"
 DISCOVERY_WSA_NS = "http://schemas.xmlsoap.org/ws/2004/08/addressing"
@@ -211,7 +212,7 @@ def _digest_header(challenge: str, username: str, password: str, method: str, ur
     cnonce = os.urandom(16).hex()
     nc = "00000001"
     ha1 = hash_fn(f"{username}:{realm}:{password}".encode()).hexdigest()
-    if algorithm == "MD5-SESS":
+    if algorithm.endswith("-SESS"):
         ha1 = hash_fn(f"{ha1}:{nonce}:{cnonce}".encode()).hexdigest()
     ha2 = hash_fn(f"{method}:{uri}".encode()).hexdigest()
     response = hash_fn(f"{ha1}:{nonce}:{nc}:{cnonce}:auth:{ha2}".encode()).hexdigest()
@@ -707,11 +708,6 @@ class OnvifBackend:
         addresses = _validated_addresses(parsed.hostname or "")
         if not set(addresses).issubset(session.approved_addresses):
             raise OnvifError("Camera stream address does not match device")
-        pinned_host = addresses[0]
-        if ":" in pinned_host:
-            pinned_host = f"[{pinned_host}]"
-        netloc = pinned_host + (f":{parsed.port}" if parsed.port else "")
-        uri = urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, ""))
         session.stream_uris[profile_token] = uri
         return uri
 
@@ -720,7 +716,10 @@ class OnvifBackend:
         session = self._session(session_id)
         uri = self.get_stream_uri(session_id, profile_token)
         parsed = urllib.parse.urlsplit(uri)
-        host = parsed.hostname or ""
+        addresses = _validated_addresses(parsed.hostname or "")
+        if not set(addresses).issubset(session.approved_addresses):
+            raise OnvifError("Camera stream address does not match device")
+        host = addresses[0]
         if ":" in host:
             host = f"[{host}]"
         if parsed.port:
@@ -816,7 +815,10 @@ class OnvifBackend:
                 f'<t:ContinuousMove xmlns:t="{PTZ_NS}" xmlns:tt="{SCHEMA_NS}">'
                 f"<t:ProfileToken>{_xml_escape(profile_token)}</t:ProfileToken>"
                 f"<t:Velocity>{velocity}</t:Velocity>"
-                f"<t:Timeout>PT{duration_ms / 1000:.3f}S</t:Timeout>"
+                # Several cameras reject fractional values below their advertised
+                # PTZTimeout minimum. Keep the camera-side ceiling at one second;
+                # the shorter local deadman still sends Stop at the requested pulse.
+                f"<t:Timeout>PT{CAMERA_MOVE_TIMEOUT_MS / 1000:.3f}S</t:Timeout>"
                 "</t:ContinuousMove>"
             )
             session.moving = True

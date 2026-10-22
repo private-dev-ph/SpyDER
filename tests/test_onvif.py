@@ -167,6 +167,18 @@ def test_http_digest_auth_header_uses_supported_auth_qop():
         )
 
 
+def test_http_digest_sha256_sess_uses_session_nonce_ha1():
+    challenge = 'Digest realm="cam", nonce="abc", qop="auth", algorithm=SHA-256-SESS'
+    header = onvif._digest_header(challenge, "viewer", "secret", "POST", "/device")
+    cnonce = header.split('cnonce="', 1)[1].split('"', 1)[0]
+    ha1 = hashlib.sha256(b"viewer:cam:secret").hexdigest()
+    ha1 = hashlib.sha256(f"{ha1}:abc:{cnonce}".encode()).hexdigest()
+    ha2 = hashlib.sha256(b"POST:/device").hexdigest()
+    expected = hashlib.sha256(f"{ha1}:abc:00000001:{cnonce}:auth:{ha2}".encode()).hexdigest()
+    assert f'response="{expected}"' in header
+    assert "algorithm=SHA-256-SESS" in header
+
+
 def test_strip_uri_credentials_and_sensitive_query_values():
     value = onvif._strip_uri_credentials(
         "rtsp://user:secret@192.168.1.8:554/live?username=u&password=p&channel=1#fragment"
@@ -174,6 +186,31 @@ def test_strip_uri_credentials_and_sensitive_query_values():
     assert value == "rtsp://192.168.1.8:554/live?channel=1"
     with pytest.raises(onvif.OnvifError, match="invalid stream URI"):
         onvif._strip_uri_credentials("file:///etc/passwd")
+
+
+def test_authenticated_stream_uri_rechecks_hostname_and_pins_approved_ip(monkeypatch):
+    backend = onvif.OnvifBackend()
+    session = onvif._Session(
+        "http://192.168.1.8/device",
+        "viewer",
+        "secret",
+        frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media",
+        None,
+        [{"token": "main", "name": "Main", "ptz": False}],
+        {},
+    )
+    session.stream_uris["main"] = "rtsp://camera.lan:554/live"
+    backend._sessions["sid"] = session
+    monkeypatch.setattr(onvif, "_validated_addresses", lambda _host: ("192.168.1.8",))
+
+    assert backend.authenticated_stream_uri("sid", "main") == (
+        "rtsp://viewer:secret@192.168.1.8:554/live"
+    )
+
+    monkeypatch.setattr(onvif, "_validated_addresses", lambda _host: ("192.168.1.9",))
+    with pytest.raises(onvif.OnvifError, match="does not match"):
+        backend.authenticated_stream_uri("sid", "main")
 
 
 def test_connect_returns_redacted_session_and_stream_helper_is_internal(monkeypatch):
@@ -271,7 +308,8 @@ def test_ptz_pulse_uses_supported_spaces_and_deadman_stop(monkeypatch):
     )
 
     class Timer:
-        def __init__(self, _interval, callback, args):
+        def __init__(self, interval, callback, args):
+            self.interval = interval
             self.callback = callback
             self.args = args
             self.cancelled = False
@@ -298,7 +336,8 @@ def test_ptz_pulse_uses_supported_spaces_and_deadman_stop(monkeypatch):
     assert 'x="1.000000"' in sent[0][1]
     assert 'y="-1.000000"' in sent[0][1]
     assert 'x="1.000000"' in sent[0][1]
-    assert "PT0.300S" in sent[0][1]
+    assert "<t:Timeout>PT1.000S</t:Timeout>" in sent[0][1]
+    assert timers[0].interval == 0.3
     timers[0].fire()
     assert [operation for operation, _body in sent] == ["ContinuousMove", "Stop"]
     assert backend.status("sid")["moving"] is False
