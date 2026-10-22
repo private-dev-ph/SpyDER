@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import socket
 import xml.etree.ElementTree as ET
@@ -37,6 +38,98 @@ def test_safe_xml_rejects_dtd_entities_and_large_documents():
         onvif._safe_xml(b"<not-closed>")
 
 
+def test_username_token_digest_uses_oasis_types_and_nonce_created_password_formula():
+    body = onvif._soap_body("GetProfiles", onvif.MEDIA_NS)
+    payload = onvif._soap("GetProfiles", body, "viewer", "secret")
+    root = onvif._safe_xml(payload)
+    password = onvif._first(root, "Password")
+    nonce = onvif._first(root, "Nonce")
+    created = onvif._text(root, "Created")
+
+    assert password.attrib["Type"] == onvif.PASSWORD_DIGEST_TYPE
+    assert nonce.attrib["EncodingType"] == onvif.NONCE_ENCODING_TYPE
+    nonce_bytes = base64.b64decode(nonce.text)
+    expected = base64.b64encode(
+        hashlib.sha1(nonce_bytes + created.encode() + b"secret").digest()
+    ).decode()
+    assert password.text == expected
+
+
+def test_discovery_uses_onvif_wsa_namespace_literal_private_xaddr_and_skips_bad_first(
+    monkeypatch,
+):
+    packet = (
+        b'<Envelope><Body><ProbeMatch>'
+        b'<XAddrs>http://8.8.8.8/device http://192.168.1.9/device</XAddrs>'
+        b'<Scopes>onvif://www.onvif.org/name/Front%20Door</Scopes>'
+        b'</ProbeMatch></Body></Envelope>'
+    )
+
+    class FakeSocket:
+        def __init__(self):
+            self.sent = None
+            self.received = False
+
+        def settimeout(self, _timeout):
+            pass
+
+        def sendto(self, data, _address):
+            self.sent = data
+
+        def recvfrom(self, _size):
+            if self.received:
+                raise TimeoutError
+            self.received = True
+            return packet, ("192.168.1.9", onvif.DISCOVERY_PORT)
+
+        def close(self):
+            pass
+
+    fake_socket = FakeSocket()
+    monkeypatch.setattr(onvif.socket, "socket", lambda *_args: fake_socket)
+    monkeypatch.setattr(
+        onvif.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: pytest.fail("Discovery must not resolve hostnames"),
+    )
+    found = onvif.OnvifBackend().discover()
+
+    assert b'xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"' in fake_socket.sent
+    assert found == [
+        {
+            "endpoint": "http://192.168.1.9/device",
+            "name": "Front Door",
+            "scopes": "onvif://www.onvif.org/name/Front%20Door",
+        }
+    ]
+
+
+def test_space_parses_schema_uri_element_and_rejects_ranges_without_zero():
+    space = onvif._safe_xml(
+        b'<Space><URI>space:pan</URI><XRange><Min>-1</Min><Max>1</Max></XRange>'
+        b'<YRange><Min>-2</Min><Max>2</Max></YRange></Space>'
+    )
+    assert onvif.OnvifBackend._space(space, two_axis=True) == {
+        "uri": "space:pan",
+        "xmin": -1.0,
+        "xmax": 1.0,
+        "ymin": -2.0,
+        "ymax": 2.0,
+    }
+    invalid = onvif._safe_xml(
+        b'<Space><URI>space:pan</URI><XRange><Min>0.1</Min><Max>1</Max></XRange>'
+        b'<YRange><Min>-1</Min><Max>1</Max></YRange></Space>'
+    )
+    assert onvif.OnvifBackend._space(invalid, two_axis=True) is None
+
+
+def test_invalid_session_id_type_is_handled_without_type_error():
+    backend = onvif.OnvifBackend()
+    with pytest.raises(onvif.OnvifError, match="expired"):
+        backend.status(["not", "hashable"])
+    backend.close(["not", "hashable"])
+
+
 def test_http_digest_auth_header_uses_supported_auth_qop():
     challenge = 'Digest realm="cam", nonce="abc", qop="auth,auth-int", algorithm=MD5'
     header = onvif._digest_header(challenge, "viewer", "secret", "POST", "/onvif/device_service")
@@ -72,9 +165,9 @@ def test_connect_returns_redacted_session_and_stream_helper_is_internal(monkeypa
         b'<PTZ><XAddr>http://192.168.1.8:80/ptz</XAddr></PTZ></Capabilities></Body></Envelope>',
         b'<Envelope><Body><Profiles token="main"><Name>Main</Name>'
         b'<PTZConfiguration NodeToken="node"/></Profiles></Body></Envelope>',
-        b'<Envelope><Body><SupportedPTZSpaces><ContinuousPanTiltVelocitySpace URI="ptz:pan">'
+        b'<Envelope><Body><SupportedPTZSpaces><ContinuousPanTiltVelocitySpace><URI>ptz:pan</URI>'
         b'<XRange><Min>-1</Min><Max>1</Max></XRange><YRange><Min>-1</Min><Max>1</Max></YRange>'
-        b'</ContinuousPanTiltVelocitySpace><ContinuousZoomVelocitySpace URI="ptz:zoom">'
+        b'</ContinuousPanTiltVelocitySpace><ContinuousZoomVelocitySpace><URI>ptz:zoom</URI>'
         b'<XRange><Min>-1</Min><Max>1</Max></XRange></ContinuousZoomVelocitySpace>'
         b'</SupportedPTZSpaces></Body></Envelope>',
         b'<Envelope><Body><GetPresetsResponse /></Body></Envelope>',
