@@ -2066,7 +2066,7 @@
         const x =
           canvasPadding +
           (clamp(a.x) + nodeSize(a).width + clamp(b.x)) / 2 -
-          16;
+          22;
         const y =
           canvasPadding +
           (clamp(a.y) +
@@ -2074,8 +2074,8 @@
             clamp(b.y) +
             portOffset(inputType(e, graph.nodes), b)) /
             2 -
-          16;
-        return `<foreignObject data-wire-actions="${esc(e.from)}|${esc(e.to)}" class="we-wire-actions" x="${x}" y="${y}" width="32" height="32"><button xmlns="http://www.w3.org/1999/xhtml" class="we-wire-trash" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Delete connection from ${esc(TYPES[a.type]?.label)} to ${esc(TYPES[b.type]?.label)}" title="Delete connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></foreignObject>`;
+          22;
+        return `<foreignObject data-wire-actions="${esc(e.from)}|${esc(e.to)}" class="we-wire-actions" x="${x}" y="${y}" width="44" height="44"><button xmlns="http://www.w3.org/1999/xhtml" class="we-wire-trash" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Delete connection from ${esc(TYPES[a.type]?.label)} to ${esc(TYPES[b.type]?.label)}" title="Delete connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></foreignObject>`;
       }
       function removeConnection(key) {
         const [from, to] = key.split("|");
@@ -4117,7 +4117,7 @@
                 "x",
                 canvasPadding +
                   (clamp(a.x) + nodeSize(a).width + clamp(b.x)) / 2 -
-                  16,
+                  22,
               );
               actions?.setAttribute(
                 "y",
@@ -4127,7 +4127,7 @@
                     clamp(b.y) +
                     portOffset(inputType(edge, graph.nodes), b)) /
                     2 -
-                  16,
+                  22,
               );
             } else path.setAttribute("d", wirePath(edge));
           }
