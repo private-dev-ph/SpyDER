@@ -84,6 +84,34 @@ reduce noisy changes but cannot guarantee rejection. Use trusted `.pt` files: se
 PyTorch weights may contain executable content. Remove unused entries through the
 library; referenced models must first be detached from their users.
 
+## Manage saved workflows
+
+Click the **Workflow** picker to open the workflow library. Each row shows its name,
+ID, enabled state, camera assignments, detection engines, and node/connection counts.
+Search by name, ID, camera ID, or engine; combine status, camera, and engine filters.
+Sort by name or show enabled workflows first. Results use pages of 25 or 50 rows so
+large collections do not fill the editor with thousands of controls.
+
+Use **Open** to edit a workflow. **More** provides Rename, Duplicate, Export, and
+Delete. Renaming changes only the saved name and does not restart camera analysis.
+Duplicates start disabled. Delete asks for confirmation and stops an enabled
+workflow's actions. Opening another workflow, creating one, or duplicating one
+asks before discarding unsaved edits; **Keep editing** returns to the Save button.
+Save or export an edited workflow before renaming or deleting it from the library.
+Enable and disable workflows through the editor's existing activation review.
+
+The local library supports up to 5,000 workflows within a combined 64 MiB workflow
+file. These limits describe saved configuration, not how many camera/CV pipelines
+your hardware can run simultaneously. Browsing uses cached, paginated summaries;
+only the selected graph and its debug data are loaded by the editor. The original
+full-list API remains available for integrations.
+
+In the static showcase, saved workflows live in this browser's IndexedDB storage
+and execution stays disabled. Existing single-draft data remains editable; choose
+**Save workflow** to add it to the new library. Storage is specific to the browser,
+profile, and site origin, and can be cleared by browser settings. Export JSON files
+for portable backups. No workflow data is sent to the showcase host.
+
 ## Build a workflow
 
 1. Create a workflow and add a **Camera** node for a configured source.
