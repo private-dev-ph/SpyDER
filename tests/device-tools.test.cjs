@@ -4,7 +4,10 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const source = fs.readFileSync(
-  require("node:path").join(__dirname, "../src/spyder_cctv/assets/device-tools.js"),
+  require("node:path").join(
+    __dirname,
+    "../src/spyder_cctv/assets/device-tools.js",
+  ),
   "utf8",
 );
 function harness(showcase = false) {
@@ -15,18 +18,32 @@ function harness(showcase = false) {
     return {
       dataset: {},
       classList: { add() {} },
-      set innerHTML(value) { this.html = value; },
-      get innerHTML() { return this.html; },
-      addEventListener(name, fn) { listeners[name] = fn; },
-      querySelectorAll() { return buttons; },
-      querySelector() { return { textContent: "", dataset: {}, replaceChildren() {} }; },
+      set innerHTML(value) {
+        this.html = value;
+      },
+      get innerHTML() {
+        return this.html;
+      },
+      addEventListener(name, fn) {
+        listeners[name] = fn;
+      },
+      querySelectorAll() {
+        return buttons;
+      },
+      querySelector() {
+        return { textContent: "", dataset: {}, replaceChildren() {} };
+      },
     };
   }
   const hosts = {
     "face-gallery-tools": host(),
     "onvif-camera-tools": host(),
   };
-  const window = { spyderShowcase: showcase, addEventListener() {}, dispatchEvent() {} };
+  const window = {
+    spyderShowcase: showcase,
+    addEventListener() {},
+    dispatchEvent() {},
+  };
   const context = vm.createContext({
     window,
     document: {
@@ -34,11 +51,26 @@ function harness(showcase = false) {
       documentElement: {},
       getElementById: (id) => hosts[id],
       addEventListener() {},
-      createElement: () => ({ className: "", innerHTML: "", addEventListener() {}, showModal() {} }),
+      createElement: () => ({
+        className: "",
+        innerHTML: "",
+        addEventListener() {},
+        showModal() {},
+      }),
       body: { append() {} },
     },
-    MutationObserver: class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } },
-    fetch: () => { fetches++; throw Error("unexpected network"); },
+    MutationObserver: class {
+      constructor(fn) {
+        this.fn = fn;
+      }
+      observe() {
+        this.fn();
+      }
+    },
+    fetch: () => {
+      fetches++;
+      throw Error("unexpected network");
+    },
     CustomEvent: class {},
     URL,
     Blob,
@@ -47,13 +79,22 @@ function harness(showcase = false) {
     confirm() {},
   });
   vm.runInContext(source, context);
-  return { hosts, buttons, get fetches() { return fetches; } };
+  return {
+    hosts,
+    buttons,
+    get fetches() {
+      return fetches;
+    },
+  };
 }
 
 test("mounts face and ONVIF panels without making API requests", () => {
   const app = harness(false);
   assert.match(app.hosts["face-gallery-tools"].innerHTML, /Face enrollment/);
-  assert.match(app.hosts["onvif-camera-tools"].innerHTML, /ONVIF discovery and PTZ/);
+  assert.match(
+    app.hosts["onvif-camera-tools"].innerHTML,
+    /ONVIF discovery and PTZ/,
+  );
   assert.equal(app.fetches, 0);
 });
 
@@ -68,8 +109,7 @@ test("showcase mode disables actions and never contacts APIs", () => {
 test("face gallery refresh, explicit enrollment, and ONVIF actions stay click driven", () => {
   assert.match(source, /\/api\/faces\/galleries/);
   assert.match(source, /\/api\/onvif\/discover/);
-  assert.match(source, /duration_ms:250/);
+  assert.match(source, /duration_ms:\s*250/);
   assert.match(source, /spyder:face-galleries-changed/);
   assert.match(source, /image_base64/);
 });
-
