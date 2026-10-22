@@ -518,7 +518,9 @@ class RecordingService:
                                 min(trigger, target + 1 / self._profile["fps"])
                                 - max(timeline_start, target),
                             )
-                        if not self._write_composite(composite, pre_event_seconds=pre_seconds):
+                        if not self._write_composite(
+                            composite, camera_ids=selected, pre_event_seconds=pre_seconds
+                        ):
                             break
                         with self._lock:
                             if (
@@ -561,8 +563,6 @@ class RecordingService:
                 composite = self._compose(
                     samples, selected, width=self._profile["width"], height=self._profile["height"]
                 )
-                if self._writer is None:
-                    self._open_writer()
                 # Duplicate the latest frame when sampling falls behind, preserving elapsed time.
                 due = max(
                     1,
@@ -572,7 +572,7 @@ class RecordingService:
                 )
                 for _ in range(due):
                     if not self._recording_space_available() or not self._write_composite(
-                        composite
+                        composite, camera_ids=selected
                     ):
                         break
                 remaining = max(
@@ -659,11 +659,19 @@ class RecordingService:
     def _wall_time(timestamp: float) -> datetime:
         return datetime.fromtimestamp(timestamp + time.time() - time.monotonic(), UTC)
 
-    def _write_composite(self, composite: np.ndarray, *, pre_event_seconds: float = 0.0) -> bool:
+    def _write_composite(
+        self,
+        composite: np.ndarray,
+        *,
+        camera_ids: list[str],
+        pre_event_seconds: float = 0.0,
+    ) -> bool:
         if not self._recording_space_available():
             return False
         if self._writer is None:
-            self._open_writer()
+            self._open_writer(camera_ids)
+        else:
+            self._extend_active_camera_ids(camera_ids)
         self._writer.write(composite)
         with self._lock:
             self._frames += 1
@@ -686,7 +694,7 @@ class RecordingService:
             self._finish_segment()
         return True
 
-    def _open_writer(self) -> None:
+    def _open_writer(self, camera_ids: list[str]) -> None:
         self._segment_id = self._session_id if self._segment_index == 0 else uuid.uuid4().hex
         self._session_filename = f"{self._segment_id}.mp4"
         self._temp_path = self.output_dir / f".{self._segment_id}.partial.mp4"
@@ -699,6 +707,7 @@ class RecordingService:
             profile=self._settings["profile"],
             codec="H.264",
             format_version=1,
+            camera_ids=list(dict.fromkeys(camera_ids)),
             requested_pre_event_seconds=self._requested_pre_event_seconds,
             # A crash journal must not claim history that has not reached the file.
             # Completed clips receive the exact encoded count in _finish_segment.
@@ -719,6 +728,16 @@ class RecordingService:
             )
             self._write_atomic(active, json.dumps(self._active_metadata).encode("utf-8"))
         self._last_checkpoint = time.monotonic()
+
+    def _extend_active_camera_ids(self, camera_ids: list[str]) -> None:
+        """Persist newly included cameras before sending their frame to the encoder."""
+        known = self._active_metadata.get("camera_ids", [])
+        added = [camera_id for camera_id in camera_ids if camera_id not in known]
+        if not added:
+            return
+        known.extend(added)
+        active = self.output_dir / f".{self._segment_id}.active.json"
+        self._write_atomic(active, json.dumps(self._active_metadata).encode("utf-8"))
 
     def _finish_segment(self) -> None:
         writer, self._writer = self._writer, None
@@ -744,6 +763,7 @@ class RecordingService:
                 fps=self._profile["fps"],
                 bitrate_kbps=self._profile["bitrate_kbps"],
                 created_at=self._active_metadata["created_at"],
+                camera_ids=list(self._active_metadata.get("camera_ids", [])),
                 requested_pre_event_seconds=self._requested_pre_event_seconds,
                 pre_event_seconds=round(segment_pre_event_seconds, 3),
             )
@@ -872,6 +892,12 @@ class RecordingService:
                         session_id=raw["session_id"],
                         segment_index=raw["segment_index"],
                         profile=raw["profile"],
+                        **(
+                            {"camera_ids": camera_ids}
+                            if (camera_ids := self._validated_camera_ids(raw.get("camera_ids")))
+                            is not None
+                            else {}
+                        ),
                         bitrate_kbps=profile["bitrate_kbps"],
                         codec="H.264",
                         size_bytes=source.stat().st_size,
@@ -1153,6 +1179,9 @@ class RecordingService:
             requested_pre, actual_pre = self._pre_event_values(raw, float(duration))
             item["requested_pre_event_seconds"] = requested_pre
             item["pre_event_seconds"] = actual_pre
+            camera_ids = self._validated_camera_ids(raw.get("camera_ids"))
+            if camera_ids is not None:
+                item["camera_ids"] = camera_ids
             if type(raw.get("keep_forever")) is bool:
                 item["keep_forever"] = raw["keep_forever"]
             for flag in ("compression_attempted", "compressed", "recovered"):
@@ -1185,6 +1214,18 @@ class RecordingService:
                 if type(value) in (int, float) and math.isfinite(value) and 0 < value <= maximum:
                     item[key] = value
         return item
+
+    @staticmethod
+    def _validated_camera_ids(value: Any) -> list[str] | None:
+        """Keep valid optional camera metadata; malformed metadata cannot invalidate media."""
+        if (
+            not isinstance(value, list)
+            or len(value) > 64
+            or any(not isinstance(camera_id, str) for camera_id in value)
+            or len(set(value)) != len(value)
+        ):
+            return None
+        return list(value)
 
     @staticmethod
     def _pre_event_values(raw: dict[str, Any], duration: float) -> tuple[int, float]:

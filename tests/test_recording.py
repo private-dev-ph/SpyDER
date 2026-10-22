@@ -305,6 +305,79 @@ def test_catalog_revalidates_fields_and_rebuilds_media_urls(rig):
     manager.set_recording("red", False)
 
 
+def test_recording_catalog_tracks_camera_selection_and_rotation_resets_membership(
+    rig, monkeypatch
+):
+    _, service, _ = rig
+    monkeypatch.setattr(service, "_segment_frame_limit", lambda: 4)
+    first_segment_saved = threading.Event()
+    continue_recording = threading.Event()
+    finish_segment = service._finish_segment
+    paused = False
+
+    def pause_between_segments():
+        nonlocal paused
+        finish_segment()
+        if service.status()["segments_saved"] == 1 and not paused:
+            paused = True
+            first_segment_saved.set()
+            assert continue_recording.wait(5)
+
+    monkeypatch.setattr(service, "_finish_segment", pause_between_segments)
+    service.start(["red"])
+    assert first_segment_saved.wait(5)
+    service.select(["green"])
+    continue_recording.set()
+    wait_for(lambda: service.status()["segments_saved"] >= 2)
+    result = service.stop(timeout=10)
+    clips = sorted(
+        (item for item in result["items"] if item["kind"] == "recording"),
+        key=lambda item: item["segment_index"],
+    )
+    assert len(clips) >= 2
+    assert clips[0]["camera_ids"] == ["red"]
+    assert clips[1]["camera_ids"] == ["green"]
+    restored = RecordingService(service.manager, service.output_dir)
+    assert [item["camera_ids"] for item in restored.status()["items"]] == [
+        item["camera_ids"] for item in clips
+    ]
+    restored.close()
+
+
+def test_invalid_optional_camera_metadata_does_not_discard_valid_clip(rig):
+    manager, service, output = rig
+    service.start(["red"])
+    wait_for(lambda: service.status()["frames"] >= 3)
+    item = service.stop(timeout=10)["items"][-1]
+    manifest = output / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    raw = next(entry for entry in data["items"] if entry["id"] == item["id"])
+    raw["camera_ids"] = ["red", 7]
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    restored = RecordingService(manager, output)
+    loaded = next(entry for entry in restored.status()["items"] if entry["id"] == item["id"])
+    assert "camera_ids" not in loaded
+    assert restored.media_path(item["id"]).is_file()
+    restored.close()
+
+
+def test_legacy_recording_catalog_keeps_camera_membership_unknown(rig):
+    manager, service, output = rig
+    service.start(["red"])
+    wait_for(lambda: service.status()["frames"] >= 3)
+    item = service.stop(timeout=10)["items"][-1]
+    manifest = output / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    raw = next(entry for entry in data["items"] if entry["id"] == item["id"])
+    raw.pop("camera_ids", None)
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    restored = RecordingService(manager, output)
+    loaded = next(entry for entry in restored.status()["items"] if entry["id"] == item["id"])
+    assert "camera_ids" not in loaded
+    assert restored.media_path(item["id"]).is_file()
+    restored.close()
+
+
 def test_storage_settings_validate_persist_and_lock_during_recording(rig):
     manager, service, folder = rig
     for value in (
@@ -362,10 +435,10 @@ def test_completed_clips_survive_later_encoder_failure(rig, monkeypatch):
     monkeypatch.setattr(service, "_segment_frame_limit", lambda: 2)
     original = service._open_writer
 
-    def fail_next():
+    def fail_next(camera_ids):
         if service._segment_index:
             raise RuntimeError("synthetic encoder failure")
-        original()
+        original(camera_ids)
 
     monkeypatch.setattr(service, "_open_writer", fail_next)
     service.start(["red"])

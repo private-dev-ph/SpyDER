@@ -31,7 +31,7 @@ class Manager:
         pass
 
 
-def active_metadata(folder, ident=None):
+def active_metadata(folder, ident=None, camera_ids=None):
     ident = ident or uuid.uuid4().hex
     item = {
         "id": ident,
@@ -44,6 +44,8 @@ def active_metadata(folder, ident=None):
         "profile": "archive",
         "encoder_pid": 2147483647,
     }
+    if camera_ids is not None:
+        item["camera_ids"] = camera_ids
     (folder / f".{ident}.active.json").write_text(json.dumps(item), encoding="utf-8")
     return item
 
@@ -87,11 +89,17 @@ def test_complete_fragments_recover_without_copying_the_full_recording(tmp_path)
 
 
 def test_startup_recovers_protects_and_is_idempotent(tmp_path):
-    item, path = video_file(tmp_path)
+    item = active_metadata(tmp_path, camera_ids=["camera", "removed-camera"])
+    path = tmp_path / f".{item['id']}.partial.mp4"
+    writer = H264Writer(path, PROFILES["archive"])
+    for index in range(30):
+        writer.write(np.full((360, 640, 3), (index * 3) % 255, np.uint8))
+    writer.release()
     restored = RecordingService(Manager(), tmp_path)
     recovered = restored.status()["items"]
     assert len(recovered) == 1 and recovered[0]["id"] == item["id"]
     assert recovered[0]["keep_forever"] and recovered[0]["recovered"]
+    assert recovered[0]["camera_ids"] == ["camera", "removed-camera"]
     assert restored.status()["recovery"]["recovered"] == [item["id"]]
     assert not path.exists()
     video = cv2.VideoCapture(str(restored.media_path(item["id"])))
