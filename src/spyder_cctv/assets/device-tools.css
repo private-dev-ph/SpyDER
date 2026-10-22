@@ -1,0 +1,322 @@
+.dt-host {
+  color: var(--ink, #201d1a);
+}
+.dt-card {
+  padding: clamp(16px, 2vw, 26px);
+  background: var(--surface, #fffefa);
+  border: 1px solid var(--border, #e4dfd4);
+  border-radius: 16px;
+  box-shadow: var(--shadow, 0 8px 28px #24160008);
+}
+.dt-head,
+.dt-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.dt-head h2,
+.dt-detail-head h3 {
+  margin: 2px 0 6px;
+}
+.dt-head p,
+.dt-detail-head p,
+.dt-connected > p {
+  margin: 4px 0;
+  color: var(--muted, #726d64);
+}
+.dt-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: var(--accent, #be1a1a);
+}
+.dt-card p {
+  line-height: 1.5;
+}
+.dt-privacy,
+.dt-notice {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(
+    in srgb,
+    var(--gold-soft, #f8ebab) 40%,
+    var(--surface, #fffefa)
+  );
+  border: 1px solid var(--border, #e4dfd4);
+}
+.dt-notice {
+  color: var(--danger, #bc0202);
+}
+.dt-tools,
+.dt-onvif-form,
+.dt-actions {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dt-tools {
+  margin: 16px 0;
+}
+.dt-tools label {
+  flex: 1;
+  min-width: 220px;
+}
+.dt-card label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+.dt-card input,
+.dt-card select {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--control-border, #8c8274);
+  border-radius: 8px;
+  background: var(--surface, #fffefa);
+  color: var(--ink, #201d1a);
+}
+.dt-button {
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 1px solid var(--control-border, #8c8274);
+  border-radius: 8px;
+  background: var(--surface, #fffefa);
+  color: var(--ink, #201d1a);
+  font-weight: 650;
+  cursor: pointer;
+}
+.dt-button:hover:not(:disabled) {
+  border-color: var(--accent, #be1a1a);
+  color: var(--accent, #be1a1a);
+}
+.dt-button:focus-visible,
+.dt-card input:focus-visible,
+.dt-card select:focus-visible {
+  outline: 3px solid var(--focus, #830000);
+  outline-offset: 2px;
+}
+.dt-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.dt-primary {
+  background: var(--accent, #be1a1a);
+  border-color: var(--accent, #be1a1a);
+  color: white;
+}
+.dt-primary:hover:not(:disabled) {
+  background: var(--accent-hover, #830000);
+  color: white;
+}
+.dt-danger {
+  color: var(--danger, #bc0202);
+}
+.dt-status {
+  min-height: 1.5em;
+  color: var(--muted, #726d64);
+}
+.dt-status[data-error="true"] {
+  color: var(--danger, #bc0202);
+}
+.dt-gallery-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.dt-gallery {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #e4dfd4);
+  background: var(--surface, #fffefa);
+  color: var(--ink, #201d1a);
+  cursor: pointer;
+}
+.dt-gallery span,
+.dt-identity span {
+  font-size: 12px;
+  color: var(--muted, #726d64);
+}
+.dt-gallery.is-selected {
+  outline: 2px solid var(--accent, #be1a1a);
+  border-color: var(--accent, #be1a1a);
+}
+.dt-detail {
+  margin-top: 18px;
+}
+.dt-detail-head {
+  align-items: center;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border, #e4dfd4);
+}
+.dt-enroll {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border, #e4dfd4);
+}
+.dt-enroll h4,
+.dt-enroll p {
+  grid-column: 1/-1;
+  margin: 0;
+}
+.dt-enroll p {
+  font-size: 12px;
+  color: var(--muted, #726d64);
+}
+.dt-identities {
+  padding-top: 10px;
+}
+.dt-identity {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border, #e4dfd4);
+}
+.dt-identity > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+.dt-sample {
+  grid-column: 1/-1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  background: var(--canvas, #f7f5ef);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.dt-empty {
+  color: var(--muted, #726d64);
+  padding: 12px;
+}
+.dt-dialog {
+  width: min(520px, calc(100vw - 24px));
+  max-height: 90dvh;
+  padding: 24px;
+  border: 1px solid var(--border, #e4dfd4);
+  border-radius: 14px;
+  background: var(--surface, #fffefa);
+  color: var(--ink, #201d1a);
+  box-shadow: var(--shadow, 0 8px 28px #24160008);
+}
+.dt-dialog::backdrop {
+  background: #0008;
+}
+.dt-dialog form {
+  display: grid;
+  gap: 14px;
+}
+.dt-dialog h3,
+.dt-dialog p {
+  margin: 0;
+}
+.dt-onvif-form {
+  align-items: end;
+}
+.dt-onvif-form label {
+  flex: 1 1 190px;
+}
+.dt-discovered {
+  display: grid;
+  max-width: 480px;
+  margin-top: 12px;
+}
+.dt-connected {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border, #e4dfd4);
+  border-radius: 12px;
+}
+.dt-connected > label {
+  max-width: 480px;
+  margin: 12px 0;
+}
+.dt-connected > [data-add] {
+  margin-bottom: 16px;
+}
+.dt-ptz {
+  display: grid;
+  grid-template-columns: repeat(5, 48px);
+  grid-template-rows: repeat(3, 44px);
+  gap: 6px;
+  width: max-content;
+  margin: 14px auto;
+}
+.dt-ptz button {
+  font-size: 20px;
+  color: var(--danger, #bc0202);
+}
+.dt-ptz button:nth-child(1) {
+  grid-column: 3;
+  grid-row: 1;
+}
+.dt-ptz button:nth-child(2) {
+  grid-column: 2;
+  grid-row: 2;
+}
+.dt-ptz button:nth-child(3) {
+  grid-column: 3;
+  grid-row: 2;
+}
+.dt-ptz button:nth-child(4) {
+  grid-column: 4;
+  grid-row: 2;
+}
+.dt-ptz button:nth-child(5) {
+  grid-column: 3;
+  grid-row: 3;
+}
+.dt-ptz button:nth-child(6) {
+  grid-column: 5;
+  grid-row: 1;
+}
+.dt-ptz button:nth-child(7) {
+  grid-column: 5;
+  grid-row: 3;
+}
+@media (max-width: 640px) {
+  .dt-head,
+  .dt-detail-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .dt-actions {
+    align-items: stretch;
+  }
+  .dt-actions .dt-button {
+    flex: 1;
+  }
+  .dt-identity {
+    grid-template-columns: 1fr;
+  }
+  .dt-identity .dt-actions {
+    grid-column: 1;
+  }
+  .dt-onvif-form label {
+    flex-basis: 100%;
+  }
+  .dt-gallery-list {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dt-button {
+    transition: none;
+  }
+}
+.dt-ptz svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  fill: var(--danger, #bc0202);
+}
