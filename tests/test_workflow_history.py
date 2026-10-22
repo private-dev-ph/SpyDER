@@ -283,3 +283,26 @@ def test_delete_clear_and_flush_close(tmp_path: Path):
     assert store.clear() == 2
     assert store.list()["total"] == 0
     store.close()
+
+
+def test_oversized_graph_marks_snapshot_incomplete_instead_of_silent_partial_replay(tmp_path):
+    history = ExecutionHistory(tmp_path / "history.sqlite3")
+    try:
+        identifier = history.record(
+            {
+                "workflow_id": "large",
+                "graph": {
+                    "nodes": [{"id": str(i), "params": {"source": "x" * 8000}} for i in range(100)],
+                    "edges": [],
+                },
+                "nodes": [],
+            }
+        )
+        assert identifier
+        assert history.flush()
+        result = history.get(identifier)
+        assert result["graph_complete"] is False
+        assert result["snapshot_warning"]
+        assert result["graph"]["nodes"] == []
+    finally:
+        history.close()

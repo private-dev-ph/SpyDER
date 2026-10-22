@@ -54,7 +54,10 @@
       label: "Code",
       params: { language: "python", source: "output = detections" },
     },
-    subflow: { label: "Subflow", params: { subflow_id: "", version: 1, arguments: {} } },
+    subflow: {
+      label: "Subflow",
+      params: { subflow_id: "", version: 1, arguments: {} },
+    },
     subflow_input: { label: "Subflow input", params: {} },
     subflow_output: { label: "Subflow output", params: {} },
   };
@@ -64,7 +67,10 @@
       label: "Vision & conditions",
       types: ["detections", "filter", "zone", "count"],
     },
-    { label: "Flow & code", types: ["cooldown", "code", "subflow", "subflow_input", "subflow_output"] },
+    {
+      label: "Flow & code",
+      types: ["cooldown", "code", "subflow", "subflow_input", "subflow_output"],
+    },
     {
       label: "Views & actions",
       types: ["preview", "event", "notification", "capture", "record"],
@@ -537,9 +543,31 @@
       errors.push("Workflow can contain at most 128 connections.");
     for (const n of nodes) {
       if (!TYPES[n.type]) errors.push(`Unknown node type: ${n.type}`);
-      if (n.type === "subflow_input" && (n.params && Object.keys(n.params).length)) errors.push("Subflow input nodes do not accept settings.");
-      if (n.type === "subflow_output" && (n.params && Object.keys(n.params).length)) errors.push("Subflow output nodes do not accept settings.");
-      if (n.type === "subflow" && (!n.params || typeof n.params.subflow_id !== "string" || !Number.isInteger(n.params.version) || n.params.version < 1 || !n.params.arguments || typeof n.params.arguments !== "object" || Array.isArray(n.params.arguments))) errors.push("Choose a subflow version and provide arguments as an object.");
+      if (
+        n.type === "subflow_input" &&
+        n.params &&
+        Object.keys(n.params).length
+      )
+        errors.push("Subflow input nodes do not accept settings.");
+      if (
+        n.type === "subflow_output" &&
+        n.params &&
+        Object.keys(n.params).length
+      )
+        errors.push("Subflow output nodes do not accept settings.");
+      if (
+        n.type === "subflow" &&
+        (!n.params ||
+          typeof n.params.subflow_id !== "string" ||
+          !Number.isInteger(n.params.version) ||
+          n.params.version < 1 ||
+          !n.params.arguments ||
+          typeof n.params.arguments !== "object" ||
+          Array.isArray(n.params.arguments))
+      )
+        errors.push(
+          "Choose a subflow version and provide arguments as an object.",
+        );
     }
     const out = new Map(nodes.map((n) => [n.id, []]));
     for (const e of graph?.edges || [])
@@ -1177,32 +1205,60 @@
         onEdit: (definition) => {
           if (!graph || !definition?.graph) return;
           rootDraft = clone(graph);
-          subflowEditing = { id: definition.id, name: definition.name, version: definition.version };
-          controller?.abort(); debugController?.abort();
+          subflowEditing = {
+            id: definition.id,
+            name: definition.name,
+            version: definition.version,
+          };
+          controller?.abort();
+          debugController?.abort();
           graph = clone(definition.graph);
           graph.enabled = false;
           graph.camera_ids = [];
-          selected = ""; settingsNode = ""; undoStack = []; redoStack = [];
+          selected = "";
+          settingsNode = "";
+          undoStack = [];
+          redoStack = [];
           changed();
-          root.querySelector("[data-subflow-back]")?.focus?.({ preventScroll: true });
+          root
+            .querySelector("[data-subflow-back]")
+            ?.focus?.({ preventScroll: true });
         },
         onCreateSubflow: (draft) => {
           rootDraft = clone(graph);
           subflowEditing = { id: "", name: draft.name, version: 0 };
-          controller?.abort(); debugController?.abort();
+          controller?.abort();
+          debugController?.abort();
           graph = clone(draft);
-          selected = ""; settingsNode = ""; undoStack = []; redoStack = [];
+          selected = "";
+          settingsNode = "";
+          undoStack = [];
+          redoStack = [];
           changed();
-          root.querySelector("[data-publish-subflow]")?.focus?.({ preventScroll: true });
+          root
+            .querySelector("[data-publish-subflow]")
+            ?.focus?.({ preventScroll: true });
         },
         onPublished: (definition) => {
-          subflowEditing = { id: definition.id, name: definition.name, version: definition.version };
+          subflowEditing = {
+            id: definition.id,
+            name: definition.name,
+            version: definition.version,
+          };
           graph.name = definition.name;
-          window.spyderWorkflowTools?.listSubflows?.().then((items) => {
-            if (!mounted || !subflowEditing || subflowEditing.id !== definition.id) return;
-            subflowCatalog = items || [];
-            render(true);
-          }).catch(() => {});
+          window.spyderWorkflowTools
+            ?.listSubflows?.()
+            .then((items) => {
+              if (
+                !mounted ||
+                !subflowEditing ||
+                subflowEditing.id !== definition.id
+              )
+                return;
+              subflowCatalog = items || [];
+              render(true);
+            })
+            .catch(() => {});
           render(true);
         },
       });
@@ -1256,7 +1312,12 @@
         activationError = false;
         if (demo)
           try {
-            localStorage.setItem(subflowEditing ? `spyder.workflow-editor.subflow-${subflowEditing.id}` : key, JSON.stringify(graph));
+            localStorage.setItem(
+              subflowEditing
+                ? `spyder.workflow-editor.subflow-${subflowEditing.id}`
+                : key,
+              JSON.stringify(graph),
+            );
           } catch {
             issue(
               "Draft storage unavailable. Export your workflow to keep a copy.",
@@ -1266,10 +1327,19 @@
         visibilityChanged();
       }
       async function exportWorkflow(value) {
-        const bundle = await window.spyderWorkflowTools?.exportBundle?.(clone(value));
-        const blob = new Blob([bundle ? JSON.stringify(bundle, null, 2) : encodeWorkflow(value, library)], {
-            type: "application/json",
-          }),
+        const bundle = await window.spyderWorkflowTools?.exportBundle?.(
+          clone(value),
+        );
+        const blob = new Blob(
+            [
+              bundle
+                ? JSON.stringify(bundle, null, 2)
+                : encodeWorkflow(value, library),
+            ],
+            {
+              type: "application/json",
+            },
+          ),
           url = URL.createObjectURL(blob),
           link = document.createElement("a");
         link.href = url;
@@ -1771,12 +1841,18 @@
       function paletteContents() {
         return (
           paletteGroups(paletteQuery)
-            .map(
-              (group) => ({ ...group, types: group.types.filter((type) => subflowEditing || !["subflow_input", "subflow_output"].includes(type)) }),
-            )
+            .map((group) => ({
+              ...group,
+              types: group.types.filter(
+                (type) =>
+                  subflowEditing ||
+                  !["subflow_input", "subflow_output"].includes(type),
+              ),
+            }))
             .filter((group) => group.types.length)
-            .map((group) =>
-              `<details class="we-node-group" data-palette-group="${esc(group.label)}" ${paletteQuery || !collapsedPaletteGroups.has(group.label) ? "open" : ""}><summary>${esc(group.label)}<span>${group.types.length}</span></summary><div>${group.types.map((type) => `<button data-add="${type}" draggable="true">${esc(TYPES[type].label)}<span aria-hidden="true">+</span></button>`).join("")}</div></details>`,
+            .map(
+              (group) =>
+                `<details class="we-node-group" data-palette-group="${esc(group.label)}" ${paletteQuery || !collapsedPaletteGroups.has(group.label) ? "open" : ""}><summary>${esc(group.label)}<span>${group.types.length}</span></summary><div>${group.types.map((type) => `<button data-add="${type}" draggable="true">${esc(TYPES[type].label)}<span aria-hidden="true">+</span></button>`).join("")}</div></details>`,
             )
             .join("") ||
           '<p class="we-palette-empty" role="status">No matching nodes.</p>'
@@ -2122,7 +2198,7 @@
         const x =
           canvasPadding +
           (clamp(a.x) + nodeSize(a).width + clamp(b.x)) / 2 -
-          16;
+          22;
         const y =
           canvasPadding +
           (clamp(a.y) +
@@ -2130,8 +2206,8 @@
             clamp(b.y) +
             portOffset(inputType(e, graph.nodes), b)) /
             2 -
-          16;
-        return `<foreignObject data-wire-actions="${esc(e.from)}|${esc(e.to)}" class="we-wire-actions" x="${x}" y="${y}" width="32" height="32"><button xmlns="http://www.w3.org/1999/xhtml" class="we-wire-trash" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Delete connection from ${esc(TYPES[a.type]?.label)} to ${esc(TYPES[b.type]?.label)}" title="Delete connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></foreignObject>`;
+          22;
+        return `<foreignObject data-wire-actions="${esc(e.from)}|${esc(e.to)}" class="we-wire-actions" x="${x}" y="${y}" width="44" height="44"><button xmlns="http://www.w3.org/1999/xhtml" class="we-wire-trash" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Delete connection from ${esc(TYPES[a.type]?.label)} to ${esc(TYPES[b.type]?.label)}" title="Delete connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></foreignObject>`;
       }
       function removeConnection(key) {
         const [from, to] = key.split("|");
@@ -2280,20 +2356,36 @@
       function parameterFields(n) {
         if (!n) return "<p>Select node to edit.</p>";
         if (n.type === "subflow") {
-          const latest = subflowCatalog.find((item) => item.id === n.params.subflow_id);
-          const definition = subflowCatalog.find((item) => item.id === n.params.subflow_id && Number(item.version) === Number(n.params.version));
+          const latest = subflowCatalog.find(
+            (item) => item.id === n.params.subflow_id,
+          );
+          const definition = subflowCatalog.find(
+            (item) =>
+              item.id === n.params.subflow_id &&
+              Number(item.version) === Number(n.params.version),
+          );
           const definitions = subflowCatalog;
-          const args = Object.fromEntries((definition?.parameters || []).map((parameter) => [parameter.name, n.params.arguments?.[parameter.name] ?? parameter.default ?? ""]));
-          const argumentFields = (definition?.parameters || []).map((parameter) => {
-            const value = args[parameter.name], type = parameter.type;
-            const control = type === "boolean"
-              ? `<input type="checkbox" data-subflow-arg="${esc(parameter.name)}" data-subflow-type="boolean" ${value ? "checked" : ""}>`
-              : `<input type="${["number", "integer"].includes(type) ? "number" : "text"}" ${type === "number" ? 'step="any"' : type === "integer" ? 'step="1"' : ""} data-subflow-arg="${esc(parameter.name)}" data-subflow-type="${esc(type)}" value="${esc(value)}">`;
-            return `<label>${esc(parameter.name)} · ${esc(parameter.node_id)}.${esc(parameter.field)}${control}</label>`;
-          }).join("");
+          const args = Object.fromEntries(
+            (definition?.parameters || []).map((parameter) => [
+              parameter.name,
+              n.params.arguments?.[parameter.name] ?? parameter.default ?? "",
+            ]),
+          );
+          const argumentFields = (definition?.parameters || [])
+            .map((parameter) => {
+              const value = args[parameter.name],
+                type = parameter.type;
+              const control =
+                type === "boolean"
+                  ? `<input type="checkbox" data-subflow-arg="${esc(parameter.name)}" data-subflow-type="boolean" ${value ? "checked" : ""}>`
+                  : `<input type="${["number", "integer"].includes(type) ? "number" : "text"}" ${type === "number" ? 'step="any"' : type === "integer" ? 'step="1"' : ""} data-subflow-arg="${esc(parameter.name)}" data-subflow-type="${esc(type)}" value="${esc(value)}">`;
+              return `<label>${esc(parameter.name)} · ${esc(parameter.node_id)}.${esc(parameter.field)}${control}</label>`;
+            })
+            .join("");
           return `<label>Subflow<select data-subflow-id><option value="">Choose subflow</option>${definitions.map((item) => `<option value="${esc(item.id)}" data-version="${esc(item.version)}" ${item.id === n.params.subflow_id ? "selected" : ""}>${esc(item.name)} · latest v${esc(item.version)}</option>`).join("")}</select></label><p>Call pins a specific version. Inference and camera context are shared with the parent workflow.</p>${latest ? `<label>Version<select data-subflow-version>${[...(latest.versions || [latest.version])].map((version) => `<option value="${esc(version)}" ${Number(version) === Number(n.params.version) ? "selected" : ""}>v${esc(version)}${Number(version) === Number(latest.version) ? " · latest" : ""}</option>`).join("")}</select></label>` : ""}${definition ? `<fieldset class="we-subflow-arguments"><legend>Arguments</legend>${argumentFields || "<p>This version exposes no arguments.</p>"}<details><summary>Advanced JSON</summary><label>Arguments JSON<textarea data-subflow-arguments spellcheck="false">${esc(JSON.stringify(args, null, 2))}</textarea></label></details><p>${esc(definition.description || "No description")}</p><button type="button" class="button secondary" data-open-subflow-definition>Open pinned definition</button></fieldset>` : `<p>${n.params.subflow_id ? `Pinned version v${esc(n.params.version)} is unavailable in the editor.` : "Choose a published subflow."}</p>${n.params.subflow_id ? `<button type="button" class="button secondary" data-load-pinned-subflow>Load pinned version v${esc(n.params.version)}</button>` : ""}`}`;
         }
-        if (n.type === "subflow_input" || n.type === "subflow_output") return `<p>${n.type === "subflow_input" ? "Entry point for detections from the calling workflow." : "Return this branch's detections to the calling workflow."}</p>`;
+        if (n.type === "subflow_input" || n.type === "subflow_output")
+          return `<p>${n.type === "subflow_input" ? "Entry point for detections from the calling workflow." : "Return this branch's detections to the calling workflow."}</p>`;
 
         const identitySourceField =
           n.type === "filter" && !Object.hasOwn(n.params, "identity_source")
@@ -2552,7 +2644,11 @@
           .join("");
         const params = mappedFields(selectedNode);
         const errors = validate(graph);
-        const rootBridgePresent = !subflowEditing && graph.nodes.some((item) => ["subflow_input", "subflow_output"].includes(item.type));
+        const rootBridgePresent =
+          !subflowEditing &&
+          graph.nodes.some((item) =>
+            ["subflow_input", "subflow_output"].includes(item.type),
+          );
         const activationModal = activationReview
           ? `<div class="we-modal-backdrop" data-activation-modal><section class="we-modal we-activation-modal" role="dialog" aria-modal="true" aria-labelledby="we-activation-title"><header><h3 id="we-activation-title">Confirm workflow activation</h3></header><p>${activationReview.preview.cameras.some((c) => (c.disable_motion || c.replaces_motion_pipeline) && c.target_engine === "insightface") ? "Motion detection will be disabled to enable face detection on these cameras:" : "The connected models will replace the Motion pipeline on these cameras:"}</p><ul>${(
               activationReview.preview.cameras || []
@@ -2701,7 +2797,12 @@
           graphRevision++;
           if (demo)
             try {
-              localStorage.setItem(subflowEditing ? `spyder.workflow-editor.subflow-${subflowEditing.id}` : key, JSON.stringify(graph));
+              localStorage.setItem(
+                subflowEditing
+                  ? `spyder.workflow-editor.subflow-${subflowEditing.id}`
+                  : key,
+                JSON.stringify(graph),
+              );
             } catch {}
         },
         changed = () => {
@@ -3027,8 +3128,14 @@
       }
       async function save() {
         if (subflowEditing) return;
-        if (graph.nodes.some((item) => ["subflow_input", "subflow_output"].includes(item.type))) {
-          issue("Subflow input and output nodes are authoring bridges. Publish this graph as a subflow before saving a root workflow.");
+        if (
+          graph.nodes.some((item) =>
+            ["subflow_input", "subflow_output"].includes(item.type),
+          )
+        ) {
+          issue(
+            "Subflow input and output nodes are authoring bridges. Publish this graph as a subflow before saving a root workflow.",
+          );
           return;
         }
         if (
@@ -3061,7 +3168,12 @@
             if (graph.id === savedGraph.id && graphRevision === savedRevision)
               dirty = false;
             try {
-              localStorage.setItem(subflowEditing ? `spyder.workflow-editor.subflow-${subflowEditing.id}` : key, JSON.stringify(graph));
+              localStorage.setItem(
+                subflowEditing
+                  ? `spyder.workflow-editor.subflow-${subflowEditing.id}`
+                  : key,
+                JSON.stringify(graph),
+              );
             } catch {
               /* IndexedDB save succeeded. */
             }
@@ -3167,7 +3279,12 @@
           );
           if (!response.ok) throw Error("Workflow debug data unavailable.");
           const data = await response.json();
-          if (subflowEditing || !visibleForStatus() || debugController !== request) return;
+          if (
+            subflowEditing ||
+            !visibleForStatus() ||
+            debugController !== request
+          )
+            return;
           const nextStates = data.workflows || {};
           if (JSON.stringify(nextStates) !== JSON.stringify(debugStates)) {
             debugStates = nextStates;
@@ -3388,32 +3505,90 @@
       const change = (e) => {
         const t = e.target;
         if (t.matches("[data-subflow-id]")) {
-          const n = graph.nodes.find((item) => item.id === selected), version = Number(t.selectedOptions?.[0]?.dataset.version || 1), definition = subflowCatalog.find((item) => item.id === t.value && Number(item.version) === version);
+          const n = graph.nodes.find((item) => item.id === selected),
+            version = Number(t.selectedOptions?.[0]?.dataset.version || 1),
+            definition = subflowCatalog.find(
+              (item) => item.id === t.value && Number(item.version) === version,
+            );
           if (!n || n.type !== "subflow") return;
           n.params.subflow_id = t.value;
           n.params.version = version;
-          n.params.arguments = Object.fromEntries((definition?.parameters || []).map((parameter) => [parameter.name, parameter.default ?? ""]));
-          changed(); return;
+          n.params.arguments = Object.fromEntries(
+            (definition?.parameters || []).map((parameter) => [
+              parameter.name,
+              parameter.default ?? "",
+            ]),
+          );
+          changed();
+          return;
         }
         if (t.matches("[data-subflow-arg]")) {
-          const n = graph.nodes.find((item) => item.id === selected); if (!n?.params.arguments) return;
-          const type = t.dataset.subflowType, value = type === "boolean" ? t.checked : ["number", "integer"].includes(type) ? Number(t.value) : t.value;
-          if (["number", "integer"].includes(type) && (!Number.isFinite(value) || (type === "integer" && !Number.isInteger(value)))) { t.setCustomValidity?.("Enter a valid numeric value."); return; }
-          t.setCustomValidity?.(""); n.params.arguments[t.dataset.subflowArg] = value;
-          const json = root.querySelector("[data-subflow-arguments]"); if (json) json.value = JSON.stringify(n.params.arguments, null, 2);
-          mark(); return;
+          const n = graph.nodes.find((item) => item.id === selected);
+          if (!n?.params.arguments) return;
+          const type = t.dataset.subflowType,
+            value =
+              type === "boolean"
+                ? t.checked
+                : ["number", "integer"].includes(type)
+                  ? Number(t.value)
+                  : t.value;
+          if (
+            ["number", "integer"].includes(type) &&
+            (!Number.isFinite(value) ||
+              (type === "integer" && !Number.isInteger(value)))
+          ) {
+            t.setCustomValidity?.("Enter a valid numeric value.");
+            return;
+          }
+          t.setCustomValidity?.("");
+          n.params.arguments[t.dataset.subflowArg] = value;
+          const json = root.querySelector("[data-subflow-arguments]");
+          if (json) json.value = JSON.stringify(n.params.arguments, null, 2);
+          mark();
+          return;
         }
         if (t.matches("[data-subflow-version]")) {
-          const n = graph.nodes.find((item) => item.id === selected); if (!n) return;
-          n.params.version = Math.max(1, Number(t.value) || 1); mark();
-          if (subflowCatalog.some((item) => item.id === n.params.subflow_id && Number(item.version) === n.params.version)) render(true);
-          else window.spyderWorkflowTools?.getSubflow?.(n.params.subflow_id, n.params.version).then((definition) => { if (!mounted || !definition) return; subflowCatalog.push(definition); render(true); }).catch((error) => issue(error.message));
+          const n = graph.nodes.find((item) => item.id === selected);
+          if (!n) return;
+          n.params.version = Math.max(1, Number(t.value) || 1);
+          mark();
+          if (
+            subflowCatalog.some(
+              (item) =>
+                item.id === n.params.subflow_id &&
+                Number(item.version) === n.params.version,
+            )
+          )
+            render(true);
+          else
+            window.spyderWorkflowTools
+              ?.getSubflow?.(n.params.subflow_id, n.params.version)
+              .then((definition) => {
+                if (!mounted || !definition) return;
+                subflowCatalog.push(definition);
+                render(true);
+              })
+              .catch((error) => issue(error.message));
           return;
         }
         if (t.matches("[data-subflow-arguments]")) {
-          const n = graph.nodes.find((item) => item.id === selected); if (!n) return;
-          try { const value = JSON.parse(t.value); if (!value || Array.isArray(value) || typeof value !== "object") throw Error(); n.params.arguments = value; t.setCustomValidity?.(""); root.querySelectorAll("[data-subflow-arg]").forEach((control) => { const v = value[control.dataset.subflowArg]; if (control.type === "checkbox") control.checked = !!v; else control.value = v ?? ""; }); mark(); }
-          catch { t.setCustomValidity?.("Enter a JSON object."); }
+          const n = graph.nodes.find((item) => item.id === selected);
+          if (!n) return;
+          try {
+            const value = JSON.parse(t.value);
+            if (!value || Array.isArray(value) || typeof value !== "object")
+              throw Error();
+            n.params.arguments = value;
+            t.setCustomValidity?.("");
+            root.querySelectorAll("[data-subflow-arg]").forEach((control) => {
+              const v = value[control.dataset.subflowArg];
+              if (control.type === "checkbox") control.checked = !!v;
+              else control.value = v ?? "";
+            });
+            mark();
+          } catch {
+            t.setCustomValidity?.("Enter a JSON object.");
+          }
           return;
         }
         if (
@@ -3450,12 +3625,41 @@
               const parsed = JSON.parse(text);
               let imported;
               if (parsed.format === "spyder-workflow-bundle") {
-                for (const definition of parsed.subflows || []) decodeWorkflow(JSON.stringify({ format: "spyder-workflow", version: 1, workflow: definition.graph }), [], library);
-                decodeWorkflow(JSON.stringify({ format: "spyder-workflow", version: 1, workflow: parsed.workflow }), cameraList(), library);
-                const bundledGraph = await window.spyderWorkflowTools?.importBundle?.(text);
-                if (!bundledGraph) throw Error("Workflow bundle import is unavailable.");
-                imported = decodeWorkflow(JSON.stringify({ format: "spyder-workflow", version: 1, workflow: bundledGraph }), cameraList(), library);
-                subflowCatalog = await window.spyderWorkflowTools?.listSubflows?.() || subflowCatalog;
+                for (const definition of parsed.subflows || [])
+                  decodeWorkflow(
+                    JSON.stringify({
+                      format: "spyder-workflow",
+                      version: 1,
+                      workflow: definition.graph,
+                    }),
+                    [],
+                    library,
+                  );
+                decodeWorkflow(
+                  JSON.stringify({
+                    format: "spyder-workflow",
+                    version: 1,
+                    workflow: parsed.workflow,
+                  }),
+                  cameraList(),
+                  library,
+                );
+                const bundledGraph =
+                  await window.spyderWorkflowTools?.importBundle?.(text);
+                if (!bundledGraph)
+                  throw Error("Workflow bundle import is unavailable.");
+                imported = decodeWorkflow(
+                  JSON.stringify({
+                    format: "spyder-workflow",
+                    version: 1,
+                    workflow: bundledGraph,
+                  }),
+                  cameraList(),
+                  library,
+                );
+                subflowCatalog =
+                  (await window.spyderWorkflowTools?.listSubflows?.()) ||
+                  subflowCatalog;
               } else imported = decodeWorkflow(text, cameraList(), library);
               remember();
               graph = imported;
@@ -3619,21 +3823,51 @@
         }
         if (b.dataset.openSubflows !== undefined) {
           window.spyderWorkflowTools?.setSubflowId?.(subflowEditing?.id);
-          if (!demo) window.spyderWorkflowTools?.listSubflows?.().then((items) => { subflowCatalog = items || []; render(true); }).catch(() => {});
+          if (!demo)
+            window.spyderWorkflowTools
+              ?.listSubflows?.()
+              .then((items) => {
+                subflowCatalog = items || [];
+                render(true);
+              })
+              .catch(() => {});
           window.spyderWorkflowTools?.openSubflows?.();
         } else if (b.dataset.loadPinnedSubflow !== undefined) {
           const n = graph.nodes.find((item) => item.id === selected);
-          if (n?.type === "subflow") window.spyderWorkflowTools?.getSubflow?.(n.params.subflow_id, n.params.version).then((definition) => { if (!mounted || !definition) return; subflowCatalog.push(definition); render(true); }).catch((error) => issue(error.message));
+          if (n?.type === "subflow")
+            window.spyderWorkflowTools
+              ?.getSubflow?.(n.params.subflow_id, n.params.version)
+              .then((definition) => {
+                if (!mounted || !definition) return;
+                subflowCatalog.push(definition);
+                render(true);
+              })
+              .catch((error) => issue(error.message));
         } else if (b.dataset.openSubflowDefinition !== undefined) {
           const n = graph.nodes.find((item) => item.id === selected);
-          if (n?.type === "subflow") window.spyderWorkflowTools?.openDefinition?.(n.params.subflow_id, n.params.version);
+          if (n?.type === "subflow")
+            window.spyderWorkflowTools?.openDefinition?.(
+              n.params.subflow_id,
+              n.params.version,
+            );
         } else if (b.dataset.openHistory !== undefined) {
           window.spyderWorkflowTools?.openHistory?.();
         } else if (b.dataset.publishSubflow !== undefined) {
           window.spyderWorkflowTools?.setSubflowId?.(subflowEditing?.id);
           window.spyderWorkflowTools?.openPublish?.(clone(graph));
         } else if (b.dataset.subflowBack !== undefined) {
-          if (rootDraft) { graph = rootDraft; rootDraft = null; subflowEditing = null; selected = ""; settingsNode = ""; undoStack = []; redoStack = []; changed(); poll(); visibilityChanged(); }
+          if (rootDraft) {
+            graph = rootDraft;
+            rootDraft = null;
+            subflowEditing = null;
+            selected = "";
+            settingsNode = "";
+            undoStack = [];
+            redoStack = [];
+            changed();
+            poll();
+            visibilityChanged();
+          }
         } else if (b.dataset.import !== undefined)
           root.querySelector("[data-import-file]").click();
         else if (b.dataset.openWorkflowManager !== undefined)
@@ -4249,7 +4483,7 @@
                 "x",
                 canvasPadding +
                   (clamp(a.x) + nodeSize(a).width + clamp(b.x)) / 2 -
-                  16,
+                  22,
               );
               actions?.setAttribute(
                 "y",
@@ -4259,7 +4493,7 @@
                     clamp(b.y) +
                     portOffset(inputType(edge, graph.nodes), b)) /
                     2 -
-                  16,
+                  22,
               );
             } else path.setAttribute("d", wirePath(edge));
           }
@@ -4613,7 +4847,15 @@
         }
       if (graph) graph = migrateDetectorNodes(graph);
       render();
-      window.spyderWorkflowTools?.listSubflows?.().then((items) => { if (mounted) { subflowCatalog = items || []; render(true); } }).catch(() => {});
+      window.spyderWorkflowTools
+        ?.listSubflows?.()
+        .then((items) => {
+          if (mounted) {
+            subflowCatalog = items || [];
+            render(true);
+          }
+        })
+        .catch(() => {});
       cameraSignature = JSON.stringify(cameraList().map((c) => [c.id, c.name]));
       if (!demo) {
         loadLibrary();
