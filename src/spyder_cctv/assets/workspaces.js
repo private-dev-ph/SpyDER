@@ -32,7 +32,7 @@
   let selected = new Set();
   let busy = false;
   let cameraSignature = "";
-  let librarySignature = "";
+  let recordingLibrary = null;
 
   function icon(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -159,6 +159,8 @@
   function route() {
     window.spyderLayouts?.unmount();
     window.spyderEventLibrary?.unmount();
+    recordingLibrary?.unmount();
+    recordingLibrary = null;
     window.spyderVisionLab?.unmount();
     window.spyderWorkflows?.unmount();
     const key = location.hash.slice(1);
@@ -191,7 +193,7 @@
       ? "ON-DEVICE SHOWCASE"
       : "LOCAL WORKSPACE";
     const content = find("#workspace-content");
-    cameraSignature = librarySignature = "";
+    cameraSignature = "";
     if (current === "recordings") {
       content.innerHTML =
         '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="180">3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option><option value="1440">24 hours</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><p id="recording-allowance-notice" class="field-help" role="status" hidden></p><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><p id="recording-recovery-status" class="field-help" role="status"></p><div id="media-library" class="media-library"></div></section>';
@@ -246,6 +248,18 @@
       );
       find("#capture-tiled").addEventListener("click", () =>
         act("/api/captures", [...selected]),
+      );
+      recordingLibrary = window.spyderRecordingLibrary.mount(
+        find("#media-library"),
+        media.items || [],
+        {
+          readStatus,
+          request,
+          onUpdate: (status) => {
+            media = status;
+            update();
+          },
+        },
       );
     } else if (current === "vision-lab") {
       content.innerHTML =
@@ -720,134 +734,7 @@
     if (window.spyderShowcase)
       recoveryStatus.textContent =
         "Browser demo recordings stay in memory; a crashed or closed tab cannot be recovered. Download before closing.";
-    const library = find("#media-library");
-    const signatureItems = JSON.stringify(media.items || []);
-    if (signatureItems !== librarySignature) {
-      librarySignature = signatureItems;
-      library.replaceChildren();
-      if (!media.items?.length)
-        library.textContent = "Your recordings and captures will appear here.";
-      for (const item of [...(media.items || [])].reverse()) {
-        const row = document.createElement("article");
-        row.className = "media-item recording-library-item";
-        const detail = document.createElement("div");
-        const name = document.createElement("strong");
-        name.textContent =
-          item.kind === "capture"
-            ? "Frame capture"
-            : "Tiled recording" +
-              (item.segment_index ? ` · clip ${item.segment_index}` : "");
-        const note = document.createElement("p");
-        note.textContent =
-          new Date(item.created_at).toLocaleString() +
-          " · " +
-          (item.size_bytes / 1024 ** 2).toFixed(2) +
-          " MiB" +
-          (item.duration_seconds != null
-            ? " · " + item.duration_seconds.toFixed(1) + "s"
-            : "");
-        detail.append(name, note);
-        const download = document.createElement("a");
-        download.className = "button secondary";
-        download.textContent = "Download";
-        download.href = item.url;
-        download.download = item.filename;
-        const preview = window.spyderEventLibrary.mediaButton(item);
-        preview.classList.add("recording-thumbnail");
-        const image = document.createElement("img");
-        image.alt = "";
-        image.loading = "lazy";
-        image.decoding = "async";
-        const thumbnailUrl =
-          item.kind === "capture"
-            ? item.url
-            : window.spyderShowcase
-              ? item.thumbnail_url || ""
-              : `/api/media/${encodeURIComponent(item.id)}/thumbnail?v=${item.size_bytes}`;
-        const play = icon(item.kind === "capture" ? "capture" : "play");
-        play.classList.add("recording-thumbnail-overlay");
-        const missing = document.createElement("span");
-        missing.className = "recording-thumbnail-missing";
-        missing.textContent = "Preview unavailable";
-        missing.hidden = Boolean(thumbnailUrl);
-        image.hidden = !thumbnailUrl;
-        if (thumbnailUrl) image.src = thumbnailUrl;
-        image.addEventListener("error", () => {
-          image.hidden = true;
-          missing.hidden = false;
-        });
-        preview.replaceChildren(image, play, missing);
-        const actions = document.createElement("div");
-        actions.className = "recording-item-actions";
-        actions.append(download);
-        row.append(preview, detail, actions);
-        if (item.recovered) {
-          const recovered = document.createElement("small");
-          recovered.textContent = "Recovered after interruption";
-          detail.append(recovered);
-        }
-        if (
-          item.kind === "recording" &&
-          !item.archived &&
-          !window.spyderShowcase
-        ) {
-          const keep = button(
-            item.keep_forever ? "Kept forever · allow cleanup" : "Keep forever",
-            async () => {
-              keep.disabled = true;
-              try {
-                await request(
-                  `/api/media/${encodeURIComponent(item.id)}/keep`,
-                  { keep_forever: !item.keep_forever },
-                );
-                media = await readStatus();
-                update();
-              } catch (error) {
-                tell(error.message);
-                keep.disabled = false;
-              }
-            },
-          );
-          keep.setAttribute("aria-pressed", String(!!item.keep_forever));
-          actions.append(keep);
-          if (!item.keep_forever) {
-            const remove = button("Delete recording", () => {
-              remove.hidden = true;
-              const confirmation = document.createElement("span");
-              confirmation.textContent =
-                "Permanently delete this clip? Event attachments will also become unavailable. ";
-              const confirm = button("Delete permanently", async () => {
-                confirm.disabled = true;
-                try {
-                  await request(
-                    `/api/media/${encodeURIComponent(item.id)}/delete`,
-                  );
-                  media = await readStatus();
-                  update();
-                } catch (error) {
-                  tell(error.message);
-                  confirm.disabled = false;
-                }
-              });
-              const cancel = button("Cancel", () => {
-                confirmation.remove();
-                confirm.remove();
-                cancel.remove();
-                remove.hidden = false;
-              });
-              actions.append(confirmation, confirm, cancel);
-            });
-            actions.append(remove);
-          }
-          if (item.compressed) {
-            const badge = document.createElement("small");
-            badge.textContent = "Recompressed · reduced detail";
-            actions.append(badge);
-          }
-        }
-        library.append(row);
-      }
-    }
+    recordingLibrary?.setItems(media.items || []);
   }
   window.addEventListener("hashchange", route);
   window.addEventListener("spyder:vision-lab-ready", () => {
