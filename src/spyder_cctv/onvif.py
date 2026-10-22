@@ -339,6 +339,7 @@ class _Session:
     lock: threading.RLock = field(default_factory=threading.RLock)
     timer: threading.Timer | None = None
     moving: bool = False
+    moving_profile_token: str | None = None
     move_generation: int = 0
     pinned: bool = False
 
@@ -517,7 +518,15 @@ class OnvifBackend:
             "session_id": session_id,
             "device": {"endpoint": normalized, "name": "ONVIF camera"},
             "profiles": [
-                {key: item[key] for key in ("token", "name", "ptz")} for item in profiles
+                {
+                    "token": item["token"],
+                    "name": item["name"],
+                    "ptz": item["ptz"],
+                    "ptz_caps": self._public_profile_caps(
+                        profile_ptz_caps[item["token"]]
+                    ),
+                }
+                for item in profiles
             ],
             "ptz": {
                 key: value
@@ -679,6 +688,13 @@ class OnvifBackend:
             raise OnvifError("Unknown media profile")
         return profile
 
+    @staticmethod
+    def _public_profile_caps(caps: dict[str, Any]) -> dict[str, bool]:
+        return {
+            key: bool(caps.get(key, False))
+            for key in ("pan_tilt", "zoom", "presets")
+        }
+
     def move(self, session_id: str, profile_token: str, pan: float, tilt: float, zoom: float,
              duration_ms: int = 250) -> dict[str, Any]:
         session = self._session(session_id)
@@ -703,14 +719,15 @@ class OnvifBackend:
             return self.stop(session_id)
         with session.lock:
             if session.moving:
+                previous_profile = session.moving_profile_token or profile_token
                 self._cancel_timer(session)
                 try:
-                    self._send_stop(session, profile_token)
+                    self._send_stop(session, previous_profile)
                 except OnvifError:
                     session.timer = threading.Timer(
                         0.5,
                         self._deadman_stop,
-                        args=(session, profile_token, session.move_generation),
+                        args=(session, previous_profile, session.move_generation),
                     )
                     session.timer.daemon = True
                     session.timer.start()
@@ -718,6 +735,7 @@ class OnvifBackend:
             else:
                 self._cancel_timer(session)
             session.move_generation += 1
+            generation = session.move_generation
             velocity = ""
             if pan or tilt:
                 space = caps["pan_tilt_space"]
@@ -738,16 +756,18 @@ class OnvifBackend:
                 f'<t:Timeout>PT{duration_ms / 1000:.3f}S</t:Timeout>'
                 "</t:ContinuousMove>"
             )
-            self._request(session, session.ptz_endpoint, "ContinuousMove", body)
             session.moving = True
+            session.moving_profile_token = profile_token
             timer = threading.Timer(
                 duration_ms / 1000,
                 self._deadman_stop,
-                args=(session, profile_token, session.move_generation),
+                args=(session, profile_token, generation),
             )
             timer.daemon = True
             session.timer = timer
             timer.start()
+            # Request may reach camera even if HTTP response fails; keep deadman armed.
+            self._request(session, session.ptz_endpoint, "ContinuousMove", body)
         return {"moving": True, "duration_ms": duration_ms}
 
     @staticmethod
@@ -794,15 +814,19 @@ class OnvifBackend:
         )
         self._request(session, session.ptz_endpoint, "Stop", body)
         session.moving = False
+        session.moving_profile_token = None
 
     def stop(self, session_id: str) -> dict[str, bool]:
         session = self._session(session_id)
         with session.lock:
             if session.ptz_endpoint:
-                profile = next(
-                    (item for item in session.profiles if item["ptz"]), session.profiles[0]
-                )
-                self._send_stop(session, profile["token"])
+                profile_token = session.moving_profile_token
+                if profile_token is None:
+                    profile = next(
+                        (item for item in session.profiles if item["ptz"]), session.profiles[0]
+                    )
+                    profile_token = profile["token"]
+                self._send_stop(session, profile_token)
             session.move_generation += 1
             self._cancel_timer(session)
         return {"moving": False}
@@ -828,7 +852,14 @@ class OnvifBackend:
         session = self._session(session_id)
         return {"connected": True, "expires_in": max(0, int(session.expires_at - time.monotonic())),
                 "profiles": [
-                    {key: item[key] for key in ("token", "name", "ptz")}
+                    {
+                        "token": item["token"],
+                        "name": item["name"],
+                        "ptz": item["ptz"],
+                        "ptz_caps": self._public_profile_caps(
+                            session.profile_ptz_caps.get(item["token"], {})
+                        ),
+                    }
                     for item in session.profiles
                 ],
                 "ptz": {key: value for key, value in session.ptz_caps.items()
@@ -847,10 +878,14 @@ class OnvifBackend:
             session.move_generation += 1
             if session.moving:
                 try:
-                    profile = next(
-                        (item for item in session.profiles if item["ptz"]), session.profiles[0]
-                    )
-                    self._send_stop(session, profile["token"])
+                    profile_token = session.moving_profile_token
+                    if profile_token is None:
+                        profile = next(
+                            (item for item in session.profiles if item["ptz"]),
+                            session.profiles[0],
+                        )
+                        profile_token = profile["token"]
+                    self._send_stop(session, profile_token)
                 except (OnvifError, IndexError):
                     session.moving = False
             session.username = ""
