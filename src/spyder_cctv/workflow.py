@@ -22,6 +22,8 @@ from .events import EventService
 from .workflow_code import run_code, validate_code
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_WORKFLOWS = 5000
+_MAX_WORKFLOW_BYTES = 64 * 1024 * 1024
 _ENGINES = ("opencv", "yolo", "insightface")
 _BUILTIN_MODELS = {
     "builtin-scrfd-500mf": "scrfd-500mf",
@@ -469,8 +471,10 @@ class WorkflowService:
         self._path = self.storage_dir / "workflows.json"
         self._lock = threading.RLock()
         self._storage_error: str | None = None
+        self._summary_cache: list[dict[str, Any]] = []
         try:
             self._graphs = self._load()
+            self._rebuild_summary_cache()
         except (OSError, ValueError) as exc:
             self._graphs = {}
             self._storage_error = str(exc)[:200] or "Cannot load workflow storage"
@@ -521,6 +525,7 @@ class WorkflowService:
         with self._lock:
             return {
                 "workflows": copy.deepcopy(list(self._graphs.values())),
+                "counts": self._workflow_counts(),
                 "catalog": self.catalog(),
                 "events": copy.deepcopy(self._events[-100:]),
                 "runtime": copy.deepcopy(self._runtime),
@@ -532,6 +537,96 @@ class WorkflowService:
                     else None
                 ),
             }
+
+    def _rebuild_summary_cache(self) -> None:
+        self._summary_cache = []
+        for graph in self._graphs.values():
+            cameras = set(graph["camera_ids"])
+            engines = set()
+            for node in graph["nodes"]:
+                if node["type"] == "camera" and node["params"].get("camera_id"):
+                    cameras.add(node["params"]["camera_id"])
+                if node["type"] == "detections":
+                    engine = node["params"].get("engine", "any")
+                    if engine != "any":
+                        engines.add(engine)
+            self._summary_cache.append({
+                "id": graph["id"], "name": graph["name"], "enabled": graph["enabled"],
+                "camera_ids": sorted(cameras), "engines": sorted(engines),
+                "node_count": len(graph["nodes"]), "edge_count": len(graph["edges"]),
+            })
+        self._summary_cache.sort(key=lambda item: (item["name"].casefold(), item["id"]))
+
+    def _workflow_counts(self) -> dict[str, int]:
+        total = len(self._summary_cache)
+        enabled = sum(item["enabled"] for item in self._summary_cache)
+        return {"total": total, "enabled": enabled, "disabled": total - enabled}
+
+    def library(self, *, query="", status="", camera="", engine="", sort="name", page=1, size=25):
+        if sort not in ("name", "name_desc", "enabled"):
+            raise ValueError("Invalid workflow sort")
+        page = max(1, page)
+        size = min(50, max(1, size))
+        with self._lock:
+            rows = self._summary_cache
+            q = query.casefold()
+            rows = [
+                item for item in rows
+                if not q
+                or q in " ".join(
+                    (item["id"], item["name"], *item["camera_ids"], *item["engines"])
+                ).casefold()
+            ]
+            rows = [
+                item for item in rows
+                if status not in ("enabled", "disabled", "empty")
+                or (item["enabled"] if status == "enabled"
+                    else not item["enabled"] if status == "disabled"
+                    else item["node_count"] == 0)
+            ]
+            rows = [item for item in rows if not camera or camera in item["camera_ids"]]
+            rows = [item for item in rows if not engine or engine in item["engines"]]
+            if sort == "name_desc":
+                rows.sort(key=lambda item: item["id"])
+                rows.sort(key=lambda item: item["name"].casefold(), reverse=True)
+            elif sort == "enabled":
+                rows.sort(
+                    key=lambda item: (
+                        not item["enabled"], item["name"].casefold(), item["id"]
+                    )
+                )
+            total = len(rows)
+            pages = (total + size - 1) // size
+            page = min(page, max(1, pages))
+            return {"items": copy.deepcopy(rows[(page - 1) * size:page * size]), "total": total,
+                    "pages": pages, "page": page, "size": size, "counts": self._workflow_counts(),
+                    "storage_error": self._storage_error}
+
+    def get(self, workflow_id: str) -> dict[str, Any]:
+        with self._lock:
+            graph = self._graphs.get(workflow_id)
+            if graph is None:
+                raise KeyError(workflow_id)
+            return copy.deepcopy(graph)
+
+    def rename(self, workflow_id: str, name: str) -> dict[str, Any]:
+        if not isinstance(name, str) or not name.strip() or len(name) > 128:
+            raise ValueError("Invalid workflow name")
+        with self._lock:
+            graph = self._graphs.get(workflow_id)
+            if graph is None:
+                raise KeyError(workflow_id)
+            if self._storage_error:
+                raise RuntimeError("Workflow storage is unavailable")
+            previous = graph["name"]
+            graph["name"] = name
+            try:
+                self._persist()
+            except Exception:
+                graph["name"] = previous
+                raise
+            self._rebuild_summary_cache()
+            return copy.deepcopy(graph)
 
     def debug(self) -> dict[str, Any]:
         """Latest execution counters only; never store frames or detection payloads."""
@@ -853,7 +948,7 @@ class WorkflowService:
         with self._lock:
             if self._storage_error:
                 raise RuntimeError("Workflow storage is unavailable")
-            if normalized["id"] not in self._graphs and len(self._graphs) >= 32:
+            if normalized["id"] not in self._graphs and len(self._graphs) >= _MAX_WORKFLOWS:
                 raise ValueError("Workflow limit exceeded")
             snapshot = self._graphs.copy()
             previous = self._graphs.get(normalized["id"])
@@ -891,6 +986,7 @@ class WorkflowService:
                 self._graphs = snapshot
                 self._restore_activation_settings(old_settings, old_analysis)
                 raise
+            self._rebuild_summary_cache()
             if previous is None or any(
                 previous.get(key) != normalized.get(key) for key in ("nodes", "edges", "camera_ids")
             ):
@@ -1283,6 +1379,7 @@ class WorkflowService:
             except Exception:
                 self._graphs = snapshot
                 raise
+            self._rebuild_summary_cache()
             self._release_workflow_recordings(workflow_id)
             self._clear_graph_state(workflow_id)
             self._debug.pop(workflow_id, None)
@@ -1350,15 +1447,15 @@ class WorkflowService:
     def _load(self) -> dict[str, dict[str, Any]]:
         if not self._path.exists():
             return {}
-        if self._path.stat().st_size > 2 * 1024 * 1024:
-            raise ValueError("Workflow file exceeds 2 MiB")
+        if self._path.stat().st_size > _MAX_WORKFLOW_BYTES:
+            raise ValueError("Workflow file exceeds 64 MiB")
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             if (
                 not isinstance(data, dict)
                 or set(data) != {"workflows"}
                 or not isinstance(data["workflows"], list)
-                or len(data["workflows"]) > 32
+                or len(data["workflows"]) > _MAX_WORKFLOWS
             ):
                 raise ValueError("Invalid workflow file")
             graphs = [_validate_graph(item) for item in data["workflows"]]
@@ -1372,8 +1469,8 @@ class WorkflowService:
         payload = json.dumps(
             {"workflows": list(self._graphs.values())}, ensure_ascii=False, indent=2
         ).encode("utf-8")
-        if len(payload) > 2 * 1024 * 1024:
-            raise ValueError("Workflow file exceeds 2 MiB")
+        if len(payload) > _MAX_WORKFLOW_BYTES:
+            raise ValueError("Workflow file exceeds 64 MiB")
         fd, temp_name = tempfile.mkstemp(prefix=".workflows-", suffix=".tmp", dir=self.storage_dir)
         try:
             with os.fdopen(fd, "wb") as stream:
@@ -1415,7 +1512,7 @@ class WorkflowService:
     def _tick_locked(self, statuses: dict[str, dict[str, Any]], now: float) -> None:
         self._poll_motion_events(statuses)
         with self._lock:
-            graphs = copy.deepcopy(list(self._graphs.values()))
+            graphs = copy.deepcopy([graph for graph in self._graphs.values() if graph["enabled"]])
             self._runtime = {
                 graph["id"]: {
                     "state": "enabled" if graph["enabled"] else "disabled",
