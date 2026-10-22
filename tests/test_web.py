@@ -1255,3 +1255,19 @@ def test_model_removal_checks_relative_model_paths_in_latest_saved_camera_config
         urlopen(remove, timeout=4)
     assert error.value.code == 409
     assert source.exists()
+
+
+def test_workflow_library_api_paginates_and_serves_one_graph(server):
+    url, _ = server
+    def request(path):
+        with urlopen(url + path, timeout=4) as response:
+            return json.load(response)
+    library = request("/api/workflows/library?query=&page=1&size=25")
+    assert set(library) == {"items", "total", "pages", "page", "size", "counts", "storage_error"}
+    assert library["items"] == []
+    with pytest.raises(HTTPError) as error:
+        request("/api/workflows/library?page=zero")
+    assert error.value.code == 400
+    with pytest.raises(HTTPError) as error:
+        request("/api/workflows/missing")
+    assert error.value.code == 404

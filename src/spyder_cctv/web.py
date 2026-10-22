@@ -287,9 +287,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/vision-lab.js",
                 "/vision-lab.css",
                 "/workflow-editor.js",
+                "/workflow-manager.js",
+                "/workflow-store.js",
                 "/workflow-preview.js",
                 "/workflow-notifications.js",
                 "/workflow-editor.css",
+                "/workflow-manager.css",
                 "/event-library.js",
                 "/event-library.css",
                 "/recording-library.js",
@@ -400,9 +403,85 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             elif path == "/api/recordings/schedules":
                 self.json(200, schedules.snapshot())
             elif path == "/api/workflows/debug":
-                self.json(200, workflows.debug())
+                query = parse_qs(urlsplit(self.path).query, strict_parsing=True)
+                if set(query) - {"workflow_id"} or any(
+                    len(values) != 1 for values in query.values()
+                ):
+                    self.json(400, {"error": "Invalid workflow debug query"})
+                else:
+                    result = workflows.debug()
+                    workflow_id = query.get("workflow_id", [None])[0]
+                    if workflow_id is not None:
+                        if workflow_id not in workflows._graphs:
+                            self.json(404, {"error": "Unknown workflow"})
+                        else:
+                            result["workflows"] = {
+                                workflow_id: result["workflows"].get(workflow_id)
+                            }
+                            self.json(200, result)
+                    else:
+                        self.json(200, result)
+            elif path == "/api/workflows/library":
+                try:
+                    query = parse_qs(
+                        urlsplit(self.path).query,
+                        keep_blank_values=True,
+                        strict_parsing=True,
+                    )
+                    allowed = {"query", "status", "camera", "engine", "sort", "page", "size"}
+                    if set(query) - allowed or any(
+                        len(values) != 1 for values in query.values()
+                    ):
+                        raise ValueError("Invalid workflow library query")
+                    values = {key: items[0] for key, items in query.items()}
+                    if values.get("status", "") not in ("", "enabled", "disabled", "empty"):
+                        raise ValueError("Invalid workflow status")
+                    def integer_param(key, default):
+                        value = values.get(key, str(default))
+                        if not value.isdecimal() or int(value) < 1:
+                            raise ValueError(f"Invalid {key}")
+                        return int(value)
+                    self.json(200, workflows.library(
+                        query=values.get("query", ""), status=values.get("status", ""),
+                        camera=values.get("camera", ""), engine=values.get("engine", ""),
+                        sort=values.get("sort", "name"), page=integer_param("page", 1),
+                        size=integer_param("size", 25)))
+                except ValueError as error:
+                    self.json(400, {"error": str(error)})
             elif path == "/api/workflows":
-                self.json(200, workflows.list())
+                query = parse_qs(
+                    urlsplit(self.path).query,
+                    keep_blank_values=True,
+                    strict_parsing=True,
+                )
+                if set(query) - {"current", "first"} or any(
+                    len(values) != 1 for values in query.values()
+                ):
+                    self.json(400, {"error": "Invalid workflow list query"})
+                elif (
+                    query.get("first", ["1"])[0] != "1"
+                    or not query.get("current", ["workflow"])[0]
+                ):
+                    self.json(400, {"error": "Invalid workflow list query"})
+                else:
+                    result = workflows.list()
+                    result["counts"] = workflows._workflow_counts()
+                    selected = query.get("current", [None])[0]
+                    if selected is None and query.get("first", [""])[0] == "1":
+                        selected = next(iter(workflows._graphs), None)
+                    if selected is not None:
+                        result["workflows"] = (
+                            [workflows.get(selected)] if selected in workflows._graphs else []
+                        )
+                    elif query:
+                        result["workflows"] = []
+                    self.json(200, result)
+            elif path.startswith("/api/workflows/") and path.count("/") == 3:
+                workflow_id = path.rsplit("/", 1)[1]
+                try:
+                    self.json(200, {"workflow": workflows.get(workflow_id)})
+                except KeyError:
+                    self.json(404, {"error": "Unknown workflow"})
             elif path == "/api/vision/detectors":
                 self.json(200, {"detectors": detectors.list(), "default": "scrfd-500mf"})
             elif path == "/api/models":
@@ -927,6 +1006,13 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         200,
                         workflows.preview(data["workflow"], data["node_id"], data.get("camera_id")),
                     )
+                elif len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "rename":
+                    data = self.body()
+                    if set(data) != {"name"}:
+                        raise ValueError("Send workflow name")
+                    self.json(200, {"workflow": workflows.rename(parts[2], data["name"])})
+                elif len(parts) == 3 and parts[:2] == ["api", "workflows"]:
+                    raise ValueError("Workflow graph endpoint is read-only")
                 elif parts == ["api", "workflows"]:
                     data = self.body(1048576)
                     if "workflow" not in data or set(data) - {"workflow", "disable_motion"}:
