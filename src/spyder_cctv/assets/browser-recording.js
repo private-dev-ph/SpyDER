@@ -86,6 +86,7 @@
   let stopReason = null;
   let retained = new Set();
   let currentIds = [];
+  let recordedCameraIds = new Set();
   let stopPromise = null;
   let requestQueue = Promise.resolve();
   let generation = 0;
@@ -128,7 +129,10 @@
       size_bytes: blob.size,
       url: URL.createObjectURL(blob),
     };
-    if (duration !== undefined) item.duration_seconds = duration;
+    if (duration !== undefined) {
+      item.duration_seconds = duration;
+      item.camera_ids = [...recordedCameraIds].sort();
+    }
     if (poster) {
       item.thumbnail_url = URL.createObjectURL(poster);
       item.thumbnail_size_bytes = poster.size;
@@ -227,6 +231,8 @@
           if (fresh && source.width === 0 && source.height === 0)
             throw new Error("No fresh camera frame.");
           fit(targetCtx, source, x, y, cellW, cellH);
+          if (target === canvas && epoch === generation)
+            recordedCameraIds.add(id);
           if (overlays && ids.length > 1) {
             targetCtx.fillStyle = "rgba(0,0,0,.65)";
             targetCtx.fillRect(x, y + cellH - 52, cellW, 52);
@@ -412,6 +418,7 @@
     state.state = "idle";
     state.error = null;
     state.frames = 0;
+    recordedCameraIds = new Set();
     state.elapsed_seconds = 0;
     chunks = [];
     chunkBytes = 0;

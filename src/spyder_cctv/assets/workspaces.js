@@ -33,6 +33,91 @@
   let busy = false;
   let cameraSignature = "";
   let recordingLibrary = null;
+  let recordingTimeline = null;
+  let recordingView = "library";
+  let timelineEventsController = null;
+  let timelineEventsAt = 0;
+  let timelineRouteGeneration = 0;
+  function closeTimeline() {
+    timelineRouteGeneration++;
+    timelineEventsController?.abort();
+    timelineEventsController = null;
+    timelineEventsAt = 0;
+    recordingTimeline?.unmount();
+    recordingTimeline = null;
+  }
+  async function loadTimelineEvents() {
+    if (
+      !recordingTimeline ||
+      window.spyderShowcase ||
+      document.hidden ||
+      timelineEventsController ||
+      Date.now() - timelineEventsAt < 15000
+    )
+      return;
+    const generation = timelineRouteGeneration;
+    const controller = new AbortController();
+    timelineEventsController = controller;
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      const response = await fetch("/api/events", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw Error("Events unavailable");
+      const data = await response.json();
+      if (generation !== timelineRouteGeneration) return;
+      recordingTimeline?.setEvents(data.events || []);
+      const note = find("#timeline-events-status");
+      if (note) {
+        note.textContent = data.storage_error
+          ? "Event storage is unavailable. Recorded footage remains playable."
+          : "";
+        note.hidden = !note.textContent;
+      }
+    } catch {
+      if (generation !== timelineRouteGeneration) return;
+      const note = find("#timeline-events-status");
+      if (note) {
+        note.hidden = false;
+        note.textContent =
+          "Event markers are unavailable. Recorded footage remains playable.";
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (timelineEventsController === controller) {
+        timelineEventsController = null;
+        timelineEventsAt = Date.now();
+      }
+    }
+  }
+  function switchRecordingView(view, item) {
+    recordingView = view;
+    const timeline = find("#recording-timeline"),
+      library = find("#media-library");
+    if (!timeline || !library) return;
+    library.hidden = view === "timeline";
+    timeline.hidden = view !== "timeline";
+    for (const name of ["library", "timeline"]) {
+      const tab = find("#recording-" + name + "-tab");
+      tab.setAttribute("aria-pressed", String(view === name));
+      tab.className = "button " + (view === name ? "primary" : "secondary");
+    }
+    if (view === "timeline") {
+      if (!recordingTimeline)
+        recordingTimeline = window.spyderRecordingTimeline.mount(
+          timeline,
+          media.items || [],
+          {
+            cameras: () => app.cameras(),
+            createPlayer: (host, callbacks) =>
+              window.spyderRecordingPlayer.create(host, callbacks),
+          },
+        );
+      if (item) recordingTimeline.seekTo(Date.parse(item.created_at), item.id);
+      void loadTimelineEvents();
+    } else closeTimeline();
+  }
 
   function icon(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -161,6 +246,7 @@
     window.spyderEventLibrary?.unmount();
     recordingLibrary?.unmount();
     recordingLibrary = null;
+    closeTimeline();
     window.spyderVisionLab?.unmount();
     window.spyderWorkflows?.unmount();
     const key = location.hash.slice(1);
@@ -196,7 +282,7 @@
     cameraSignature = "";
     if (current === "recordings") {
       content.innerHTML =
-        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="180">3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option><option value="1440">24 hours</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><p id="recording-allowance-notice" class="field-help" role="status" hidden></p><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><p id="recording-recovery-status" class="field-help" role="status"></p><div id="media-library" class="media-library"></div></section>';
+        '<section class="workspace-panel"><div class="recording-heading"><h2>Tiled recording</h2><span id="recording-state" role="status"></span></div><p class="workspace-description" id="recording-description"></p><fieldset class="recording-storage" id="recording-storage"><legend>Storage &amp; quality</legend><div class="recording-storage-fields"><label>Recording profile<select id="recording-profile" aria-describedby="recording-estimate"></select></label><label>Clip length<select id="recording-segment"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="180">3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option><option value="1440">24 hours</option></select></label><button class="button secondary" id="recording-storage-save">Save storage settings</button></div><p id="recording-estimate" class="field-help" role="status"></p><p class="field-help">Estimates cover the entire tiled video, not each camera. Actual sizes vary with motion, noise and encoder. Archive sacrifices detail and smoothness; test faces and plates before relying on it. Clips limit individual file size; they do not reduce total storage.</p></fieldset><div id="recording-preview" class="recording-preview" aria-label="Selected recording layout"></div><fieldset id="recording-cameras"><legend>Include cameras · changes apply to the current video</legend></fieldset><p id="recording-allowance-notice" class="field-help" role="status" hidden></p><div class="recording-actions"><button id="record-start" class="button primary">Start recording</button><button id="record-stop" class="button secondary">Stop &amp; save</button><button id="capture-tiled" class="button secondary">Capture selected feeds</button></div><p class="field-help">Tiles resize as cameras join or leave. One tiled video; original proportions preserved. No audio. Storage settings apply to new recordings.</p></section><section class="workspace-panel"><h2>Saved recordings &amp; captures</h2><p class="field-help" id="library-note"></p><p id="recording-recovery-status" class="field-help" role="status"></p><div class="recording-actions recording-view-tabs" aria-label="Recording views"><button type="button" id="recording-library-tab" class="button primary" aria-pressed="true">Library</button><button type="button" id="recording-timeline-tab" class="button secondary" aria-pressed="false">Timeline playback</button></div><p id="timeline-events-status" class="field-help" role="status" hidden></p><div id="media-library" class="media-library"></div><div id="recording-timeline" hidden></div></section>';
       find("#recording-description").textContent = window.spyderShowcase
         ? "Record locally in this browser. Keep this tab visible. Recordings stop when hidden or at the 128 MiB memory limit. Download before closing this tab."
         : "Recorded on this computer, even while the browser is away. Clips save automatically as you record. Stop recording to save the final clip. Saved files remain available after restarting.";
@@ -255,12 +341,20 @@
         {
           readStatus,
           request,
+          onTimeline: (item) => switchRecordingView("timeline", item),
           onUpdate: (status) => {
             media = status;
             update();
           },
         },
       );
+      find("#recording-library-tab").addEventListener("click", () =>
+        switchRecordingView("library"),
+      );
+      find("#recording-timeline-tab").addEventListener("click", () =>
+        switchRecordingView("timeline"),
+      );
+      switchRecordingView(recordingView);
     } else if (current === "vision-lab") {
       content.innerHTML =
         '<div class="recording-actions"><button id="vision-motion-tab" class="button primary">Motion & ROI</button><button id="vision-workflow-tab" class="button secondary">Models & Workflows</button></div><div id="vision-mode-content"></div>';
@@ -735,6 +829,8 @@
       recoveryStatus.textContent =
         "Browser demo recordings stay in memory; a crashed or closed tab cannot be recovered. Download before closing.";
     recordingLibrary?.setItems(media.items || []);
+    recordingTimeline?.setItems(media.items || []);
+    void loadTimelineEvents();
   }
   window.addEventListener("hashchange", route);
   window.addEventListener("spyder:vision-lab-ready", () => {

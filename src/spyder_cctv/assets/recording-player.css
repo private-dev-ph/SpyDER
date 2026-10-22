@@ -1,0 +1,31 @@
+.recording-player {
+  width: 100%;
+  min-width: 0;
+}
+.recording-player-surface {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 120px;
+  background: #101010;
+}
+.recording-player-surface :is(video, img) {
+  display: block;
+  width: 100%;
+  max-height: min(60vh, 540px);
+  object-fit: contain;
+}
+.recording-player-status {
+  padding: 8px 12px;
+  margin: 0;
+  background: var(--surface);
+  color: var(--muted);
+}
+.recording-player-status:empty {
+  display: none;
+}
+@media (max-height: 520px) {
+  .recording-player-surface :is(video, img) {
+    max-height: 38vh;
+  }
+}

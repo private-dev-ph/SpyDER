@@ -552,3 +552,21 @@ test("new defaults preserve saved lengths and long choices survive reload", asyn
   const reloaded = runtime({ storedSettings });
   assert.equal((await reloaded.api.status()).storage.segment_minutes, 1440);
 });
+
+test("recordings retain camera membership after selection changes and reset next session", async () => {
+  const app = runtime();
+  await app.api.request("/api/recordings/start", { camera_ids: ["cam-a"] });
+  await app.api.request("/api/recordings/cameras", { camera_ids: ["cam-b"] });
+  await app.tick();
+  await app.api.request("/api/recordings/stop");
+  const first = (await app.api.status()).items.find(
+    (item) => item.kind === "recording",
+  );
+  assert.deepEqual(Array.from(first.camera_ids), ["cam-a", "cam-b"]);
+  await app.api.request("/api/recordings/start", { camera_ids: ["cam-b"] });
+  await app.api.request("/api/recordings/stop");
+  const second = (await app.api.status()).items.find(
+    (item) => item.id !== first.id && item.kind === "recording",
+  );
+  assert.deepEqual(Array.from(second.camera_ids), ["cam-b"]);
+});

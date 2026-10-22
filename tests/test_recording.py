@@ -305,9 +305,7 @@ def test_catalog_revalidates_fields_and_rebuilds_media_urls(rig):
     manager.set_recording("red", False)
 
 
-def test_recording_catalog_tracks_camera_selection_and_rotation_resets_membership(
-    rig, monkeypatch
-):
+def test_recording_catalog_tracks_camera_selection_and_rotation_resets_membership(rig, monkeypatch):
     _, service, _ = rig
     monkeypatch.setattr(service, "_segment_frame_limit", lambda: 4)
     first_segment_saved = threading.Event()
@@ -766,3 +764,8 @@ def test_recording_keeps_session_during_camera_disconnect_and_recovery(tmp_path)
     finally:
         service.close()
         manager.close()
+
+
+@pytest.mark.parametrize("value", [[""], ["x" * 65], ["../camera"], ["cam", "cam"], [7]])
+def test_invalid_optional_camera_membership_is_ignored(value):
+    assert RecordingService._validated_camera_ids(value) is None
