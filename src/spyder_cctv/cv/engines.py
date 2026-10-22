@@ -153,7 +153,16 @@ class InsightFaceEngine:
                 raise VisionUnavailable(
                     "model_incompatible", "Select an InsightFace recognition ONNX model."
                 )
+            self.gallery_path = gallery_path
             self.gallery = _load_identity_gallery(gallery_path)
+            self._gallery_mtime_ns = gallery_path.stat().st_mtime_ns
+            from spyder_cctv.cv.identity_stability import IdentityStabilizer
+
+            self.identity_stabilizer = IdentityStabilizer(
+                confirmations=getattr(config, "classifier_confirmation_frames", 3),
+                switch_confirmations=getattr(config, "classifier_switch_frames", 5),
+                ttl=max(2.5, 2 / config.inference_fps),
+            )
         if config.classifier_model is not None:
             logger.warning(
                 "Closed-set face classifier cannot guarantee unknown rejection; "
@@ -179,6 +188,8 @@ class InsightFaceEngine:
                 ) from error
 
     def infer(self, frame: Any) -> list[Detection]:
+        if self.recognizer is not None:
+            self._reload_gallery_if_changed()
         boxes, landmarks = self.model.detect(frame, max_num=self.config.max_detections)
         if boxes is None:
             if self.identity_stabilizer is not None:
@@ -188,7 +199,9 @@ class InsightFaceEngine:
         for index, row in enumerate(boxes[: self.config.max_detections]):
             identity, similarity = None, None
             identity_confidence = None
-            identity_status = None
+            identity_status = (
+                "unknown" if self.recognizer is not None and not self.gallery else None
+            )
             if self.classifier is not None:
                 if landmarks is None or index >= len(landmarks):
                     raise VisionUnavailable(
@@ -204,6 +217,7 @@ class InsightFaceEngine:
                 identity_status = "known" if identity is not None else "unknown"
             if (
                 self.recognizer is not None
+                and self.gallery
                 and index < 16
                 and landmarks is not None
                 and index < len(landmarks)
@@ -249,6 +263,24 @@ class InsightFaceEngine:
             detections = self.identity_stabilizer.update(detections)
         return detections
 
+    def _reload_gallery_if_changed(self) -> None:
+        """Load a fully replaced gallery file before the next inference frame."""
+        if self.recognizer is None:
+            return
+        try:
+            mtime_ns = self.gallery_path.stat().st_mtime_ns
+        except OSError as error:
+            raise VisionUnavailable(
+                "gallery_invalid", "Identity gallery file is unavailable."
+            ) from error
+        if mtime_ns != self._gallery_mtime_ns:
+            gallery = _load_identity_gallery(self.gallery_path)
+            self.gallery = gallery
+            self._gallery_mtime_ns = mtime_ns
+            stabilizer = getattr(self, "identity_stabilizer", None)
+            if stabilizer is not None:
+                stabilizer.clear()
+
     def reset(self) -> None:
         """Forget temporal identities after inference has been idle; retain model weights."""
         if self.identity_stabilizer is not None:
@@ -291,7 +323,7 @@ def _load_identity_gallery(path: Path) -> list[tuple[str, np.ndarray]]:
         ):
             raise ValueError("invalid gallery schema")
         records = data["identities"]
-        if not isinstance(records, list) or not 1 <= len(records) <= 1000:
+        if not isinstance(records, list) or len(records) > 1000:
             raise ValueError("invalid identity count")
         gallery, names, dimension = [], set(), None
         for record in records:

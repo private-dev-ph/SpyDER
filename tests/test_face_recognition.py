@@ -99,7 +99,8 @@ def test_insightface_matches_aligned_local_embedding_and_applies_threshold(tmp_p
     )
     engine = InsightFaceEngine(config)
     frame = np.zeros((32, 32, 3), dtype=np.uint8)
-    detection = engine.infer(frame)[0]
+    detections = [engine.infer(frame)[0] for _ in range(3)]
+    detection = detections[-1]
     assert detection.identity == "Ada" and detection.similarity == 1.0
     assert calls["alignment"][0] is frame and calls["alignment"][2] == 112
     assert calls["models"][0][1]["download"] is False
