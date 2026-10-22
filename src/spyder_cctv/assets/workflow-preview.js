@@ -333,7 +333,7 @@
       cancel(state);
       state.message = state.running
         ? "Starting branch preview…"
-        : "Paused · last frame frozen. Camera and workflow continue running.";
+        : "Paused · last frame frozen. Preview inference expires within 5 seconds; enabled workflows continue.";
       paint(state);
       clearTimeout(timer);
       cycle();

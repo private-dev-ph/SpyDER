@@ -236,6 +236,7 @@ def test_reconnect_clears_stale_data_reapplies_settings_and_resets_pipeline(read
         session = worker.status()["capture_session"]
         dropped.set()
         wait_for(lambda: worker.status()["state"] == "reconnecting" and captures[0].closed)
+        assert worker._pipeline is None
         assert worker.jpeg() is None and worker.raw_frame() is None
         assert worker.status()["metadata"] == {}
         assert pipelines[0].closed
@@ -387,3 +388,318 @@ def test_many_offline_cameras_cancel_retries_on_manager_close(count):
 )
 def test_linux_device_paths_support_reconnection(source):
     assert CameraWorker(CameraConfig("device", source)).status()["reconnection"]["enabled"]
+
+
+class DemandPipeline:
+    def __init__(self):
+        self.active = True
+        self.processed = 0
+        self.active_changes = []
+        self.closed = False
+
+    def set_active(self, active):
+        self.active = active
+        self.active_changes.append(active)
+
+    def process(self, frame):
+        assert self.active
+        self.processed += 1
+        return frame, {"cv": {"state": "ready", "detections": [{"label": "person"}]}}
+
+    def close(self):
+        self.closed = True
+
+
+def test_managed_vision_is_lazy_and_idle_capture_continues():
+    import numpy as np
+
+    frames = []
+    pipelines = []
+
+    class ArrayCapture(FakeCapture):
+        def read(self):
+            return True, np.zeros((2, 2, 3), dtype=np.uint8)
+
+    def make_pipeline(name):
+        pipeline = DemandPipeline()
+        pipelines.append(pipeline)
+        return pipeline
+
+    manager = CameraManager(
+        [CameraConfig("front", 0, fps=60, pipeline="vision")],
+        capture_factory=ArrayCapture,
+        pipeline_factory=make_pipeline,
+        encoder=lambda frame: frames.append(frame.copy()) or b"jpeg",
+    )
+    worker = manager.get_worker("front")
+    try:
+        manager.set_workflow_vision_cameras(set())
+        worker.start()
+        wait_for(lambda: worker.status()["frames"] >= 3)
+        assert pipelines == []
+        assert worker.vision_snapshot()["runtime"]["state"] == "idle"
+        assert worker.status()["metadata"]["cv"]["result_age_seconds"] is None
+        manager.set_vision("front", {"confidence": 0.6})
+        assert pipelines == []
+        assert worker.config.pipeline == "vision"
+        assert worker.config.vision.confidence == 0.6
+        frame_count = worker.status()["frames"]
+        manager.set_workflow_vision_cameras({"front"})
+        wait_for(lambda: pipelines and pipelines[0].processed > 0)
+        assert worker.config.pipeline == "vision"
+        manager.set_workflow_vision_cameras(set())
+        wait_for(lambda: worker.status()["metadata"]["cv"]["state"] == "idle")
+        wait_for(lambda: worker.status()["frames"] > frame_count)
+        process_count = pipelines[0].processed
+        frames_after_idle = worker.status()["frames"]
+        wait_for(lambda: worker.status()["frames"] > frames_after_idle)
+        assert pipelines[0].active is False
+        assert pipelines[0].processed == process_count
+        assert worker.config.pipeline == "vision"
+        assert frames
+    finally:
+        manager.close()
+
+
+def test_preview_is_temporary_demand_and_raw_reads_do_not_renew_it():
+    import numpy as np
+
+    pipelines = []
+
+    class ArrayCapture(FakeCapture):
+        def read(self):
+            return True, np.zeros((2, 2, 3), dtype=np.uint8)
+
+    manager = CameraManager(
+        [CameraConfig("front", 0, fps=60, pipeline="vision")],
+        capture_factory=ArrayCapture,
+        pipeline_factory=lambda name: pipelines.append(DemandPipeline()) or pipelines[-1],
+        encoder=lambda frame: b"jpeg",
+    )
+    worker = manager.get_worker("front")
+    try:
+        manager.set_workflow_vision_cameras(set())
+        worker.start()
+        wait_for(lambda: worker.status()["frames"] > 0)
+        worker.request_vision_preview(ttl=0.08)
+        wait_for(lambda: pipelines and pipelines[0].processed > 0)
+        deadline = time.monotonic() + 0.12
+        while time.monotonic() < deadline:
+            worker.raw_frame()
+            time.sleep(0.005)
+        wait_for(lambda: worker.status()["metadata"]["cv"]["state"] == "idle")
+        processed = pipelines[0].processed
+        wait_for(lambda: worker.status()["frames"] > 2)
+        assert pipelines[0].active is False
+        assert pipelines[0].processed == processed
+    finally:
+        manager.close()
+
+
+def test_manager_snapshot_applies_to_existing_and_added_workers(tmp_path):
+    manager = CameraManager([], config_path=tmp_path / "config.json")
+    try:
+        manager.set_workflow_vision_cameras({"active"})
+        manager.add(CameraConfig("active", 0, pipeline="vision"))
+        manager.add(CameraConfig("idle", 1, pipeline="vision"))
+        saved = (tmp_path / "config.json").read_bytes()
+        assert manager.get_worker("active")._workflow_vision_required is True
+        assert manager.get_worker("idle")._workflow_vision_required is False
+        manager.set_workflow_vision_cameras(set())
+        assert manager.get_worker("active").vision_snapshot()["runtime"]["state"] == "idle"
+        assert (tmp_path / "config.json").read_bytes() == saved
+    finally:
+        manager.close()
+
+
+def test_raw_preview_lease_keeps_frames_fresh_without_vision_demand():
+    import numpy as np
+
+    class ArrayCapture(FakeCapture):
+        def __init__(self, source):
+            super().__init__(source)
+            self.sequence = 0
+
+        def read(self):
+            self.sequence += 1
+            return True, np.full((2, 2, 3), self.sequence % 255, dtype=np.uint8)
+
+    pipelines = []
+    manager = CameraManager(
+        [CameraConfig("front", 0, fps=60, pipeline="vision")],
+        capture_factory=ArrayCapture,
+        pipeline_factory=lambda name: pipelines.append(DemandPipeline()) or pipelines[-1],
+        encoder=lambda frame: b"jpeg",
+    )
+    worker = manager.get_worker("front")
+    try:
+        manager.set_workflow_vision_cameras(set())
+        worker.start()
+        wait_for(lambda: worker.status()["frames"] >= 3)
+        assert pipelines == []
+        assert worker.vision_snapshot()["runtime"]["state"] == "idle"
+        deadline = time.monotonic() + 0.15
+        raw = None
+        while time.monotonic() < deadline and raw is None:
+            raw = worker.raw_frame()
+            time.sleep(0.005)
+        assert raw is not None
+        initial_pixel = int(raw[0, 0, 0])
+        time.sleep(0.04)
+        renewed = worker.raw_frame()
+        assert renewed is not None
+        assert int(renewed[0, 0, 0]) != initial_pixel
+        assert worker.status()["metadata"]["cv"]["state"] == "idle"
+        assert pipelines == []
+    finally:
+        manager.close()
+
+
+def test_config_change_during_pipeline_creation_fences_old_generation():
+    import numpy as np
+
+    factory_entered = threading.Event()
+    release_factory = threading.Event()
+    second_read = threading.Event()
+    release_capture = threading.Event()
+    pipelines = []
+
+    class Capture(FakeCapture):
+        def __init__(self, source):
+            super().__init__(source)
+            self.reads = 0
+
+        def read(self):
+            self.reads += 1
+            if self.reads == 1:
+                return True, np.zeros((2, 2, 3), dtype=np.uint8)
+            second_read.set()
+            release_capture.wait(2)
+            return True, np.zeros((2, 2, 3), dtype=np.uint8)
+
+    class OldPipeline(DemandPipeline):
+        def process(self, frame):
+            self.processed += 1
+            return frame, {"cv": {"state": "ready", "detections": [{"label": "old"}]}}
+
+    def make_pipeline(name):
+        factory_entered.set()
+        assert release_factory.wait(2)
+        pipeline = OldPipeline()
+        pipelines.append(pipeline)
+        return pipeline
+
+    manager = CameraManager(
+        [CameraConfig("front", 0, fps=60, pipeline="vision")],
+        capture_factory=Capture,
+        pipeline_factory=make_pipeline,
+        encoder=lambda frame: b"jpeg",
+    )
+    worker = manager.get_worker("front")
+    try:
+        manager.set_workflow_vision_cameras({"front"})
+        worker.start()
+        assert factory_entered.wait(2)
+        manager.set_vision("front", {"confidence": 0.6})
+        release_factory.set()
+        assert second_read.wait(2)
+        runtime = worker.status()["metadata"]["cv"]
+        assert runtime["state"] == "scheduled"
+        assert runtime["detections"] == []
+        assert pipelines[0].processed == 1
+    finally:
+        release_factory.set()
+        release_capture.set()
+        manager.close()
+
+
+def test_rapid_pause_resume_serializes_runtime_activity_transitions():
+    pause_entered = threading.Event()
+    release_pause = threading.Event()
+    resume_lock_attempted = threading.Event()
+    resume_finished = threading.Event()
+    pipelines = []
+
+    class BlockingPausePipeline(DemandPipeline):
+        def __init__(self):
+            super().__init__()
+            self.epoch = 0
+            self.pause_blocked = False
+
+        def set_active(self, active):
+            if not active and not self.pause_blocked:
+                self.pause_blocked = True
+                pause_entered.set()
+                assert release_pause.wait(2)
+                self.epoch += 1
+            super().set_active(active)
+
+        def process(self, frame):
+            assert self.active
+            self.processed += 1
+            return frame, {
+                "cv": {
+                    "state": "ready",
+                    "detections": [],
+                    "epoch": self.epoch,
+                }
+            }
+
+    def make_pipeline(name):
+        pipeline = BlockingPausePipeline()
+        pipelines.append(pipeline)
+        return pipeline
+
+    manager = CameraManager(
+        [CameraConfig("front", 0, fps=60, pipeline="vision")],
+        capture_factory=FakeCapture,
+        pipeline_factory=make_pipeline,
+        encoder=lambda frame: b"jpeg",
+    )
+    worker = manager.get_worker("front")
+
+    class ObservedActivityLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if threading.current_thread().name == "resume-demand":
+                resume_lock_attempted.set()
+            self.lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            self.lock.release()
+
+    try:
+        manager.set_workflow_vision_cameras({"front"})
+        worker.start()
+        wait_for(lambda: pipelines and pipelines[0].processed > 0)
+        worker._pipeline_activity_lock = ObservedActivityLock()
+        pausing = threading.Thread(
+            target=lambda: worker.set_workflow_vision_required(False), name="pause-demand"
+        )
+
+        def resume():
+            worker.set_workflow_vision_required(True)
+            resume_finished.set()
+
+        pausing.start()
+        assert pause_entered.wait(2)
+        resuming = threading.Thread(target=resume, name="resume-demand")
+        resuming.start()
+        assert resume_lock_attempted.wait(2)
+        assert worker._workflow_vision_required is False
+        assert not resume_finished.is_set()
+        release_pause.set()
+        pausing.join(2)
+        resuming.join(2)
+        assert not pausing.is_alive() and not resuming.is_alive()
+        assert resume_finished.is_set()
+        assert pipelines[0].active is True
+        assert pipelines[0].epoch == 1
+        assert pipelines[0].active_changes[-2:] == [False, True]
+        wait_for(lambda: worker.status()["metadata"]["cv"].get("epoch") == 1)
+    finally:
+        release_pause.set()
+        manager.close()

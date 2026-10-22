@@ -20,7 +20,9 @@ class VisionPipeline:
         self._factory = engine_factory
         self._condition = threading.Condition()
         self._stop = False
-        self._pending: tuple[int, float, Any] | None = None
+        self._active = True
+        self._epoch = 0
+        self._pending: tuple[int, int, float, Any] | None = None
         self._next_submission = 0.0
         self._sequence = 0
         self._result_time: float | None = None
@@ -37,9 +39,18 @@ class VisionPipeline:
     def process(self, frame: Any) -> tuple[Any, dict[str, Any]]:
         now = time.monotonic()
         with self._condition:
+            if not self._active:
+                return frame, {
+                    "cv": {
+                        "engine": self.config.engine,
+                        "state": "idle",
+                        "detections": [],
+                        "message": "Inference idle",
+                    }
+                }
             if not self._stop and self._result["state"] != "error" and now >= self._next_submission:
                 self._sequence += 1
-                self._pending = (self._sequence, now, frame.copy())
+                self._pending = (self._epoch, self._sequence, now, frame.copy())
                 self._next_submission = now + 1 / self.config.inference_fps
                 self._condition.notify()
             result = copy.deepcopy(self._result)
@@ -74,6 +85,7 @@ class VisionPipeline:
 
     def _run(self) -> None:
         engine = None
+        engine_epoch = 0
         try:
             engine = self._factory(self.config)
             while True:
@@ -81,8 +93,18 @@ class VisionPipeline:
                     self._condition.wait_for(lambda: self._stop or self._pending is not None)
                     if self._stop:
                         break
-                    sequence, captured, frame = self._pending
+                    epoch, sequence, captured, frame = self._pending
                     self._pending = None
+                if epoch != engine_epoch:
+                    reset = getattr(engine, "reset", None)
+                    if callable(reset):
+                        reset()
+                    engine_epoch = epoch
+                with self._condition:
+                    if self._stop:
+                        break
+                    if not self._active or epoch != self._epoch:
+                        continue
                 began = time.monotonic()
                 detections = engine.infer(frame)
                 classes = getattr(engine, "class_names", [])
@@ -104,7 +126,8 @@ class VisionPipeline:
                 with self._condition:
                     if self._stop:
                         break
-                    self._result, self._result_time = result, captured
+                    if self._active and epoch == self._epoch:
+                        self._result, self._result_time = result, captured
         except Exception as error:
             with self._condition:
                 self._pending = None
@@ -134,6 +157,32 @@ class VisionPipeline:
         self._thread.join(timeout)
         if self._thread.is_alive():
             raise RuntimeError("CV worker did not stop within timeout")
+
+    def set_active(self, active: bool) -> None:
+        """Suspend or resume inference without replacing its engine thread."""
+        with self._condition:
+            if self._stop or self._active == active:
+                return
+            self._active = active
+            self._epoch += 1
+            self._pending = None
+            self._next_submission = 0.0
+            self._result_time = None
+            if active:
+                if self._result.get("state") != "error":
+                    self._result = {
+                        "engine": self.config.engine,
+                        "state": "loading",
+                        "detections": [],
+                    }
+            elif self._result.get("state") != "error":
+                self._result = {
+                    "engine": self.config.engine,
+                    "state": "idle",
+                    "detections": [],
+                    "message": "Inference idle",
+                }
+            self._condition.notify_all()
 
     @property
     def is_alive(self) -> bool:

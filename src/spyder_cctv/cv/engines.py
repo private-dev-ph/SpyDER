@@ -249,6 +249,11 @@ class InsightFaceEngine:
             detections = self.identity_stabilizer.update(detections)
         return detections
 
+    def reset(self) -> None:
+        """Forget temporal identities after inference has been idle; retain model weights."""
+        if self.identity_stabilizer is not None:
+            self.identity_stabilizer.clear()
+
     def close(self) -> None:
         self.model = None
         self.recognizer = None
