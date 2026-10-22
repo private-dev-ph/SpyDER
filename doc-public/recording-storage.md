@@ -193,3 +193,19 @@ never opens a permission prompt. If the page was closed, the pending full alert 
 shown on reconnection. Desktop alerts cannot be delivered by a closed browser page.
 The Cloudflare showcase retains its separate 128 MiB tab buffer and does not expose
 Python filesystem retention controls.
+
+
+## Browse saved recordings and captures
+
+Open **Recordings** to search saved filenames or names, filter videos and captures,
+and narrow results by protection status or a local start date. Sort by newest,
+oldest, name, size, or duration, and optionally group the current page by day or
+media type. Choose 20 or 50 files per page. The list scrolls independently and
+loads thumbnails only for the current page; search and page selections remain in
+place during status refreshes.
+
+Select a thumbnail to open the image or video player, or use **Download** to save a
+copy. Installed-app recordings retain **Keep forever** and guarded deletion actions.
+Protected recordings must first be released from protection before deletion.
+Archived locations remain read-only. These controls use local storage and the
+existing local media viewer; the showcase does not upload recordings.

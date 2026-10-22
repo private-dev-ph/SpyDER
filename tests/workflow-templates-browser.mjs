@@ -347,11 +347,19 @@ try {
   );
   assert.ok(inspectorLayout.removeHeight < 60, JSON.stringify(inspectorLayout));
   assert.equal(inspectorLayout.panelOverflow, false);
-  await evaluate("document.querySelector('.we-inspector').scrollIntoView({block:'start'})");
+  await evaluate(
+    "document.querySelector('.we-inspector').scrollIntoView({block:'start'})",
+  );
   await delay(100);
-  const inspectorShot=await command('Page.captureScreenshot',{format:'png'},sessionId);
-  await writeFile(path.join(assets,'..','node-inspector-fixed.png'),Buffer.from(inspectorShot.data,'base64'));
-
+  const inspectorShot = await command(
+    "Page.captureScreenshot",
+    { format: "png" },
+    sessionId,
+  );
+  await writeFile(
+    path.join(assets, "..", "node-inspector-fixed.png"),
+    Buffer.from(inspectorShot.data, "base64"),
+  );
 
   await evaluate(
     "document.querySelector('.we-node-filter').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
