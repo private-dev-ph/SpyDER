@@ -55,6 +55,25 @@ def test_username_token_digest_uses_oasis_types_and_nonce_created_password_formu
     assert password.text == expected
 
 
+@pytest.mark.parametrize(
+    ("operation", "namespace", "field", "value"),
+    [
+        ("GetCapabilities", onvif.DEVICE_NS, "Category", "All"),
+        ("GetPresets", onvif.PTZ_NS, "ProfileToken", "profile-1"),
+        ("GetNode", onvif.PTZ_NS, "NodeToken", "node-1"),
+    ],
+)
+def test_soap_operation_fields_are_qualified(operation, namespace, field, value):
+    body = onvif._soap_body(operation, namespace, {field: value})
+    root = onvif._safe_xml(onvif._soap(operation, body, "user", "secret"))
+    operation_node = root.find(f".//{{{onvif.SOAP_NS}}}Body/{{{namespace}}}{operation}")
+
+    assert operation_node is not None
+    field_node = operation_node.find(f"{{{namespace}}}{field}")
+    assert field_node is not None
+    assert field_node.text == value
+
+
 def test_discovery_uses_onvif_wsa_namespace_literal_private_xaddr_and_skips_bad_first(
     monkeypatch,
 ):
@@ -180,7 +199,7 @@ def test_connect_returns_redacted_session_and_stream_helper_is_internal(monkeypa
     monkeypatch.setattr(backend, "_request", request)
     connected = backend.connect("http://192.168.1.8/onvif/device_service", "view user", "p@ss word")
     assert calls[0][1] == "GetCapabilities"
-    assert "<Category>All</Category>" in calls[0][2]
+    assert "<t:Category>All</t:Category>" in calls[0][2]
     assert [operation for _endpoint, operation, _body in calls] == [
         "GetCapabilities",
         "GetProfiles",

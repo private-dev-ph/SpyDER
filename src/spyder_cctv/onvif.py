@@ -323,7 +323,9 @@ def _xml_escape(value: str) -> str:
 
 
 def _soap_body(name: str, namespace: str, fields: dict[str, str] | None = None) -> str:
-    inner = "".join(f"<{key}>{_xml_escape(value)}</{key}>" for key, value in (fields or {}).items())
+    inner = "".join(
+        f"<t:{key}>{_xml_escape(value)}</t:{key}>" for key, value in (fields or {}).items()
+    )
     return f'<t:{name} xmlns:t="{namespace}">{inner}</t:{name}>'
 
 
