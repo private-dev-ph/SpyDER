@@ -791,6 +791,20 @@ class WorkflowService:
                             references.setdefault(ident, []).append(
                                 f"Workflow {graph['name']} / node {node['id']}"
                             )
+            if self.subflows.storage_error:
+                raise RuntimeError("Subflow catalog is unreadable; model use cannot be checked")
+            for subflow_id, versions in self.subflows._items.items():
+                for definition in versions:
+                    if definition is None:
+                        continue
+                    for node in definition["graph"]["nodes"]:
+                        if node["type"] not in ("model", "classifier"):
+                            continue
+                        ident = node["params"].get("model_id")
+                        if ident:
+                            references.setdefault(ident, []).append(
+                                f"Subflow {subflow_id} v{definition['version']} / node {node['id']}"
+                            )
             return {ident: list(dict.fromkeys(rows)) for ident, rows in references.items()}
 
     def model_references(self, model_id: str) -> list[str]:
@@ -1782,6 +1796,26 @@ class WorkflowService:
         _validate_bindings(compiled["nodes"], compiled["edges"])
         return compiled
 
+    def subflow_catalog(self) -> dict[str, Any]:
+        """Read one consistent latest-version catalog snapshot."""
+        with self._lock:
+            return self.subflows.list()
+
+    def publish_subflow(self, raw: Any) -> dict[str, Any]:
+        """Publish one immutable version after catalog validation."""
+        with self._lock:
+            return self.subflows.publish(raw)
+
+    def get_subflow(self, subflow_id: str, version: int | None = None) -> dict[str, Any]:
+        """Read one consistent immutable subflow version."""
+        with self._lock:
+            return self.subflows.get(subflow_id, version)
+
+    def import_subflows(self, definitions: Any, *, graph: Any = None) -> list[dict[str, Any]]:
+        """Validate and persist pinned dependencies under the workflow service lock."""
+        with self._lock:
+            return self.subflows.import_definitions(definitions, graph=graph)
+
     def _report_compile_error(self, graph: dict[str, Any], error: Exception) -> None:
         with self._lock:
             self._errors.append({"workflow_id": graph.get("id"), "message": str(error)[:200]})
@@ -1789,18 +1823,19 @@ class WorkflowService:
 
     def remove_subflow(self, subflow_id: str) -> dict[str, Any]:
         """Delete a definition only when no saved workflow or pinned version uses it."""
-        referenced = any(
-            node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
-            for graph in self._graphs.values()
-            for node in graph["nodes"]
-        ) or any(
-            node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
-            for versions in self.subflows._items.values()
-            for definition in versions
-            if definition is not None
-            for node in definition["graph"]["nodes"]
-        )
-        return self.subflows.delete(subflow_id, referenced=referenced)
+        with self._lock:
+            referenced = any(
+                node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
+                for graph in self._graphs.values()
+                for node in graph["nodes"]
+            ) or any(
+                node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
+                for versions in self.subflows._items.values()
+                for definition in versions
+                if definition is not None
+                for node in definition["graph"]["nodes"]
+            )
+            return self.subflows.delete(subflow_id, referenced=referenced)
 
     @staticmethod
     def _camera_ids(graph: dict[str, Any]) -> list[str]:

@@ -354,3 +354,15 @@ def test_nested_subflow_versions_and_delete_reference_guards(service):
         service.remove_subflow("reusable")
     with pytest.raises(ValueError, match="referenced"):
         service.subflows.delete("reusable")
+
+
+def test_model_usage_in_any_pinned_subflow_version_is_protected(service):
+    first = _definition()
+    first["graph"]["nodes"].append(_node("model", "model", {"model_id": "a" * 32}))
+    first["graph"]["edges"].append({"from": "model", "to": "detect", "input": "model"})
+    service.subflows.publish(first)
+    second = copy.deepcopy(first)
+    second["graph"]["nodes"][-1]["params"]["model_id"] = "b" * 32
+    service.subflows.publish(second)
+    assert service.model_references("a" * 32) == ["Subflow reusable v1 / node model"]
+    assert service.model_references("b" * 32) == ["Subflow reusable v2 / node model"]
