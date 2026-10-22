@@ -98,7 +98,12 @@ Duplicates start disabled. Delete asks for confirmation and stops an enabled
 workflow's actions. Opening another workflow, creating one, or duplicating one
 asks before discarding unsaved edits; **Keep editing** returns to the Save button.
 Save or export an edited workflow before renaming or deleting it from the library.
-Enable and disable workflows through the editor's existing activation review.
+Use each row's **Enable** or **Disable** button to change the saved workflow
+without opening it. Camera motion changes require confirmation in the library;
+model conflicts and activation errors appear there. Unsaved editor edits stay
+unchanged. Refresh and review again if the saved graph changes during activation.
+The editor's activation controls remain available. Execution controls are disabled
+in the static showcase.
 
 The local library supports up to 5,000 workflows within a combined 64 MiB workflow
 file. These limits describe saved configuration, not how many camera/CV pipelines

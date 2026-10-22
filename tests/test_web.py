@@ -1339,3 +1339,56 @@ def test_long_recording_info_and_invalid_seek_do_not_open_decoder(
         with pytest.raises(HTTPError) as error:
             urlopen(url + f"/api/media/{ident}/frame?time=999999", timeout=2)
         assert error.value.code == 400
+
+
+def test_workflow_library_state_route_is_guarded_and_rejects_stale_graph(server):
+    url, _ = server
+
+    def post(path, body, guarded=True):
+        return urlopen(
+            Request(
+                url + path,
+                method="POST",
+                data=json.dumps(body).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    **({"X-Spyder-Control": "1"} if guarded else {}),
+                },
+            ),
+            timeout=4,
+        )
+
+    with post(
+        "/api/workflows",
+        {
+            "workflow": {
+                "id": "library-toggle",
+                "name": "Toggle",
+                "enabled": False,
+                "camera_ids": [],
+                "nodes": [],
+                "edges": [],
+            }
+        },
+    ) as response:
+        saved = json.load(response)
+    path = "/api/workflows/library-toggle/enabled"
+    with pytest.raises(HTTPError) as error:
+        post(path, {"enabled": True, "expected_workflow": saved}, False)
+    assert error.value.code == 403
+    with post(path, {"enabled": True, "expected_workflow": saved}) as response:
+        enabled = json.load(response)["workflow"]
+    assert enabled["enabled"] is True
+    with pytest.raises(HTTPError) as error:
+        post(path, {"enabled": False, "expected_workflow": saved})
+    assert error.value.code == 400
+    with post(path, {"enabled": False, "expected_workflow": enabled}) as response:
+        assert json.load(response)["workflow"]["enabled"] is False
+    for invalid in (
+        {"enabled": True},
+        {"enabled": "true", "expected_workflow": saved},
+        {"enabled": True, "expected_workflow": saved, "unexpected": 1},
+    ):
+        with pytest.raises(HTTPError) as error:
+            post(path, invalid)
+        assert error.value.code == 400

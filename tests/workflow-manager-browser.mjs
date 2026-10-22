@@ -16,7 +16,7 @@ const root = path.resolve(
 const profile = await mkdtemp(
   path.join(os.tmpdir(), "spyder-workflow-manager-"),
 );
-const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/workflow-manager.css"><style>:root{--accent:#be1a1a;--focus:#830000;--danger:#bc0202;--control-border:#8c8274;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--surface:#fffefa}*{box-sizing:border-box}body{font:14px Arial;margin:0;padding:12px;background:#f3f5f6}button{cursor:pointer}</style><button data-workflow id="open">Workflows</button><script src="/workflow-manager.js"></script><script>let dirty=false;window.calls=[];const summaries=Array.from({length:80},(_,i)=>({id:'wf-'+i,name:'Workflow '+i,enabled:i%2===0,camera_ids:['front'],engines:['yolo'],node_count:4,edge_count:3}));function launch(initialDelete=false){window.manager=spyderWorkflowManager.open({opener:document.querySelector('#open'),isDirty:()=>dirty,currentId:()=> 'wf-0',cameras:()=>[{id:'front',name:'Front door'}],engines:['yolo'],initialDelete:initialDelete?summaries[0]:undefined,loadPage:async(params,{signal})=>{window.loadCalls=(window.loadCalls||0)+1;const wait=params.query==='old'?500:10;await new Promise(r=>setTimeout(r,wait));if(signal.aborted)throw new DOMException('Aborted','AbortError');const filtered=summaries.filter(x=>x.name.toLowerCase().includes(params.query.toLowerCase()));const pages=Math.max(1,Math.ceil(filtered.length/params.size));const page=Math.min(params.page,pages);return{items:filtered.slice((page-1)*params.size,page*params.size),total:filtered.length,pages,page,size:params.size,counts:{total:summaries.length,enabled:40,disabled:40}}},onOpen:async id=>{window.calls.push('open:'+id);return true},onCreate:async()=>{window.calls.push('create');return true},onDuplicate:async id=>{window.calls.push('duplicate:'+id);return true},onRename:async(id,name)=>{if(name==='retry')throw Error('Rename retry');window.calls.push('rename:'+name);return true},onDelete:async id=>{if(!window.allowDelete)throw Error('Delete retry');window.calls.push('delete:'+id);return true},onExport:async id=>{window.calls.push('export:'+id);return true},onKeepEditing:()=>document.querySelector('#save').focus(),onClose:()=>window.calls.push('close')})}</script><button id="save">Save workflow</button>`;
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/workflow-manager.css"><style>:root{--accent:#be1a1a;--focus:#830000;--danger:#bc0202;--control-border:#8c8274;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--surface:#fffefa}*{box-sizing:border-box}body{font:14px Arial;margin:0;padding:12px;background:#f3f5f6}button{cursor:pointer}</style><button data-workflow id="open">Workflows</button><script src="/workflow-manager.js"></script><script>let dirty=false;window.calls=[];const summaries=Array.from({length:80},(_,i)=>({id:'wf-'+i,name:'Workflow '+i,enabled:i%2===0,camera_ids:['front'],engines:['yolo'],node_count:4,edge_count:3}));function launch(initialDelete=false){window.manager=spyderWorkflowManager.open({demo:!!window.demo,opener:document.querySelector('#open'),isDirty:()=>dirty,currentId:()=> 'wf-0',cameras:()=>[{id:'front',name:'Front door'}],engines:['yolo'],initialDelete:initialDelete?summaries[0]:undefined,loadPage:async(params,{signal})=>{window.loadCalls=(window.loadCalls||0)+1;const wait=params.query==='old'?500:10;await new Promise(r=>setTimeout(r,wait));if(signal.aborted)throw new DOMException('Aborted','AbortError');const filtered=summaries.filter(x=>x.name.toLowerCase().includes(params.query.toLowerCase()));const pages=Math.max(1,Math.ceil(filtered.length/params.size));const page=Math.min(params.page,pages);return{items:filtered.slice((page-1)*params.size,page*params.size),total:filtered.length,pages,page,size:params.size,counts:{total:summaries.length,enabled:summaries.filter(item=>item.enabled).length,disabled:summaries.filter(item=>!item.enabled).length}}},onToggle:async(id,enabled,confirm)=>{window.toggleCalls=(window.toggleCalls||0)+1;if(window.needMotion&&!await confirm({name:'Workflow',cameras:[{id:'front',name:'Front door',disable_motion:true,target_engine:'insightface'}]}))return false;await new Promise(resolve=>setTimeout(resolve,50));if(window.toggleFailure)throw Error('Model conflict');summaries.find(item=>item.id===id).enabled=enabled;return true},onOpen:async id=>{window.calls.push('open:'+id);return true},onCreate:async()=>{window.calls.push('create');return true},onDuplicate:async id=>{window.calls.push('duplicate:'+id);return true},onRename:async(id,name)=>{if(name==='retry')throw Error('Rename retry');window.calls.push('rename:'+name);return true},onDelete:async id=>{if(!window.allowDelete)throw Error('Delete retry');window.calls.push('delete:'+id);return true},onExport:async id=>{window.calls.push('export:'+id);return true},onKeepEditing:()=>document.querySelector('#save').focus(),onClose:()=>window.calls.push('close')})}</script><button id="save">Save workflow</button>`;
 const server = http.createServer(async (req, res) => {
   const name = new URL(req.url, "http://localhost").pathname;
   if (name === "/")
@@ -254,6 +254,66 @@ try {
     "Delete Workflow 0?",
   );
   await evaluate("manager.close()");
+  await evaluate("dirty=false;launch()");
+  await wait("document.querySelector('.wm-row')");
+  await evaluate(
+    "document.querySelector('[data-action=toggle]').click();document.querySelector('[data-action=toggle]').click()",
+  );
+  await wait(
+    "document.querySelector('[data-action=toggle]').textContent==='Enable'",
+  );
+  assert.equal(await evaluate("toggleCalls"), 1);
+  assert.match(
+    await evaluate("document.querySelector('.wm-summary').textContent"),
+    /39 enabled/,
+  );
+  await evaluate(
+    "window.toggleFailure=true;document.querySelector('[data-action=toggle]').click()",
+  );
+  await wait(
+    "document.querySelector('.wm-error').textContent==='Model conflict'",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[data-action=toggle]').textContent",
+    ),
+    "Enable",
+  );
+  await evaluate(
+    "window.toggleFailure=false;window.needMotion=true;document.querySelector('[data-action=toggle]').click()",
+  );
+  await wait("!document.querySelector('.wm-toggle-confirm').hidden");
+  assert.match(
+    await evaluate(
+      "document.querySelector('.wm-toggle-confirm ul').textContent",
+    ),
+    /motion analysis will be disabled/,
+  );
+  await evaluate("document.querySelector('[data-cancel-toggle]').click()");
+  await wait(
+    "document.querySelector('.wm-shell').getAttribute('aria-busy')==='false'",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[data-action=toggle]').textContent",
+    ),
+    "Enable",
+  );
+  await evaluate("document.querySelector('[data-action=toggle]').click()");
+  await wait("!document.querySelector('.wm-toggle-confirm').hidden");
+  await evaluate("document.querySelector('[data-confirm-toggle]').click()");
+  await wait(
+    "document.querySelector('[data-action=toggle]').textContent==='Disable'",
+  );
+  await evaluate("manager.close();window.demo=true;launch()");
+  await wait("document.querySelector('.wm-row')");
+  assert.equal(
+    await evaluate(
+      "[...document.querySelectorAll('[data-action=toggle]')].every(button=>button.disabled)",
+    ),
+    true,
+  );
+  await evaluate("manager.close();window.demo=false");
   console.log("Workflow manager browser checks passed.");
 } finally {
   socket?.close();

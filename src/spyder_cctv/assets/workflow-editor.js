@@ -1302,6 +1302,84 @@
             issue("Disabled copy created. Review before enabling.");
             return true;
           },
+          onToggle: async (id, enabled, confirm) => {
+            if (demo)
+              throw Error("Workflow execution is disabled in showcase mode.");
+            if (!current() || busy || activationBusy || activationReview)
+              return false;
+            activationBusy = true;
+            try {
+              const saved = await storedWorkflow(id);
+              if (!current()) return false;
+              const workflow = { ...clone(saved), enabled };
+              let disableMotion = false;
+              if (enabled) {
+                const preview = await post(
+                  "/api/workflows/activation-preview",
+                  { workflow },
+                  15000,
+                );
+                if (!current()) return false;
+                if (saved.nodes.some((node) => node.type === "notification"))
+                  window.spyderNotifications?.useNode?.();
+                const affected = (preview.cameras || []).filter(
+                  (camera) =>
+                    camera.disable_motion || camera.replaces_motion_pipeline,
+                );
+                if (
+                  (preview.requires_motion_confirmation || affected.length) &&
+                  !(await confirm({ name: saved.name, cameras: affected }))
+                )
+                  return false;
+                if (!current()) return false;
+                disableMotion = !!preview.requires_motion_confirmation;
+              }
+              let updated;
+              try {
+                updated = (
+                  await post(
+                    `/api/workflows/${encodeURIComponent(id)}/enabled`,
+                    {
+                      enabled,
+                      expected_workflow: saved,
+                      ...(disableMotion ? { disable_motion: true } : {}),
+                    },
+                    15000,
+                  )
+                ).workflow;
+              } catch (error) {
+                if (error.name !== "AbortError") throw error;
+                try {
+                  updated = await storedWorkflow(id);
+                } catch {
+                  throw Error(
+                    "Response timed out. The request may have completed; refresh the library to verify its state.",
+                  );
+                }
+                if (updated.enabled !== enabled)
+                  throw Error(
+                    "Response timed out. The request may still complete; refresh the library before retrying.",
+                  );
+              }
+              if (!current()) return false;
+              if (!updated || updated.id !== id || updated.enabled !== enabled)
+                throw Error(
+                  "Server did not confirm the requested state. Refresh the workflow library.",
+                );
+              if (graph.id === id) {
+                graph.enabled = updated.enabled;
+                graphRevision++;
+                syncActivationControls();
+              }
+              issue(
+                `Saved workflow ${enabled ? "enabled" : "disabled"}. Unsaved editor changes are retained.`,
+              );
+              return true;
+            } finally {
+              activationBusy = false;
+              if (mounted) syncActivationControls();
+            }
+          },
           onRename: async (id, name) => {
             if (id === graph.id && dirty)
               throw Error(

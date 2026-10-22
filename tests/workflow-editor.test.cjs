@@ -3392,3 +3392,152 @@ test("demo library save preserves edits made while persistence is pending", asyn
   assert.match(h.root.innerHTML, /value="Edited during save"/);
   h.window.spyderWorkflows.unmount();
 });
+
+test("library toggle uses saved graph and preserves unsaved editor edits", async () => {
+  const saved = {
+    id: "saved-flow",
+    name: "Saved version",
+    enabled: false,
+    camera_ids: [],
+    nodes: [],
+    edges: [],
+  };
+  let state = structuredClone(saved);
+  const h = mountHarness({
+    fetcher: async (url, options) => ({
+      ok: true,
+      json: async () =>
+        url === "/api/workflows/saved-flow"
+          ? { workflow: state }
+          : url.endsWith("/activation-preview")
+            ? { cameras: [] }
+            : url.endsWith("/enabled")
+              ? {
+                  workflow: (state = {
+                    ...state,
+                    enabled: JSON.parse(options.body).enabled,
+                  }),
+                }
+              : { workflows: [], events: [] },
+    }),
+  });
+  await h.flush();
+  let options;
+  h.window.spyderWorkflowManager = {
+    open: (value) => {
+      options = value;
+      return {
+        close() {
+          value.onClose();
+        },
+      };
+    },
+  };
+  h.root.dispatch("click", h.target("button", { openWorkflowManager: "" }));
+  await options.onOpen("saved-flow");
+  const name = h.target("[data-name]");
+  name.value = "Unsaved editor version";
+  h.root.dispatch("input", name);
+  assert.equal(
+    await options.onToggle("saved-flow", true, async () => {
+      throw Error("No review expected");
+    }),
+    true,
+  );
+  const call = h.calls.find((item) => item.url.endsWith("/enabled"));
+  assert.equal(call.body.expected_workflow.name, "Saved version");
+  assert.equal(call.body.enabled, true);
+  assert.equal(options.isDirty(), true);
+  assert.match(h.root.innerHTML, /value="Saved version"/); // Input edits are not rerendered by the toggle.
+  assert.equal(
+    h.root.querySelector("[data-activate]").textContent,
+    "Disable workflow",
+  );
+  h.window.spyderWorkflows.unmount();
+});
+
+test("library activation waits for motion review and cancellation performs no save", async () => {
+  const saved = {
+    id: "motion-flow",
+    name: "Motion flow",
+    enabled: false,
+    camera_ids: [],
+    nodes: [],
+    edges: [],
+  };
+  const h = mountHarness({
+    fetcher: async (url) => ({
+      ok: true,
+      json: async () =>
+        url === "/api/workflows/motion-flow"
+          ? { workflow: saved }
+          : url.endsWith("/activation-preview")
+            ? {
+                requires_motion_confirmation: true,
+                cameras: [
+                  {
+                    id: "cam-1",
+                    name: "Front",
+                    disable_motion: true,
+                    target_engine: "insightface",
+                  },
+                ],
+              }
+            : url.endsWith("/enabled")
+              ? { workflow: { ...saved, enabled: true } }
+              : { workflows: [], events: [] },
+    }),
+  });
+  await h.flush();
+  let options;
+  h.window.spyderWorkflowManager = {
+    open: (value) => {
+      options = value;
+      return {
+        close() {
+          value.onClose();
+        },
+      };
+    },
+  };
+  h.root.dispatch("click", h.target("button", { openWorkflowManager: "" }));
+  let review;
+  assert.equal(
+    await options.onToggle("motion-flow", true, async (value) => {
+      review = value;
+      return false;
+    }),
+    false,
+  );
+  assert.equal(review.cameras[0].disable_motion, true);
+  assert.ok(!h.calls.some((item) => item.url.endsWith("/enabled")));
+  await options.onToggle("motion-flow", true, async () => true);
+  assert.equal(
+    h.calls.find((item) => item.url.endsWith("/enabled")).body.disable_motion,
+    true,
+  );
+  h.window.spyderWorkflows.unmount();
+});
+
+test("demo refuses library activation without making requests", async () => {
+  const h = mountHarness({ showcase: true });
+  await h.flush();
+  let options;
+  h.window.spyderWorkflowManager = {
+    open: (value) => {
+      options = value;
+      return {
+        close() {
+          value.onClose();
+        },
+      };
+    },
+  };
+  h.root.dispatch("click", h.target("button", { openWorkflowManager: "" }));
+  await assert.rejects(
+    options.onToggle("saved", true, async () => true),
+    /showcase/,
+  );
+  assert.equal(h.calls.length, 0);
+  h.window.spyderWorkflows.unmount();
+});
