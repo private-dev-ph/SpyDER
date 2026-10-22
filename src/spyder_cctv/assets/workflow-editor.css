@@ -277,6 +277,8 @@
   pointer-events: all;
 }
 .we-wire-trash {
+  /* Keep the hover/focus ring and pressed offset inside the 44px SVG viewport. */
+  margin: 7px;
   width: 30px;
   height: 30px;
   display: grid;

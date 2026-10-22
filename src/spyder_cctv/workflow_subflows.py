@@ -213,6 +213,18 @@ class SubflowCatalog:
         rows.sort(key=lambda row: (row["name"].casefold(), row["id"]))
         return {"subflows": rows, "storage_error": self.storage_error}
 
+    def export_definitions(self) -> list[dict[str, Any]]:
+        """Read all immutable versions in one bounded catalog snapshot."""
+        self._ensure_available()
+        return copy.deepcopy(
+            [
+                definition
+                for versions in self._items.values()
+                for definition in versions
+                if definition is not None
+            ]
+        )
+
     def get(self, subflow_id: str, version: int | None = None) -> dict[str, Any]:
         self._ensure_available()
         versions = self._items.get(subflow_id)
@@ -387,9 +399,7 @@ class SubflowCatalog:
                         )
                     child_nodes[parameter["node_id"]]["params"][parameter["field"]] = value
                 child = self.validate_graph(child)
-                child, child_paths = expand(
-                    child, (*path, call["id"]), (*stack, ref), depth + 1
-                )
+                child, child_paths = expand(child, (*path, call["id"]), (*stack, ref), depth + 1)
                 inp = next(n["id"] for n in child["nodes"] if n["type"] == "subflow_input")
                 out = next(n["id"] for n in child["nodes"] if n["type"] == "subflow_output")
                 import hashlib
@@ -440,7 +450,7 @@ class SubflowCatalog:
     def import_definitions(self, definitions: Any, *, graph: Any = None) -> list[dict[str, Any]]:
         """Atomically add pinned definitions without replacing existing versions."""
         self._ensure_available()
-        if not isinstance(definitions, list) or len(definitions) > _MAX_DEFINITIONS * 2:
+        if not isinstance(definitions, list) or len(definitions) > _MAX_DEFINITIONS * _MAX_VERSIONS:
             raise ValueError("Invalid subflow dependency bundle")
         candidate = {key: list(value) for key, value in self._items.items()}
         imported = []

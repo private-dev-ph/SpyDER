@@ -67,55 +67,9 @@ def _clean(value: Any, *, diagnostic: bool, depth: int = 0, key: str = "") -> An
     if isinstance(value, (list, tuple)):
         return [
             _clean(item, diagnostic=diagnostic, depth=depth + 1)
-            for item in value[: 512 if diagnostic else 128]
+            for item in value[: 512 if diagnostic or key in ("nodes", "actions") else 128]
         ]
     # Never call arbitrary serializers (including numpy or model object hooks).
-    return None
-
-
-def _clean_graph(
-    value: Any,
-    *,
-    depth: int = 0,
-    key: str = "",
-    budget: list[int] | None = None,
-) -> Any:
-    """Keep valid workflow JSON intact within explicit graph bounds."""
-    if budget is None:
-        budget = [_MAX_RUN_BYTES]
-    if budget[0] <= 0:
-        return None
-    if key.lower() in _GRAPH_SECRET_KEYS or depth > 24:
-        return None
-    if value is None or type(value) in (bool, int, float):
-        if isinstance(value, float) and (value != value or abs(value) == float("inf")):
-            return None
-        return value
-    if isinstance(value, str):
-        limit = 16_384 if key.lower() in {"code", "source"} else _MAX_TEXT
-        text = value[: min(limit, budget[0])]
-        budget[0] -= len(text.encode("utf-8"))
-        return text
-    if isinstance(value, dict):
-        output: dict[str, Any] = {}
-        for index, (child_key, child) in enumerate(value.items()):
-            if index >= 512 or not isinstance(child_key, str):
-                break
-            clipped_key = child_key[:256]
-            budget[0] -= len(clipped_key.encode("utf-8"))
-            cleaned = _clean_graph(child, depth=depth + 1, key=clipped_key, budget=budget)
-            if cleaned is not None:
-                output[clipped_key] = cleaned
-        return output
-    if isinstance(value, (list, tuple)):
-        limit = 256 if key.lower() == "nodes" else 512
-        output = []
-        for item in value[:limit]:
-            if budget[0] <= 0:
-                break
-            budget[0] -= 1
-            output.append(_clean_graph(item, depth=depth + 1, budget=budget))
-        return output
     return None
 
 
@@ -132,6 +86,7 @@ class ExecutionHistory:
         self.error: str | None = None
         self._available = True
         self._settings = dict(_DEFAULTS)
+        self._last_compact = time.monotonic()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._db = sqlite3.connect(self.path, timeout=2, check_same_thread=False)
@@ -236,8 +191,6 @@ class ExecutionHistory:
             self._call("settings", settings)
         except Exception as exc:
             raise RuntimeError(f"Cannot persist workflow history settings: {exc}") from exc
-        with self._state_lock:
-            self._settings = settings
         return dict(settings)
 
     def record(self, run: dict[str, Any]) -> str | None:
@@ -255,17 +208,23 @@ class ExecutionHistory:
             if not isinstance(nodes, list):
                 nodes = []
             nodes = nodes[:_MAX_NODES]
-            graph = _clean_graph(run.get("graph", {}))
-            if isinstance(graph, dict):
-                if isinstance(graph.get("nodes"), list):
-                    graph["nodes"] = graph["nodes"][:_MAX_NODES]
-                if isinstance(graph.get("edges"), list):
-                    graph["edges"] = graph["edges"][:512]
-            graph_json = json.dumps(
-                graph, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            )
-            if len(graph_json.encode("utf-8")) > _MAX_RUN_BYTES:
-                return None
+            raw_graph = run.get("graph", {})
+            graph_complete = True
+            try:
+                graph_json = json.dumps(
+                    raw_graph,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if len(graph_json.encode("utf-8")) > _MAX_RUN_BYTES:
+                    raise ValueError("Graph exceeds snapshot allowance")
+            except (TypeError, ValueError, OverflowError):
+                graph_complete = False
+                graph_json = json.dumps(
+                    {"id": str(run.get("workflow_id", ""))[:128], "nodes": [], "edges": []}
+                )
             graph_revision = hashlib.sha256(graph_json.encode("utf-8")).hexdigest()[:32]
             details = _clean(
                 {
@@ -277,6 +236,18 @@ class ExecutionHistory:
                 },
                 diagnostic=diagnostic,
             )
+            if diagnostic and isinstance(details.get("context"), dict):
+                try:
+                    original_context = json.dumps(
+                        run.get("context", {}), allow_nan=False, sort_keys=True
+                    )
+                    retained_context = json.dumps(
+                        details["context"], allow_nan=False, sort_keys=True
+                    )
+                    if original_context != retained_context:
+                        details["context"]["inputs_truncated"] = True
+                except (TypeError, ValueError):
+                    details["context"]["inputs_truncated"] = True
             if not diagnostic:
                 allowed_node_fields = {
                     "id",
@@ -300,7 +271,19 @@ class ExecutionHistory:
                     "actions": [
                         {
                             key: action[key]
-                            for key in ("id", "type", "state", "status", "media_ref", "media_id")
+                            for key in (
+                                "id",
+                                "node_id",
+                                "event_id",
+                                "type",
+                                "state",
+                                "status",
+                                "media_ref",
+                                "media_id",
+                                "media",
+                                "attachment_state",
+                                "attachment_error",
+                            )
                             if key in action
                         }
                         for action in details["actions"]
@@ -320,11 +303,15 @@ class ExecutionHistory:
                 "state": state,
                 "source": str(run.get("source", "live"))[:32],
                 "sequence": _clean(run.get("sequence"), diagnostic=diagnostic),
+                "graph_complete": graph_complete,
+                "snapshot_warning": ""
+                if graph_complete
+                else (
+                    "Configuration snapshot exceeded its allowance or could not be serialized. "
+                    "Replay is unavailable."
+                ),
             }
-            if not diagnostic:
-                summary["graph_revision"] = graph_revision
-            else:
-                summary["graph_revision"] = graph_revision
+            summary["graph_revision"] = graph_revision
             payload = (summary, details)
             encoded_size = len(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -338,7 +325,19 @@ class ExecutionHistory:
                 encoded_size = len(
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                 )
+            summary["trace_complete"] = len(details.get("nodes", [])) == len(nodes)
+            if not summary["trace_complete"]:
+                summary["snapshot_warning"] += (
+                    " Some node details exceeded the retention allowance."
+                )
+            encoded_size = len(
+                json.dumps((summary, details), ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            )
             if encoded_size > _MAX_RUN_BYTES:
+                with self._state_lock:
+                    self.dropped += 1
                 return None
             if not self._available:
                 return None
@@ -587,6 +586,11 @@ class ExecutionHistory:
                     if self._available:
                         self.error = None
                     self._db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    if configured is not None or time.monotonic() - self._last_compact >= 30:
+                        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        self._db.execute("PRAGMA incremental_vacuum")
+                        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        self._last_compact = time.monotonic()
                     if configured is not None:
                         with self._state_lock:
                             self._settings = configured

@@ -20,6 +20,8 @@ from .cv.contracts import VisionConfig
 from .cv.detectors import DetectorCatalog
 from .events import EventService
 from .workflow_code import run_code, validate_code
+from .workflow_features import EvaluationTrace, WorkflowFeatures
+from .workflow_history import ExecutionHistory
 from .workflow_subflows import SubflowCatalog
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -100,9 +102,9 @@ _NODE_PARAMS = {
 }
 _SIGNALS_BY_NODE.update(
     {
-        "subflow": set(_SIGNAL_TYPES),
-        "subflow_input": set(_SIGNAL_TYPES),
-        "subflow_output": set(_SIGNAL_TYPES),
+        "subflow": set(_SIGNAL_TYPES) - {"model_id"},
+        "subflow_input": set(_SIGNAL_TYPES) - {"model_id"},
+        "subflow_output": set(_SIGNAL_TYPES) - {"model_id"},
     }
 )
 
@@ -524,6 +526,7 @@ class WorkflowService:
         self._session_id = uuid.uuid4().hex
         self._errors: list[dict[str, Any]] = []
         self._runtime: dict[str, Any] = {}
+        self._compile_errors: dict[str, tuple[str, float]] = {}
         self._debug: dict[str, Any] = {}
         self._seen: dict[str, tuple[Any, int]] = {}
         self._last_action: dict[tuple[str, str, str], float] = {}
@@ -535,6 +538,8 @@ class WorkflowService:
         self._event_clip_sessions: set[str] = set()
         self._event_clip_transferred: set[str] = set()
         self._clip_threads: set[threading.Thread] = set()
+        self.history = ExecutionHistory(self.storage_dir / "workflow-history.sqlite3")
+        self.features = WorkflowFeatures(self)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="spyder-workflows", daemon=True)
         self._sync_inference_demand()
@@ -646,7 +651,11 @@ class WorkflowService:
         for graph in self._graphs.values():
             cameras = set(graph["camera_ids"])
             engines = set()
-            for node in graph["nodes"]:
+            try:
+                expanded = self.compile_graph(graph)
+            except (ValueError, KeyError, RuntimeError):
+                expanded = graph
+            for node in expanded["nodes"]:
                 if node["type"] == "camera" and node["params"].get("camera_id"):
                     cameras.add(node["params"]["camera_id"])
                 if node["type"] == "detections":
@@ -1113,8 +1122,10 @@ class WorkflowService:
         if type(disable_motion) is not bool:
             raise ValueError("disable_motion must be boolean")
         normalized = _validate_graph(graph)
-        compiled = self.compile_graph(normalized)
+        if any(node["type"] in ("subflow_input", "subflow_output") for node in normalized["nodes"]):
+            raise ValueError("Input and output bridge nodes belong in subflow definitions")
         with self._lock:
+            compiled = self.compile_graph(normalized)
             if self._storage_error:
                 raise RuntimeError("Workflow storage is unavailable")
             if normalized["id"] not in self._graphs and len(self._graphs) >= _MAX_WORKFLOWS:
@@ -1397,7 +1408,9 @@ class WorkflowService:
         # Compare complete configurations, including classifier settings and built-in detectors.
         for other in self._graphs.values():
             if other["enabled"] and other["id"] != graph["id"]:
-                for camera_id, signature in self._node_pipeline_signatures(other).items():
+                for camera_id, signature in self._node_pipeline_signatures(
+                    self.compile_graph(other)
+                ).items():
                     current = self._node_pipeline_signatures(graph).get(camera_id)
                     if current is not None and current != signature:
                         raise ValueError(f"Conflicting models target camera {camera_id}")
@@ -1788,13 +1801,26 @@ class WorkflowService:
                 except (OSError, ValueError, RuntimeError):
                     continue
 
+    def export_bundle(self, graph: dict[str, Any]) -> dict[str, Any]:
+        return self.features.export_bundle(graph)
+
+    def import_bundle(self, raw: Any) -> dict[str, Any]:
+        return self.features.import_bundle(raw)
+
+    def history_detail(self, ident: str) -> dict[str, Any]:
+        return self.features.history_detail(ident)
+
+    def replay_history(self, ident: str) -> dict[str, Any]:
+        return self.features.replay_history(ident)
+
     def compile_graph(self, graph: dict[str, Any]) -> dict[str, Any]:
         """Expand pinned subflow calls into evaluator graph with stable internal paths."""
-        if graph.get("_compiled") is True:
-            return self.subflows.compile(graph)
-        compiled = self.subflows.compile(_validate_graph(graph))
-        _validate_bindings(compiled["nodes"], compiled["edges"])
-        return compiled
+        with self._lock:
+            if graph.get("_compiled") is True:
+                return self.subflows.compile(graph)
+            compiled = self.subflows.compile(_validate_graph(graph))
+            _validate_bindings(compiled["nodes"], compiled["edges"])
+            return compiled
 
     def subflow_catalog(self) -> dict[str, Any]:
         """Read one consistent latest-version catalog snapshot."""
@@ -1804,6 +1830,8 @@ class WorkflowService:
     def publish_subflow(self, raw: Any) -> dict[str, Any]:
         """Publish one immutable version after catalog validation."""
         with self._lock:
+            if isinstance(raw, dict) and "id" not in raw:
+                raw = {**raw, "id": "subflow-" + uuid.uuid4().hex[:16]}
             return self.subflows.publish(raw)
 
     def get_subflow(self, subflow_id: str, version: int | None = None) -> dict[str, Any]:
@@ -1817,9 +1845,38 @@ class WorkflowService:
             return self.subflows.import_definitions(definitions, graph=graph)
 
     def _report_compile_error(self, graph: dict[str, Any], error: Exception) -> None:
+        message = str(error)[:200]
+        now = time.monotonic()
         with self._lock:
-            self._errors.append({"workflow_id": graph.get("id"), "message": str(error)[:200]})
+            previous = self._compile_errors.get(graph["id"])
+            if previous and previous[0] == message and now - previous[1] < 30:
+                return
+            self._compile_errors[graph["id"]] = (message, now)
+            self._errors.append({"workflow_id": graph.get("id"), "message": message})
             del self._errors[:-100]
+            if hasattr(self, "history"):
+                self.history.record(
+                    {
+                        "workflow_id": graph["id"],
+                        "name": graph["name"],
+                        "state": "error",
+                        "camera_id": next(iter(graph["camera_ids"]), ""),
+                        "source": "live",
+                        "graph": graph,
+                        "nodes": [
+                            {
+                                "id": "compile",
+                                "type": "workflow",
+                                "state": "error",
+                                "error": message,
+                                "input_count": 0,
+                                "output_count": 0,
+                                "duration_ms": 0,
+                                "path": ["compile"],
+                            }
+                        ],
+                    }
+                )
 
     def remove_subflow(self, subflow_id: str) -> dict[str, Any]:
         """Delete a definition only when no saved workflow or pinned version uses it."""
@@ -1967,6 +2024,42 @@ class WorkflowService:
         preview_node_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         graph = self.compile_graph(graph)
+        settings = self.history.settings()
+        trace = (
+            EvaluationTrace(
+                graph,
+                camera_id,
+                cv,
+                status,
+                self.history,
+                diagnostic=settings["mode"] == "diagnostic",
+            )
+            if preview_node_id is None and settings["enabled"]
+            else None
+        )
+        try:
+            return self._evaluate_graph(
+                graph, camera_id, cv, now, status, preview_node_id=preview_node_id, trace=trace
+            )
+        except Exception:
+            if trace is not None:
+                trace.error = "Workflow evaluation failed"
+            raise
+        finally:
+            if trace is not None:
+                trace.finish()
+
+    def _evaluate_graph(
+        self,
+        graph: dict[str, Any],
+        camera_id: str,
+        cv: dict[str, Any],
+        now: float,
+        status: dict[str, Any] | None = None,
+        *,
+        preview_node_id: str | None = None,
+        trace: EvaluationTrace | None = None,
+    ) -> list[dict[str, Any]] | None:
         nodes = {node["id"]: node for node in graph["nodes"]}
         incoming = {nid: [] for nid in nodes}
         outgoing = {nid: [] for nid in nodes}
@@ -1980,6 +2073,8 @@ class WorkflowService:
         signal_values: dict[str, dict[str, Any]] = {}
         model_descriptors: dict[str, dict[str, Any] | None] = {}
         while queue:
+            node_began = time.monotonic()
+            action_summary = None
             nid = queue.pop(0)
             node = nodes[nid]
             kind = node["type"]
@@ -2203,7 +2298,7 @@ class WorkflowService:
                 and self._action_allowed(graph["id"], camera_id, nid, now)
             ):
                 action_ran = True
-                self._act(
+                action_summary = self._act(
                     kind,
                     runtime_params,
                     graph["id"],
@@ -2213,6 +2308,8 @@ class WorkflowService:
                     camera_name=(status or {}).get("name") or camera_id,
                     detections=result,
                 )
+            if action_summary and action_summary.get("state") == "error":
+                node_error = action_summary.get("error", "Action failed")
             if preview_node_id is None:
                 latest_error = self._errors[-1] if self._errors else None
                 if latest_error is not previous_error and latest_error.get("node_id") == nid:
@@ -2236,6 +2333,25 @@ class WorkflowService:
                         "error": node_error,
                         "camera_id": camera_id,
                     }
+            if trace is not None:
+                inputs = upstream
+                if kind == "detections" and not any(
+                    port == "detections" for _, port in edge_inputs[nid]
+                ):
+                    inputs = cv.get("detections", [])
+                elif kind == "camera":
+                    inputs = cv.get("detections", []) if p["camera_id"] == camera_id else []
+                trace.node(
+                    node,
+                    inputs,
+                    result,
+                    time.monotonic() - node_began,
+                    error=node_error,
+                    missing=missing_binding,
+                    action=action_summary if action_ran else None,
+                    signals=signal_values[nid],
+                    descriptor=model_descriptors.get(nid),
+                )
             for target in outgoing[nid]:
                 if all(parent in values for parent in incoming[target]) and target not in queue:
                     queue.append(target)
@@ -2502,7 +2618,7 @@ class WorkflowService:
         node_id: str | None = None,
         camera_name: str | None = None,
         detections: list[dict[str, Any]] | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         try:
             if kind == "event":
                 trigger_time = time.monotonic()
@@ -2577,6 +2693,7 @@ class WorkflowService:
                     with self._lock:
                         self._clip_threads.add(clip_thread)
                     clip_thread.start()
+                return {"state": "saved", "event_id": event["id"]}
             elif kind == "notification":
                 with self._lock:
                     self._events.append(
@@ -2592,10 +2709,18 @@ class WorkflowService:
                         }
                     )
                     del self._events[:-100]
+                return {"state": "requested"}
             elif kind == "capture":
-                self.recorder.capture([camera_id])
+                media = self.recorder.capture([camera_id])
+                return {
+                    "state": "saved"
+                    if isinstance(media, dict) and media.get("id")
+                    else "requested",
+                    "media": [media] if isinstance(media, dict) else [],
+                }
             elif kind == "record":
                 self._record(params["action"], graph_id, camera_id)
+                return {"state": "requested", "operation": params["action"]}
         except Exception:
             with self._lock:
                 self._errors.append(
@@ -2607,6 +2732,9 @@ class WorkflowService:
                     }
                 )
                 del self._errors[:-100]
+            return {"state": "error", "error": "Action failed"}
+
+        return {"state": "requested"}
 
     def _record_event_clip(
         self,
@@ -2764,6 +2892,7 @@ class WorkflowService:
             key: value for key, value in self._cooldowns.items() if key[0] != graph_id
         }
         self._runtime.pop(graph_id, None)
+        self._compile_errors.pop(graph_id, None)
 
     def close(self) -> None:
         self._stop.set()
@@ -2780,3 +2909,4 @@ class WorkflowService:
             history = getattr(self.manager, "pre_event_buffer", None)
             if history is not None:
                 history.configure({})
+        self.history.close()
