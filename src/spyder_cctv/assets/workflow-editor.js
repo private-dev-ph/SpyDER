@@ -654,7 +654,8 @@
       if (
         n.type === "classifier" &&
         (!Number.isFinite(n.params?.threshold) ||
-          n.params.threshold < 0 ||
+          n.params.threshold <
+            (n.params.model_id?.startsWith("gallery-") ? -1 : 0) ||
           n.params.threshold > 1 ||
           !["probabilities", "logits"].includes(n.params?.output) ||
           !["arcface", "embedded"].includes(n.params?.preprocessing) ||
@@ -1594,7 +1595,8 @@
         library.filter(
           (item) =>
             item.engine === "insightface" &&
-            (item.metadata?.model_type === "face_classifier" ||
+            (item.metadata?.model_type === "face_gallery" ||
+              item.metadata?.model_type === "face_classifier" ||
               item.metadata?.task === "classification" ||
               item.metadata?.label_semantics === "identity"),
         );
@@ -1808,13 +1810,18 @@
         return [...new Set(references)];
       }
       function libraryResults() {
-        const result = modelPage(library, {
-          query: libraryQuery,
-          engine: libraryEngine,
-          labels: libraryLabels,
-          sort: librarySort,
-          page: libraryPageNumber,
-        });
+        const result = modelPage(
+          library.filter(
+            (item) => item.metadata?.model_type !== "face_gallery",
+          ),
+          {
+            query: libraryQuery,
+            engine: libraryEngine,
+            labels: libraryLabels,
+            sort: librarySort,
+            page: libraryPageNumber,
+          },
+        );
         libraryPageNumber = result.page;
         const cards = result.models
           .map((m) => {
@@ -1948,6 +1955,29 @@
           clearTimeout(timeout);
         }
       }
+      async function loadGalleryModels(active) {
+        const timeout = setTimeout(() => active.abort(), 5000);
+        try {
+          const response = await fetch("/api/faces/classifiers", {
+            cache: "no-store",
+            signal: active.signal,
+          });
+          if (!response.ok) return;
+          const data = await response.json();
+          if (!mounted || active !== libraryController) return;
+          const galleries = (data.models || []).filter(
+            (item) => item.metadata?.model_type === "face_gallery",
+          );
+          library = library
+            .filter((item) => item.metadata?.model_type !== "face_gallery")
+            .concat(galleries);
+          refreshSignalPanels();
+        } catch {
+          /* Native gallery storage does not block the model library. */
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
       async function loadLibrary() {
         if (demo || !mounted) return;
         libraryController?.abort();
@@ -1968,6 +1998,7 @@
           const panel = root.querySelector(".we-library");
           if (panel) panel.outerHTML = libraryPanel();
           refreshSignalPanels();
+          loadGalleryModels(active);
         } catch (error) {
           if (mounted && error.name !== "AbortError") {
             libraryMessage = error.message;
@@ -2406,8 +2437,11 @@
               )
                 return "";
               if (n.type === "model" && k === "model_id") {
-                const choices = [...BUILTIN_MODELS, ...library];
-                return `<label>Model<select data-param="model_id"><option value="">Choose model</option><optgroup label="InsightFace built-in detectors">${BUILTIN_MODELS.map((model) => `<option value="${model.id}" ${v === model.id ? "selected" : ""}>${esc(model.name)}</option>`).join("")}</optgroup><optgroup label="Uploaded and registered models">${library.map((model) => `<option value="${esc(model.id)}" ${v === model.id ? "selected" : ""}>${esc(model.name)} | ${esc(model.engine)}</option>`).join("")}</optgroup>${v && !choices.some((model) => model.id === v) ? `<option selected value="${esc(v)}">Unavailable: choose replacement</option>` : ""}</select></label><p>Choose the detector here, then connect Model OUT to Detections MODEL IN. For RetinaFace, select a compatible uploaded or registered ONNX detector.</p>${builtinModel(v) ? detectorPanel(n) : ""}`;
+                const weights = library.filter(
+                  (item) => item.metadata?.model_type !== "face_gallery",
+                );
+                const choices = [...BUILTIN_MODELS, ...weights];
+                return `<label>Model<select data-param="model_id"><option value="">Choose model</option><optgroup label="InsightFace built-in detectors">${BUILTIN_MODELS.map((model) => `<option value="${model.id}" ${v === model.id ? "selected" : ""}>${esc(model.name)}</option>`).join("")}</optgroup><optgroup label="Uploaded and registered models">${weights.map((model) => `<option value="${esc(model.id)}" ${v === model.id ? "selected" : ""}>${esc(model.name)} | ${esc(model.engine)}</option>`).join("")}</optgroup>${v && !choices.some((model) => model.id === v) ? `<option selected value="${esc(v)}">Unavailable: choose replacement</option>` : ""}</select></label><p>Choose the detector here, then connect Model OUT to Detections MODEL IN. For RetinaFace, select a compatible uploaded or registered ONNX detector.</p>${builtinModel(v) ? detectorPanel(n) : ""}`;
               }
               if (k === "camera_id" || k === "model_id") {
                 const items =
@@ -2415,16 +2449,31 @@
                     ? cameraList()
                     : n.type === "classifier"
                       ? classifierModels()
-                      : library;
+                      : library.filter(
+                          (item) =>
+                            item.metadata?.model_type !== "face_gallery",
+                        );
                 const modelLabel =
                   n.type === "classifier"
-                    ? "InsightFace classifier"
+                    ? "InsightFace classifier or enrolled gallery"
                     : "Local model";
                 return `<label>${k === "camera_id" ? "Camera source" : modelLabel}<select data-param="${k}"><option value="">Choose ${k === "camera_id" ? "camera" : n.type === "classifier" ? "classifier" : "model"}</option>${items.map((item) => `<option value="${esc(item.id)}" ${v === item.id ? "selected" : ""}>${esc(item.name || item.id)}${item.engine ? ` | ${esc(item.engine)}` : ""}</option>`).join("")}${v && !items.some((item) => item.id === v) ? `<option selected value="${esc(v)}">Unavailable: choose replacement</option>` : ""}</select></label>`;
               }
               if (n.type === "detections" && k === "detector") return "";
+              const galleryClassifier =
+                n.type === "classifier" &&
+                library.some(
+                  (item) =>
+                    item.id === n.params.model_id &&
+                    item.metadata?.model_type === "face_gallery",
+                );
+              if (
+                galleryClassifier &&
+                ["margin", "output", "preprocessing"].includes(k)
+              )
+                return "";
               if (n.type === "classifier" && k === "threshold")
-                return `<label>Classifier threshold<input data-param="threshold" type="number" min="0" max="1" step="0.01" value="${esc(v)}"></label>`;
+                return `<label>${galleryClassifier ? "Gallery cosine similarity threshold" : "Classifier threshold"}<input data-param="threshold" type="number" min="${galleryClassifier ? -1 : 0}" max="1" step="0.01" value="${esc(v)}"></label>`;
               if (n.type === "classifier" && k === "confirmations")
                 return `<label>Confirm identity after<input data-param="confirmations" type="number" min="1" max="15" step="1" value="${esc(v)}"></label><p>Consecutive reliable results on the same face. Higher counts reduce flickering and delay the first identity.</p>`;
               if (n.type === "classifier" && k === "switch_confirmations")
@@ -4837,6 +4886,7 @@
       root.addEventListener("dragend", endDrag);
       root.addEventListener("dragover", over);
       root.addEventListener("drop", drop);
+      window.addEventListener("spyder:face-galleries-changed", loadLibrary);
       window.addEventListener("spyder:cameras", refreshCameras);
       if (demo)
         try {
@@ -4910,6 +4960,10 @@
         detectorController?.abort();
         importGeneration++;
         for (const request of requestControllers) request.abort();
+        window.removeEventListener(
+          "spyder:face-galleries-changed",
+          loadLibrary,
+        );
         window.removeEventListener("spyder:cameras", refreshCameras);
         root.removeEventListener("toggle", toggleDetails, true);
         root.removeEventListener("input", input);

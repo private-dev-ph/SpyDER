@@ -6,6 +6,9 @@ Start with [Getting started](getting-started.md) for a working local installatio
 
 ## User guides
 
+- [Face galleries and ONVIF cameras](user-guide/face-galleries-and-onvif.md): local
+  enrollment, workflow recognition, LAN discovery, and timed PTZ controls.
+
 - [Camera setup and Control Room](user-guide/cameras.md): sources, tuning, profiles,
   fullscreen, and camera release behavior.
 - [Vision Lab and workflows](user-guide/vision-workflows.md): motion analysis,

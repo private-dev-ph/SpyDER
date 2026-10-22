@@ -357,9 +357,11 @@
       switchRecordingView(recordingView);
     } else if (current === "vision-lab") {
       content.innerHTML =
-        '<div class="recording-actions"><button id="vision-motion-tab" class="button primary">Motion & ROI</button><button id="vision-workflow-tab" class="button secondary">Models & Workflows</button></div><div id="vision-mode-content"></div>';
+        '<div class="recording-actions"><button id="vision-motion-tab" class="button primary">Motion & ROI</button><button id="vision-workflow-tab" class="button secondary">Models & Workflows</button><button id="vision-gallery-tab" class="button secondary" aria-pressed="false">Face galleries</button></div><div id="vision-mode-content"></div>';
       const mode = find("#vision-mode-content");
       function switchMode(workflow) {
+        find("#vision-gallery-tab").setAttribute("aria-pressed", "false");
+        find("#vision-gallery-tab").className = "button secondary";
         window.spyderVisionLab?.unmount();
         window.spyderWorkflows?.unmount();
         find("#vision-motion-tab").setAttribute(
@@ -383,10 +385,21 @@
       find("#vision-workflow-tab").addEventListener("click", () =>
         switchMode(true),
       );
+      find("#vision-gallery-tab").addEventListener("click", () => {
+        window.spyderVisionLab?.unmount();
+        window.spyderWorkflows?.unmount();
+        for (const id of ["vision-motion-tab", "vision-workflow-tab"]) {
+          find("#" + id).className = "button secondary";
+          find("#" + id).setAttribute("aria-pressed", "false");
+        }
+        find("#vision-gallery-tab").className = "button primary";
+        find("#vision-gallery-tab").setAttribute("aria-pressed", "true");
+        mode.innerHTML = '<div id="face-gallery-tools"></div>';
+      });
       switchMode(false);
     } else if (current === "camera-setup") {
       content.innerHTML =
-        '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section>';
+        '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section><section class="workspace-panel"><div id="onvif-camera-tools"></div></section>';
       find("h2", content).textContent =
         current === "vision-lab" ? "Vision pipelines" : "Connected cameras";
       find(".workspace-description", content).textContent =
