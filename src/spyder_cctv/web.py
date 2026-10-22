@@ -296,6 +296,10 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/event-library.js",
                 "/event-library.css",
                 "/recording-library.js",
+                "/recording-player.js",
+                "/recording-player.css",
+                "/recording-timeline.js",
+                "/recording-timeline.css",
                 "/form-controls.js",
                 "/form-controls.css",
             ):

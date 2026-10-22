@@ -251,6 +251,16 @@
         download.href = item.url;
         download.download = item.filename || "recording";
         actions.append(download);
+        if (
+          item.kind === "recording" &&
+          item.duration_seconds > 0 &&
+          adapters.onTimeline
+        ) {
+          const timeline = el("button", "button secondary", "Show on timeline");
+          timeline.type = "button";
+          timeline.addEventListener("click", () => adapters.onTimeline(item));
+          actions.append(timeline);
+        }
         if (item.recovered)
           detail.append(
             el("small", "field-help", "Recovered after interruption"),

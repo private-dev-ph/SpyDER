@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import threading
 import time
@@ -1221,7 +1222,11 @@ class RecordingService:
         if (
             not isinstance(value, list)
             or len(value) > 64
-            or any(not isinstance(camera_id, str) for camera_id in value)
+            or any(
+                not isinstance(camera_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", camera_id)
+                for camera_id in value
+            )
             or len(set(value)) != len(value)
         ):
             return None
