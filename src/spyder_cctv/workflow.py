@@ -20,6 +20,7 @@ from .cv.contracts import VisionConfig
 from .cv.detectors import DetectorCatalog
 from .events import EventService
 from .workflow_code import run_code, validate_code
+from .workflow_subflows import SubflowCatalog
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_WORKFLOWS = 5000
@@ -93,14 +94,24 @@ _NODE_PARAMS = {
     "record": {"action"},
     "code": {"language", "source"},
     "preview": set(),
+    "subflow": {"subflow_id", "version", "arguments"},
+    "subflow_input": set(),
+    "subflow_output": set(),
 }
+_SIGNALS_BY_NODE.update(
+    {
+        "subflow": set(_SIGNAL_TYPES),
+        "subflow_input": set(_SIGNAL_TYPES),
+        "subflow_output": set(_SIGNAL_TYPES),
+    }
+)
 
 
 def _finite(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def _validate_graph(raw: Any) -> dict[str, Any]:
+def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) != {
         "id",
         "name",
@@ -160,7 +171,20 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
         ):
             raise ValueError("Node position must be between 0 and 5000")
         p = dict(params)
-        if kind == "camera":
+        if kind in ("subflow_input", "subflow_output"):
+            if not allow_bridges or p:
+                raise ValueError("Subflow bridge nodes are valid only inside subflow definitions")
+        elif kind == "subflow":
+            if (
+                not isinstance(p.get("subflow_id"), str)
+                or not _ID.fullmatch(p["subflow_id"])
+                or type(p.get("version")) is not int
+                or p["version"] < 1
+                or not isinstance(p.get("arguments", {}), dict)
+            ):
+                raise ValueError("Invalid subflow call parameters")
+            p.setdefault("arguments", {})
+        elif kind == "camera":
             p.setdefault("camera_id", "")
             if not isinstance(p["camera_id"], str) or (
                 p["camera_id"] and not _ID.fullmatch(p["camera_id"])
@@ -340,6 +364,20 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
                 and target_kind == "detections"
                 and by_id[target]["params"]["engine"] == "insightface"
             )
+        elif source_kind == "subflow_input":
+            valid = input_name == "detections" and target_kind not in (
+                "camera",
+                "model",
+                "classifier",
+                "subflow_input",
+            )
+        elif target_kind == "subflow_output":
+            valid = input_name == "detections" and source_kind not in (
+                "preview",
+                "model",
+                "classifier",
+                "subflow_output",
+            )
         else:
             valid = input_name == "detections" and target_kind not in (
                 "camera",
@@ -465,6 +503,10 @@ class WorkflowService:
         self.detector_catalog = detector_catalog or DetectorCatalog()
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.subflows = SubflowCatalog(
+            self.storage_dir / "subflows.json",
+            lambda raw: _validate_graph(raw, allow_bridges=True),
+        )
         self.event_store = EventService(
             getattr(manager, "app_data_dir", self.storage_dir), recorder
         )
@@ -527,7 +569,10 @@ class WorkflowService:
             cameras = set()
             for graph in self._graphs.values():
                 if graph["enabled"]:
-                    cameras.update(self._inference_camera_ids(graph))
+                    try:
+                        cameras.update(self._inference_camera_ids(self.compile_graph(graph)))
+                    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                        self._report_compile_error(graph, exc)
             publish(cameras)
 
     def _sync_pre_event_buffer(self) -> None:
@@ -538,6 +583,11 @@ class WorkflowService:
         requirements: dict[str, int] = {}
         for graph in self._graphs.values():
             if not graph["enabled"]:
+                continue
+            try:
+                graph = self.compile_graph(graph)
+            except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                self._report_compile_error(graph, exc)
                 continue
             seconds = max(
                 (
@@ -583,6 +633,7 @@ class WorkflowService:
                 "runtime": copy.deepcopy(runtime),
                 "errors": copy.deepcopy(self._errors[-100:]),
                 "storage_error": self._storage_error,
+                "subflow_storage_error": self.subflows.storage_error,
                 "pre_event_buffer": (
                     self.manager.pre_event_buffer.status()
                     if getattr(self.manager, "pre_event_buffer", None) is not None
@@ -934,7 +985,7 @@ class WorkflowService:
 
     def activation_preview(self, graph: dict[str, Any]) -> dict[str, Any]:
         """Validate graph and show camera changes before activation; never mutate state."""
-        normalized = _validate_graph(graph)
+        normalized = self.compile_graph(_validate_graph(graph))
         with self._lock:
             if normalized["enabled"]:
                 self._validate_complete_sources(normalized)
@@ -1048,6 +1099,7 @@ class WorkflowService:
         if type(disable_motion) is not bool:
             raise ValueError("disable_motion must be boolean")
         normalized = _validate_graph(graph)
+        compiled = self.compile_graph(normalized)
         with self._lock:
             if self._storage_error:
                 raise RuntimeError("Workflow storage is unavailable")
@@ -1066,8 +1118,8 @@ class WorkflowService:
                 names = ", ".join(item["name"] for item in affected)
                 raise ValueError(f"Enabling InsightFace will disable motion analysis on: {names}")
             if normalized["enabled"]:
-                self._validate_complete_sources(normalized)
-                options = self._prepare_model_bindings(normalized)
+                self._validate_complete_sources(compiled)
+                options = self._prepare_model_bindings(compiled)
                 old_settings = self._snapshot_vision_settings(options)
                 for item in affected:
                     camera_id = item["id"]
@@ -1183,12 +1235,13 @@ class WorkflowService:
             raise ValueError("Each detections node can receive only one model")
 
     def _prepare_model_bindings(self, graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        graph = self.compile_graph(graph)
         self._node_pipeline_signatures(graph)
         bindings = self._node_model_bindings(graph)
         for other in self._graphs.values():
             if not other["enabled"] or other["id"] == graph["id"]:
                 continue
-            for camera, model in self._node_model_bindings(other).items():
+            for camera, model in self._node_model_bindings(self.compile_graph(other)).items():
                 if camera in bindings and bindings[camera] != model:
                     raise ValueError(f"Conflicting models target camera {camera}")
         options_by_camera: dict[str, dict[str, Any]] = {}
@@ -1619,7 +1672,14 @@ class WorkflowService:
     def _tick_locked(self, statuses: dict[str, dict[str, Any]], now: float) -> None:
         self._poll_motion_events(statuses)
         with self._lock:
-            graphs = copy.deepcopy([graph for graph in self._graphs.values() if graph["enabled"]])
+            graphs = []
+            for graph in self._graphs.values():
+                if not graph["enabled"]:
+                    continue
+                try:
+                    graphs.append(self.compile_graph(copy.deepcopy(graph)))
+                except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                    self._report_compile_error(graph, exc)
             self._runtime = {
                 graph["id"]: {
                     "state": "enabled" if graph["enabled"] else "disabled",
@@ -1714,6 +1774,34 @@ class WorkflowService:
                 except (OSError, ValueError, RuntimeError):
                     continue
 
+    def compile_graph(self, graph: dict[str, Any]) -> dict[str, Any]:
+        """Expand pinned subflow calls into evaluator graph with stable internal paths."""
+        if graph.get("_compiled") is True:
+            return self.subflows.compile(graph)
+        compiled = self.subflows.compile(_validate_graph(graph))
+        _validate_bindings(compiled["nodes"], compiled["edges"])
+        return compiled
+
+    def _report_compile_error(self, graph: dict[str, Any], error: Exception) -> None:
+        with self._lock:
+            self._errors.append({"workflow_id": graph.get("id"), "message": str(error)[:200]})
+            del self._errors[:-100]
+
+    def remove_subflow(self, subflow_id: str) -> dict[str, Any]:
+        """Delete a definition only when no saved workflow or pinned version uses it."""
+        referenced = any(
+            node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
+            for graph in self._graphs.values()
+            for node in graph["nodes"]
+        ) or any(
+            node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
+            for versions in self.subflows._items.values()
+            for definition in versions
+            if definition is not None
+            for node in definition["graph"]["nodes"]
+        )
+        return self.subflows.delete(subflow_id, referenced=referenced)
+
     @staticmethod
     def _camera_ids(graph: dict[str, Any]) -> list[str]:
         nodes = {node["id"]: node for node in graph["nodes"]}
@@ -1729,7 +1817,7 @@ class WorkflowService:
 
     def preview(self, raw_graph: Any, node_id: Any, camera_id: Any = None) -> dict[str, Any]:
         """Evaluate one draft preview branch against a fresh, existing camera result."""
-        graph = _validate_graph(raw_graph)
+        graph = self.compile_graph(_validate_graph(raw_graph))
         if not isinstance(node_id, str) or not _ID.fullmatch(node_id):
             raise ValueError("Invalid preview node id")
         nodes = {node["id"]: node for node in graph["nodes"]}
@@ -1843,6 +1931,7 @@ class WorkflowService:
         *,
         preview_node_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
+        graph = self.compile_graph(graph)
         nodes = {node["id"]: node for node in graph["nodes"]}
         incoming = {nid: [] for nid in nodes}
         outgoing = {nid: [] for nid in nodes}
