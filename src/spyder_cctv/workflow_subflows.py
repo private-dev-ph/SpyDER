@@ -170,22 +170,29 @@ class SubflowCatalog:
                 or kind not in _TYPES
             ):
                 raise ValueError("Invalid or duplicate subflow parameter")
-            node = nodes.get(node_id)
+            node = nodes.get(node_id) if isinstance(node_id, str) else None
             if (
                 node is None
-                or node["type"] not in ("camera", "model")
-                or field not in ("camera_id", "model_id")
+                or node["type"] in ("subflow", "subflow_input", "subflow_output")
+                or not isinstance(field, str)
+                or field in ("subflow_id", "version")
+                or field not in node["params"]
             ):
-                raise ValueError(
-                    "Exposed parameter must map to camera_id or model_id on camera/model node"
-                )
-            if (node["type"], field) not in (("camera", "camera_id"), ("model", "model_id")):
-                raise ValueError("Exposed field does not match node type")
-            if kind != "string" or (node_id, field) in mapped or not self._type_ok(default, kind):
+                raise ValueError("Exposed parameter must map to a supported scalar node parameter")
+            if not self._type_ok(default, kind) or not self._type_ok(node["params"][field], kind):
+                raise ValueError("Exposed parameter type does not match node parameter")
+            if (node_id, field) in mapped:
                 raise ValueError("Invalid parameter default or duplicate field mapping")
             names.add(name)
             mapped.add((node_id, field))
             parameters.append(copy.deepcopy(parameter))
+        parameter_graph = copy.deepcopy(graph)
+        parameter_nodes = {node["id"]: node for node in parameter_graph["nodes"]}
+        for parameter in parameters:
+            parameter_nodes[parameter["node_id"]]["params"][parameter["field"]] = parameter[
+                "default"
+            ]
+        graph = self.validate_graph(parameter_graph)
         return {
             "id": raw["id"],
             "name": raw["name"].strip(),
@@ -334,16 +341,16 @@ class SubflowCatalog:
         nodes = copy.deepcopy(graph["nodes"])
         edges = copy.deepcopy(graph["edges"])
         root = {**graph, "nodes": nodes, "edges": edges}
-        paths = {node["id"]: [node["id"]] for node in nodes}
 
         def expand(
             current: dict[str, Any],
             path: tuple[str, ...],
             stack: tuple[tuple[str, int], ...],
             depth: int,
-        ) -> dict[str, Any]:
+        ) -> tuple[dict[str, Any], dict[str, list[str]]]:
             if depth > _MAX_DEPTH:
                 raise ValueError("Subflow nesting depth exceeds 4")
+            paths = {node["id"]: [node["id"]] for node in current["nodes"]}
             existing = {node["id"] for node in current["nodes"]}
             for call in list(current["nodes"]):
                 if call["type"] != "subflow":
@@ -370,17 +377,21 @@ class SubflowCatalog:
                     value = args.get(parameter["name"], parameter["default"])
                     if not self._type_ok(value, parameter["type"]):
                         raise ValueError(f"Invalid value for subflow parameter {parameter['name']}")
-                    if value and not _ID.fullmatch(value):
+                    if (
+                        parameter["field"] in ("camera_id", "model_id")
+                        and value
+                        and not _ID.fullmatch(value)
+                    ):
                         raise ValueError(
                             f"Invalid identifier for subflow parameter {parameter['name']}"
                         )
                     child_nodes[parameter["node_id"]]["params"][parameter["field"]] = value
-                child = expand(child, (*path, call["id"]), (*stack, ref), depth + 1)
+                child = self.validate_graph(child)
+                child, child_paths = expand(
+                    child, (*path, call["id"]), (*stack, ref), depth + 1
+                )
                 inp = next(n["id"] for n in child["nodes"] if n["type"] == "subflow_input")
                 out = next(n["id"] for n in child["nodes"] if n["type"] == "subflow_output")
-                output_sources = [edge["from"] for edge in child["edges"] if edge["to"] == out]
-                if len(output_sources) != 1:
-                    raise ValueError("Subflow output bridge must have exactly one input")
                 import hashlib
 
                 mapping = {
@@ -395,54 +406,32 @@ class SubflowCatalog:
                 ):
                     raise ValueError("Expanded subflow node ID collision")
                 inbound = [e for e in current["edges"] if e["to"] == call["id"]]
-                outbound = [e for e in current["edges"] if e["from"] == call["id"]]
-                current["edges"] = [
-                    e for e in current["edges"] if e not in inbound and e not in outbound
-                ]
+                current["edges"] = [e for e in current["edges"] if e not in inbound]
                 for edge in inbound:
-                    for child_edge in child["edges"]:
-                        if child_edge["from"] == inp and child_edge["to"] != out:
-                            current["edges"].append({**edge, "to": mapping[child_edge["to"]]})
-                for edge in outbound:
-                    for child_edge in child["edges"]:
-                        if child_edge["to"] == out:
-                            if child_edge["from"] == inp:
-                                for source in inbound:
-                                    current["edges"].append({**source, "to": edge["to"]})
-                            else:
-                                current["edges"].append(
-                                    {**edge, "from": mapping[child_edge["from"]]}
-                                )
-                output_source = mapping[output_sources[0]]
-                for target in current["nodes"]:
-                    if target["id"] == call["id"]:
-                        continue
-                    for binding in target.get("bindings", {}).values():
-                        if binding["node"] == call["id"]:
-                            binding["node"] = output_source
+                    current["edges"].append({**edge, "to": mapping[inp]})
                 current["edges"].extend(
                     {**e, "from": mapping[e["from"]], "to": mapping[e["to"]]}
                     for e in child["edges"]
-                    if e["from"] != inp and e["to"] != out
                 )
-                current["nodes"] = [n for n in current["nodes"] if n["id"] != call["id"]]
-                paths.pop(call["id"], None)
-                current["nodes"].extend(
-                    {**n, "id": mapping[n["id"]]}
-                    for n in child["nodes"]
-                    if n["id"] not in (inp, out)
+                current["edges"].append(
+                    {"from": mapping[out], "to": call["id"], "input": "detections"}
                 )
+                expanded_nodes = [{**n, "id": mapping[n["id"]]} for n in child["nodes"]]
+                current["nodes"].extend(expanded_nodes)
+                for mapped_node in expanded_nodes:
+                    for binding in mapped_node.get("bindings", {}).values():
+                        if binding["node"] in mapping:
+                            binding["node"] = mapping[binding["node"]]
                 for original, mapped in mapping.items():
-                    if original not in (inp, out):
-                        paths[mapped] = [*path, call["id"], *paths.get(original, [original])]
+                    paths[mapped] = [call["id"], *child_paths[original]]
                 existing.update(mapping.values())
             if len(current["nodes"]) > _MAX_NODES:
                 raise ValueError("Expanded workflow exceeds 256 nodes")
             if len(current["edges"]) > _MAX_EDGES:
                 raise ValueError("Expanded workflow exceeds 512 edges")
-            return current
+            return current, paths
 
-        compiled = expand(root, (), (), 0)
+        compiled, paths = expand(root, (), (), 0)
         compiled["nodes"].sort(key=lambda n: n["id"])
         compiled["_compiled"] = True
         compiled["_paths"] = paths
