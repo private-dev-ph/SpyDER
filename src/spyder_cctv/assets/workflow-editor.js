@@ -679,7 +679,7 @@
     nodes[2].params.seconds = 10;
     nodes[3].params.message = "Face detected";
     return {
-      id: `workflow-${Math.random().toString(36).slice(2, 8)}`,
+      id: `workflow-${Math.random().toString(36).slice(2, 14)}`,
       name: "Face event",
       enabled: false,
       camera_ids: [],
@@ -1076,6 +1076,9 @@
         graphRevision = 0,
         notice = "",
         workflows = [],
+        workflowCounts = { total: 0, enabled: 0, disabled: 0 },
+        managerHandle = null,
+        managerGeneration = 0,
         cameras = [],
         events = [],
         dirty = false,
@@ -1144,13 +1147,199 @@
       container.replaceChildren(root);
       const cameraList = () => window.spyder?.cameras?.() || cameras,
         fresh = () => ({
-          id: `workflow-${Math.random().toString(36).slice(2, 8)}`,
+          id: `workflow-${Math.random().toString(36).slice(2, 14)}`,
           name: "New workflow",
           enabled: false,
           camera_ids: [],
           nodes: [],
           edges: [],
         });
+      async function getJSON(url, signal) {
+        const active = new AbortController(),
+          abort = () => active.abort();
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) active.abort();
+        requestControllers.add(active);
+        const limit = setTimeout(abort, 10000);
+        try {
+          const response = await fetch(url, {
+            cache: "no-store",
+            signal: active.signal,
+          });
+          const data = await response.json();
+          if (!response.ok)
+            throw Error(data.error || "Workflow data unavailable.");
+          return data;
+        } finally {
+          clearTimeout(limit);
+          signal?.removeEventListener("abort", abort);
+          requestControllers.delete(active);
+        }
+      }
+      async function storedWorkflow(id) {
+        const value = demo
+          ? await window.spyderWorkflowStore?.get(id)
+          : (await getJSON(`/api/workflows/${encodeURIComponent(id)}`))
+              .workflow;
+        if (!value)
+          throw Error("Workflow no longer exists. Refresh the library.");
+        return value;
+      }
+      function applyWorkflow(value, unsaved = false) {
+        controller?.abort();
+        debugController?.abort();
+        graph = migrateDetectorNodes(value);
+        graphRevision++;
+        dirty = unsaved;
+        snapshotLoaded = true;
+        selected = "";
+        selectedEdge = "";
+        settingsNode = "";
+        chosenSignal = null;
+        reconnectChoice = null;
+        undoStack = [];
+        redoStack = [];
+        activationReview = null;
+        activationMessage = "";
+        activationError = false;
+        if (demo)
+          try {
+            localStorage.setItem(key, JSON.stringify(graph));
+          } catch {
+            issue(
+              "Draft storage unavailable. Export your workflow to keep a copy.",
+            );
+          }
+        render();
+        visibilityChanged();
+      }
+      function exportWorkflow(value) {
+        const blob = new Blob([encodeWorkflow(value, library)], {
+            type: "application/json",
+          }),
+          url = URL.createObjectURL(blob),
+          link = document.createElement("a");
+        link.href = url;
+        link.download = `${value.name.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 80) || "workflow"}.json`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      function openWorkflowManager(initialDelete) {
+        if (busy || activationBusy || activationReview) return;
+        if (!window.spyderWorkflowManager) {
+          issue("Workflow manager is unavailable. Refresh the app.");
+          return;
+        }
+        managerHandle?.close();
+        const generation = ++managerGeneration,
+          current = () => mounted && generation === managerGeneration;
+        managerHandle = window.spyderWorkflowManager.open({
+          demo,
+          currentId: () => graph.id,
+          isDirty: () => dirty,
+          cameras: cameraList,
+          engines: ["opencv", "yolo", "insightface"],
+          ...(initialDelete ? { initialDelete } : {}),
+          onClose: () => {
+            if (generation === managerGeneration) {
+              managerGeneration++;
+              managerHandle = null;
+            }
+          },
+          onKeepEditing: () => root.querySelector("[data-save]")?.focus?.(),
+          loadPage: async (params, options) => {
+            const data = demo
+              ? await window.spyderWorkflowStore.page(params, options)
+              : await getJSON(
+                  "/api/workflows/library?" +
+                    new URLSearchParams(
+                      Object.entries(params)
+                        .filter(([, v]) => v !== undefined)
+                        .map(([k, v]) => [k, v === "all" ? "" : v]),
+                    ).toString(),
+                  options?.signal,
+                );
+            if (current()) {
+              workflowCounts = data.counts || workflowCounts;
+              updateSnapshot();
+            }
+            return data;
+          },
+          onOpen: async (id) => {
+            if (id === graph.id && !dirty) return true;
+            const value = await storedWorkflow(id);
+            if (!current()) return false;
+            applyWorkflow(value);
+            return true;
+          },
+          onCreate: async () => {
+            if (!current()) return false;
+            applyWorkflow(fresh());
+            issue(
+              "New disabled draft created. Save it to add it to the library.",
+            );
+            return true;
+          },
+          onDuplicate: async (id) => {
+            const value = await storedWorkflow(id);
+            if (!current()) return false;
+            const copy = {
+              ...clone(value),
+              id: fresh().id,
+              name: value.name.slice(0, 121) + " (copy)",
+              enabled: false,
+            };
+            if (demo) await window.spyderWorkflowStore.save(copy);
+            else await post("/api/workflows", { workflow: copy });
+            if (!current()) return false;
+            workflowCounts = {
+              ...workflowCounts,
+              total: workflowCounts.total + 1,
+              disabled: workflowCounts.disabled + 1,
+            };
+            workflows = [copy];
+            applyWorkflow(copy);
+            issue("Disabled copy created. Review before enabling.");
+            return true;
+          },
+          onRename: async (id, name) => {
+            if (id === graph.id && dirty)
+              throw Error(
+                "Save your draft edits before renaming this workflow in the library.",
+              );
+            if (demo) {
+              const value = await storedWorkflow(id);
+              await window.spyderWorkflowStore.save({ ...value, name });
+            } else
+              await post(`/api/workflows/${encodeURIComponent(id)}/rename`, {
+                name,
+              });
+            if (current() && id === graph.id) {
+              controller?.abort();
+              graph.name = name;
+              graphRevision++;
+              render(true);
+            }
+          },
+          onDelete: async (id) => {
+            if (id === graph.id && dirty)
+              throw Error(
+                "Save or export your draft edits before deleting this workflow.",
+              );
+            if (demo) await window.spyderWorkflowStore.remove(id);
+            else
+              await post(`/api/workflows/${encodeURIComponent(id)}/remove`, {});
+            if (current() && id === graph.id) {
+              workflows = [];
+              applyWorkflow(fresh());
+            }
+          },
+          onExport: async (id) => {
+            const value = await storedWorkflow(id);
+            if (current()) exportWorkflow(value);
+          },
+        });
+      }
       const previewController = window.spyderWorkflowPreview?.create(root, {
         graph: () => graph,
         cameras: cameraList,
@@ -2224,7 +2413,7 @@
                 "",
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
-        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><div class="we-toolbar-identity"><label>Workflow<select data-workflow>${workflows.map((w) => `<option value="${esc(w.id)}" ${w.id === graph.id ? "selected" : ""}>${esc(w.name)}</option>`).join("")}<option value="__new">New workflow</option></select></label><label>Name<input data-name value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${demo || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
+        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar"><div class="we-toolbar-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><label>Name<input data-name maxlength="128" value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops workflow actions; camera model settings stay active.</span></div><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
           events
             .slice(-5)
             .reverse()
@@ -2496,10 +2685,13 @@
         requestControllers.add(active);
         const limit = setTimeout(() => active.abort(), 15000);
         try {
-          const response = await fetch("/api/workflows", {
-            cache: "no-store",
-            signal: active.signal,
-          });
+          const response = await fetch(
+            `/api/workflows?current=${encodeURIComponent(id)}`,
+            {
+              cache: "no-store",
+              signal: active.signal,
+            },
+          );
           if (!response.ok) throw Error("Workflow status unavailable");
           const data = await response.json();
           if (!mounted || graph.id !== id) return;
@@ -2697,8 +2889,37 @@
           return;
         }
         if (demo) {
-          mark();
-          issue("Draft saved in this browser. Execution disabled.");
+          if (!window.spyderWorkflowStore) {
+            mark();
+            issue("Draft saved in this browser. Execution disabled.");
+            return;
+          }
+          if (busy) return;
+          busy = true;
+          const savedGraph = clone(graph),
+            savedRevision = graphRevision;
+          render(true);
+          try {
+            const saved = await window.spyderWorkflowStore.save(savedGraph);
+            if (!mounted) return;
+            workflows = [saved];
+            if (graph.id === savedGraph.id && graphRevision === savedRevision)
+              dirty = false;
+            try {
+              localStorage.setItem(key, JSON.stringify(graph));
+            } catch {
+              /* IndexedDB save succeeded. */
+            }
+            const summary = await window.spyderWorkflowStore.page({ size: 1 });
+            if (!mounted) return;
+            workflowCounts = summary.counts || workflowCounts;
+            issue("Workflow saved in this browser. Execution disabled.");
+          } catch (error) {
+            if (mounted) issue(error.message);
+          } finally {
+            busy = false;
+            if (mounted) render(true);
+          }
           return;
         }
         if (busy) return;
@@ -2723,15 +2944,15 @@
       function updateSnapshot() {
         const chooser = root.querySelector("[data-workflow]");
         if (chooser) {
-          const current = graph?.id || "";
-          chooser.innerHTML =
-            workflows
-              .map(
-                (w) =>
-                  `<option value="${esc(w.id)}" ${w.id === current ? "selected" : ""}>${esc(w.name)}</option>`,
-              )
-              .join("") + `<option value="__new">New workflow</option>`;
-          chooser.value = current;
+          const label = root.querySelector("[data-workflow-label]");
+          if (label) label.textContent = graph?.name || "New workflow";
+          chooser.setAttribute(
+            "aria-label",
+            `Manage workflows. Current: ${graph?.name || "New workflow"}`,
+          );
+          const count = root.querySelector("[data-workflow-count]");
+          if (count)
+            count.textContent = `${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows`;
         }
         const eventList = root.querySelector(".we-events");
         if (eventList)
@@ -2782,10 +3003,13 @@
         const request = new AbortController();
         debugController = request;
         try {
-          const response = await fetch("/api/workflows/debug", {
-            cache: "no-store",
-            signal: request.signal,
-          });
+          const response = await fetch(
+            `/api/workflows/debug?workflow_id=${encodeURIComponent(graph.id)}`,
+            {
+              cache: "no-store",
+              signal: request.signal,
+            },
+          );
           if (!response.ok) throw Error("Workflow debug data unavailable.");
           const data = await response.json();
           if (!visibleForStatus() || debugController !== request) return;
@@ -2823,14 +3047,18 @@
         const active = controller,
           limit = setTimeout(() => active.abort(), 4000);
         try {
-          const r = await fetch("/api/workflows", {
-              cache: "no-store",
-              signal: active.signal,
-            }),
+          const r = await fetch(
+              `/api/workflows?current=${encodeURIComponent(graph.id)}${!snapshotLoaded ? "&first=1" : ""}`,
+              {
+                cache: "no-store",
+                signal: active.signal,
+              },
+            ),
             data = await r.json();
           if (!r.ok) throw Error(data.error || "Workflow data unavailable.");
           if (!mounted || controller !== active) return;
           workflows = data.workflows || [];
+          workflowCounts = data.counts || workflowCounts;
           events = data.events || [];
           if (data.storage_error)
             issue(
@@ -3198,16 +3426,10 @@
         }
         if (b.dataset.import !== undefined)
           root.querySelector("[data-import-file]").click();
+        else if (b.dataset.openWorkflowManager !== undefined)
+          openWorkflowManager();
         else if (b.dataset.export !== undefined) {
-          const blob = new Blob([encodeWorkflow(graph, library)], {
-              type: "application/json",
-            }),
-            url = URL.createObjectURL(blob),
-            link = document.createElement("a");
-          link.href = url;
-          link.download = `${graph.name.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 80) || "workflow"}.json`;
-          link.click();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          exportWorkflow(graph);
         } else if (b.dataset.libraryUse) {
           if (libraryBusy || graph.nodes.length >= 64) return;
           const model = library.find(
@@ -3511,23 +3733,12 @@
         } else if (b.dataset.deleteEdge) {
           removeConnection(b.dataset.deleteEdge);
         } else if (b.dataset.save !== undefined) save();
-        else if (b.dataset.remove !== undefined && !demo && !busy) {
-          busy = true;
-          try {
-            await post(
-              `/api/workflows/${encodeURIComponent(graph.id)}/remove`,
-              {},
-            );
-            graph = fresh();
-            dirty = false;
-            await poll(false);
-          } catch (x) {
-            issue(x.message);
-          } finally {
-            busy = false;
-            render();
-          }
-        }
+        else if (b.dataset.remove !== undefined && !busy)
+          openWorkflowManager({
+            id: graph.id,
+            name: graph.name,
+            enabled: graph.enabled,
+          });
       };
       const select = (e) => {
         if (e.target.closest(".we-preview")) return;
@@ -4199,8 +4410,25 @@
       }
       poll();
       pollDebug();
+      if (demo && window.spyderWorkflowStore) {
+        // Existing localStorage drafts remain editable; only Save adds them to the library.
+        window.spyderWorkflowStore
+          .page({ size: 1 })
+          .then((data) => {
+            if (mounted) {
+              workflowCounts = data.counts || workflowCounts;
+              updateSnapshot();
+            }
+          })
+          .catch((error) => {
+            if (mounted) issue(error.message);
+          });
+      }
       dispose = () => {
         mounted = false;
+        managerGeneration++;
+        managerHandle?.close();
+        managerHandle = null;
         clearTimeout(debugTimer);
         debugController?.abort();
         debugController = null;

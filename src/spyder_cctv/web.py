@@ -403,24 +403,19 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             elif path == "/api/recordings/schedules":
                 self.json(200, schedules.snapshot())
             elif path == "/api/workflows/debug":
-                query = parse_qs(urlsplit(self.path).query, strict_parsing=True)
-                if set(query) - {"workflow_id"} or any(
-                    len(values) != 1 for values in query.values()
-                ):
-                    self.json(400, {"error": "Invalid workflow debug query"})
-                else:
-                    result = workflows.debug()
-                    workflow_id = query.get("workflow_id", [None])[0]
-                    if workflow_id is not None:
-                        if workflow_id not in workflows._graphs:
-                            self.json(404, {"error": "Unknown workflow"})
-                        else:
-                            result["workflows"] = {
-                                workflow_id: result["workflows"].get(workflow_id)
-                            }
-                            self.json(200, result)
-                    else:
-                        self.json(200, result)
+                try:
+                    query = parse_qs(
+                        urlsplit(self.path).query, keep_blank_values=True, strict_parsing=True
+                    )
+                    if set(query) - {"workflow_id"} or any(
+                        len(values) != 1 or not values[0] for values in query.values()
+                    ):
+                        raise ValueError("Invalid workflow debug query")
+                    self.json(200, workflows.debug(query.get("workflow_id", [None])[0]))
+                except ValueError as error:
+                    self.json(400, {"error": str(error)})
+                except KeyError:
+                    self.json(404, {"error": "Unknown workflow"})
             elif path == "/api/workflows/library":
                 try:
                     query = parse_qs(
@@ -429,53 +424,51 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         strict_parsing=True,
                     )
                     allowed = {"query", "status", "camera", "engine", "sort", "page", "size"}
-                    if set(query) - allowed or any(
-                        len(values) != 1 for values in query.values()
-                    ):
+                    if set(query) - allowed or any(len(values) != 1 for values in query.values()):
                         raise ValueError("Invalid workflow library query")
                     values = {key: items[0] for key, items in query.items()}
                     if values.get("status", "") not in ("", "enabled", "disabled", "empty"):
                         raise ValueError("Invalid workflow status")
+
                     def integer_param(key, default):
                         value = values.get(key, str(default))
                         if not value.isdecimal() or int(value) < 1:
                             raise ValueError(f"Invalid {key}")
                         return int(value)
-                    self.json(200, workflows.library(
-                        query=values.get("query", ""), status=values.get("status", ""),
-                        camera=values.get("camera", ""), engine=values.get("engine", ""),
-                        sort=values.get("sort", "name"), page=integer_param("page", 1),
-                        size=integer_param("size", 25)))
+
+                    self.json(
+                        200,
+                        workflows.library(
+                            query=values.get("query", ""),
+                            status=values.get("status", ""),
+                            camera=values.get("camera", ""),
+                            engine=values.get("engine", ""),
+                            sort=values.get("sort", "name"),
+                            page=integer_param("page", 1),
+                            size=integer_param("size", 25),
+                        ),
+                    )
                 except ValueError as error:
                     self.json(400, {"error": str(error)})
             elif path == "/api/workflows":
-                query = parse_qs(
-                    urlsplit(self.path).query,
-                    keep_blank_values=True,
-                    strict_parsing=True,
-                )
-                if set(query) - {"current", "first"} or any(
-                    len(values) != 1 for values in query.values()
-                ):
-                    self.json(400, {"error": "Invalid workflow list query"})
-                elif (
-                    query.get("first", ["1"])[0] != "1"
-                    or not query.get("current", ["workflow"])[0]
-                ):
-                    self.json(400, {"error": "Invalid workflow list query"})
-                else:
-                    result = workflows.list()
-                    result["counts"] = workflows._workflow_counts()
-                    selected = query.get("current", [None])[0]
-                    if selected is None and query.get("first", [""])[0] == "1":
-                        selected = next(iter(workflows._graphs), None)
-                    if selected is not None:
-                        result["workflows"] = (
-                            [workflows.get(selected)] if selected in workflows._graphs else []
-                        )
-                    elif query:
-                        result["workflows"] = []
-                    self.json(200, result)
+                try:
+                    query = parse_qs(
+                        urlsplit(self.path).query, keep_blank_values=True, strict_parsing=True
+                    )
+                    if (
+                        set(query) - {"current", "first"}
+                        or any(len(values) != 1 or not values[0] for values in query.values())
+                        or query.get("first", ["1"])[0] != "1"
+                    ):
+                        raise ValueError("Invalid workflow list query")
+                    self.json(
+                        200,
+                        workflows.list(
+                            current=query.get("current", [None])[0], first="first" in query
+                        ),
+                    )
+                except ValueError as error:
+                    self.json(400, {"error": str(error)})
             elif path.startswith("/api/workflows/") and path.count("/") == 3:
                 workflow_id = path.rsplit("/", 1)[1]
                 try:

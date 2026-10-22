@@ -521,14 +521,34 @@ class WorkflowService:
                         requirements[camera_id] = max(requirements.get(camera_id, 0), seconds)
         history.configure(requirements)
 
-    def list(self) -> dict[str, Any]:
+    def list(self, current: str | None = None, first: bool = False) -> dict[str, Any]:
+        """Return a legacy full snapshot, or just the selected editor graph."""
         with self._lock:
+            selected = self._graphs.get(current) if current is not None else None
+            if selected is None and first:
+                selected = next(iter(self._graphs.values()), None)
+            graphs = (
+                list(self._graphs.values())
+                if current is None and not first
+                else ([selected] if selected is not None else [])
+            )
+            runtime = (
+                self._runtime
+                if current is None and not first
+                else {
+                    item["id"]: self._runtime.get(
+                        item["id"],
+                        {"state": "enabled" if item["enabled"] else "disabled", "cameras": {}},
+                    )
+                    for item in graphs
+                }
+            )
             return {
-                "workflows": copy.deepcopy(list(self._graphs.values())),
+                "workflows": copy.deepcopy(graphs),
                 "counts": self._workflow_counts(),
                 "catalog": self.catalog(),
                 "events": copy.deepcopy(self._events[-100:]),
-                "runtime": copy.deepcopy(self._runtime),
+                "runtime": copy.deepcopy(runtime),
                 "errors": copy.deepcopy(self._errors[-100:]),
                 "storage_error": self._storage_error,
                 "pre_event_buffer": (
@@ -550,11 +570,17 @@ class WorkflowService:
                     engine = node["params"].get("engine", "any")
                     if engine != "any":
                         engines.add(engine)
-            self._summary_cache.append({
-                "id": graph["id"], "name": graph["name"], "enabled": graph["enabled"],
-                "camera_ids": sorted(cameras), "engines": sorted(engines),
-                "node_count": len(graph["nodes"]), "edge_count": len(graph["edges"]),
-            })
+            self._summary_cache.append(
+                {
+                    "id": graph["id"],
+                    "name": graph["name"],
+                    "enabled": graph["enabled"],
+                    "camera_ids": sorted(cameras),
+                    "engines": sorted(engines),
+                    "node_count": len(graph["nodes"]),
+                    "edge_count": len(graph["edges"]),
+                }
+            )
         self._summary_cache.sort(key=lambda item: (item["name"].casefold(), item["id"]))
 
     def _workflow_counts(self) -> dict[str, int]:
@@ -569,20 +595,29 @@ class WorkflowService:
         size = min(50, max(1, size))
         with self._lock:
             rows = self._summary_cache
-            q = query.casefold()
+            words = query.casefold().split()
             rows = [
-                item for item in rows
-                if not q
-                or q in " ".join(
-                    (item["id"], item["name"], *item["camera_ids"], *item["engines"])
-                ).casefold()
+                item
+                for item in rows
+                if all(
+                    word
+                    in " ".join(
+                        (item["id"], item["name"], *item["camera_ids"], *item["engines"])
+                    ).casefold()
+                    for word in words
+                )
             ]
             rows = [
-                item for item in rows
+                item
+                for item in rows
                 if status not in ("enabled", "disabled", "empty")
-                or (item["enabled"] if status == "enabled"
-                    else not item["enabled"] if status == "disabled"
-                    else item["node_count"] == 0)
+                or (
+                    item["enabled"]
+                    if status == "enabled"
+                    else not item["enabled"]
+                    if status == "disabled"
+                    else item["node_count"] == 0
+                )
             ]
             rows = [item for item in rows if not camera or camera in item["camera_ids"]]
             rows = [item for item in rows if not engine or engine in item["engines"]]
@@ -591,16 +626,20 @@ class WorkflowService:
                 rows.sort(key=lambda item: item["name"].casefold(), reverse=True)
             elif sort == "enabled":
                 rows.sort(
-                    key=lambda item: (
-                        not item["enabled"], item["name"].casefold(), item["id"]
-                    )
+                    key=lambda item: (not item["enabled"], item["name"].casefold(), item["id"])
                 )
             total = len(rows)
-            pages = (total + size - 1) // size
+            pages = max(1, (total + size - 1) // size)
             page = min(page, max(1, pages))
-            return {"items": copy.deepcopy(rows[(page - 1) * size:page * size]), "total": total,
-                    "pages": pages, "page": page, "size": size, "counts": self._workflow_counts(),
-                    "storage_error": self._storage_error}
+            return {
+                "items": copy.deepcopy(rows[(page - 1) * size : page * size]),
+                "total": total,
+                "pages": pages,
+                "page": page,
+                "size": size,
+                "counts": self._workflow_counts(),
+                "storage_error": self._storage_error,
+            }
 
     def get(self, workflow_id: str) -> dict[str, Any]:
         with self._lock:
@@ -628,11 +667,18 @@ class WorkflowService:
             self._rebuild_summary_cache()
             return copy.deepcopy(graph)
 
-    def debug(self) -> dict[str, Any]:
+    def debug(self, workflow_id: str | None = None) -> dict[str, Any]:
         """Latest execution counters only; never store frames or detection payloads."""
         with self._lock:
             result = {}
-            for ident, graph in self._graphs.items():
+            if workflow_id is not None and workflow_id not in self._graphs:
+                raise KeyError(workflow_id)
+            graphs = (
+                self._graphs.items()
+                if workflow_id is None
+                else ((workflow_id, self._graphs[workflow_id]),)
+            )
+            for ident, graph in graphs:
                 entry = copy.deepcopy(self._debug.get(ident, {"nodes": {}, "updated_at": None}))
                 current = {node["id"] for node in graph["nodes"]}
                 entry["nodes"] = {
