@@ -44,7 +44,21 @@ def _definition(subflow_id="reusable", version=None, camera="cam1"):
                 "default": camera,
                 "node_id": "camera",
                 "field": "camera_id",
-            }
+            },
+            {
+                "name": "cooldown_seconds",
+                "type": "number",
+                "default": 10,
+                "node_id": "cool",
+                "field": "seconds",
+            },
+            {
+                "name": "message",
+                "type": "string",
+                "default": "Seen",
+                "node_id": "event",
+                "field": "message",
+            },
         ],
     }
     if version is not None:
@@ -127,8 +141,21 @@ def test_compile_pins_arguments_namespaces_each_caller_and_runtime_executes(serv
     assert service._camera_ids(service.compile_graph(_workflow())) == ["cam1"]
     assert WorkflowService._inference_camera_ids(compiled) == {"cam1"}
     override = _workflow()
-    override["nodes"][1]["params"]["arguments"] = {"camera": "cam2"}
-    assert service._camera_ids(service.compile_graph(override)) == ["cam2"]
+    override["nodes"][1]["params"]["arguments"] = {
+        "camera": "cam2",
+        "cooldown_seconds": 25.5,
+        "message": "Configured",
+    }
+    compiled_override = service.compile_graph(override)
+    assert service._camera_ids(compiled_override) == ["cam2"]
+    assert (
+        next(n for n in compiled_override["nodes"] if n["type"] == "cooldown")["params"]["seconds"]
+        == 25.5
+    )
+    assert (
+        next(n for n in compiled_override["nodes"] if n["type"] == "event")["params"]["message"]
+        == "Configured"
+    )
 
     cv = {"detections": [{"label": "person", "confidence": 0.9}], "engine": "opencv"}
     service._evaluate(_workflow(2), "cam1", cv, 100.0)
@@ -154,6 +181,10 @@ def test_missing_version_bad_argument_and_recursive_reference_rejected(service):
     wrong = _workflow()
     wrong["nodes"][1]["params"]["arguments"] = {"camera": 3}
     with pytest.raises(ValueError, match="parameter camera"):
+        service.compile_graph(wrong)
+    wrong = _workflow()
+    wrong["nodes"][1]["params"]["arguments"] = {"cooldown_seconds": 5000}
+    with pytest.raises(ValueError, match="seconds"):
         service.compile_graph(wrong)
     recursive = _definition("recursive")
     recursive["parameters"] = []
@@ -334,6 +365,19 @@ def test_nested_subflow_versions_and_delete_reference_guards(service):
         {"from": "event", "to": "output"},
     ]
     service.subflows.publish(outer)
+    nested_call = _workflow()
+    nested_call["nodes"][1]["params"] = {
+        "subflow_id": "outerflow",
+        "version": 1,
+        "arguments": {},
+    }
+    compiled = service.compile_graph(nested_call)
+    nested_path = next(
+        path
+        for node_id, path in compiled["_paths"].items()
+        if node_id.startswith("sf_") and len(path) > 2 and path[-1] == "cool"
+    )
+    assert nested_path == ["call0", "nested", "cool"]
     assert [
         item["id"]
         for item in service.subflows.dependencies(
@@ -354,6 +398,70 @@ def test_nested_subflow_versions_and_delete_reference_guards(service):
         service.remove_subflow("reusable")
     with pytest.raises(ValueError, match="referenced"):
         service.subflows.delete("reusable")
+
+
+def test_child_and_call_bindings_survive_namespacing_and_identity_bridge(service):
+    definition = _definition()
+    definition["graph"]["nodes"][-2]["bindings"] = {
+        "message": {"node": "camera", "signal": "camera_id"}
+    }
+    service.subflows.publish(definition)
+    compiled = service.compile_graph(_workflow())
+    nodes = {node["id"]: node for node in compiled["nodes"]}
+    child_event = next(node for node in compiled["nodes"] if node["type"] == "event")
+    child_camera_id = child_event["bindings"]["message"]["node"]
+    assert nodes[child_camera_id]["type"] == "camera"
+    assert any(node["id"] == "call0" and node["type"] == "subflow" for node in compiled["nodes"])
+    assert "call0" in compiled["_paths"]
+
+    passthrough = {
+        "id": "passthrough",
+        "name": "Passthrough",
+        "description": "Identity detection flow",
+        "graph": {
+            "id": "identity",
+            "name": "Identity",
+            "enabled": False,
+            "camera_ids": [],
+            "nodes": [_node("input", "subflow_input"), _node("output", "subflow_output")],
+            "edges": [{"from": "input", "to": "output"}],
+        },
+        "parameters": [],
+    }
+    service.subflows.publish(passthrough)
+    root = {
+        "id": "identity_call",
+        "name": "Identity call",
+        "enabled": False,
+        "camera_ids": [],
+        "nodes": [
+            _node("source", "detections", {}),
+            _node("call", "subflow", {"subflow_id": "passthrough", "version": 1, "arguments": {}}),
+            {
+                **_node("filter", "filter", {}),
+                "bindings": {"label": {"node": "call", "signal": "labels"}},
+            },
+            _node("event", "event", {"message": "Matched"}),
+        ],
+        "edges": [
+            {"from": "source", "to": "call"},
+            {"from": "call", "to": "filter"},
+            {"from": "filter", "to": "event"},
+        ],
+    }
+    expanded = service.compile_graph(root)
+    assert any(node["id"] == "call" and node["type"] == "subflow" for node in expanded["nodes"])
+    assert (
+        next(node for node in expanded["nodes"] if node["id"] == "filter")["bindings"]["label"][
+            "node"
+        ]
+        == "call"
+    )
+    service._evaluate(root, "cam1", {"detections": [{"label": "person"}], "engine": "opencv"}, 500)
+    assert service.event_store.list()["events"][-1]["message"] == "Matched"
+    before = len(service.event_store.list()["events"])
+    service._evaluate(root, "cam1", {"detections": [], "engine": "opencv"}, 501)
+    assert len(service.event_store.list()["events"]) == before
 
 
 def test_model_usage_in_any_pinned_subflow_version_is_protected(service):
