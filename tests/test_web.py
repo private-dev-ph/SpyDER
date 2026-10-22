@@ -1271,3 +1271,34 @@ def test_workflow_library_api_paginates_and_serves_one_graph(server):
     with pytest.raises(HTTPError) as error:
         request("/api/workflows/missing")
     assert error.value.code == 404
+
+
+def test_workflow_list_fallback_and_malformed_queries_return_400(server):
+    url, _ = server
+    graph = {
+        "workflow": {
+            "id": "first",
+            "name": "First",
+            "enabled": False,
+            "camera_ids": [],
+            "nodes": [],
+            "edges": [],
+        }
+    }
+    save = Request(
+        url + "/api/workflows",
+        method="POST",
+        data=json.dumps(graph).encode(),
+        headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+    )
+    with urlopen(save, timeout=4):
+        pass
+
+    with urlopen(url + "/api/workflows?current=missing&first=1", timeout=4) as response:
+        result = json.load(response)
+    assert [item["id"] for item in result["workflows"]] == ["first"]
+
+    for path in ("/api/workflows/library?broken", "/api/workflows/debug?workflow_id"):
+        with pytest.raises(HTTPError) as error:
+            urlopen(url + path, timeout=4)
+        assert error.value.code == 400
