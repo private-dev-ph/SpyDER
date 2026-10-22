@@ -2946,3 +2946,83 @@ def test_library_toggle_rolls_back_failed_persistence(service, monkeypatch):
         service.set_enabled(saved["id"], True, saved)
     assert service.get(saved["id"]) == saved
     assert service.library()["counts"]["enabled"] == 0
+
+
+def test_workflow_inference_demand_is_shared_and_durable(service, monkeypatch):
+    demands = []
+    service.manager.set_workflow_vision_cameras = lambda ids: demands.append(set(ids))
+    service._sync_inference_demand()
+    assert demands[-1] == set()
+    first = service.save(graph())
+    second = service.save({**graph(), "id": "second", "name": "Second"})
+    assert demands[-1] == {"cam1"}
+    service.set_enabled(first["id"], False, first)
+    assert demands[-1] == {"cam1"}
+    service.remove(second["id"])
+    assert demands[-1] == set()
+    original = service._persist
+    monkeypatch.setattr(service, "_persist", lambda: (_ for _ in ()).throw(OSError("disk")))
+    count = len(demands)
+    with pytest.raises(OSError):
+        service.save(graph())
+    assert len(demands) == count
+    monkeypatch.setattr(service, "_persist", original)
+
+
+def test_workflow_inference_demand_restores_on_startup_and_clears_on_close(service, tmp_path):
+    demands = []
+    service.manager.set_workflow_vision_cameras = lambda ids: demands.append(set(ids))
+    service.save(graph())
+    restored = WorkflowService(service.manager, service.recorder, tmp_path)
+    try:
+        assert demands[-1] == {"cam1"}
+    finally:
+        restored.close()
+    assert demands[-1] == set()
+
+
+def test_only_detection_camera_branches_request_inference():
+    configured = graph(
+        camera_ids=["legacy"],
+        nodes=[
+            {"id": "face-camera", "type": "camera", "params": {"camera_id": "face"}},
+            {"id": "raw-camera", "type": "camera", "params": {"camera_id": "raw"}},
+            {"id": "detect", "type": "detections", "params": {}},
+            {"id": "preview", "type": "preview", "params": {}},
+        ],
+        edges=[
+            {"from": "face-camera", "to": "detect", "input": "camera"},
+            {"from": "raw-camera", "to": "preview", "input": "camera"},
+        ],
+    )
+    assert WorkflowService._inference_camera_ids(configured) == {"face"}
+    configured["nodes"].append({"id": "legacy-detect", "type": "detections", "params": {}})
+    assert WorkflowService._inference_camera_ids(configured) == {"face", "legacy"}
+    assert WorkflowService._inference_camera_ids(graph(nodes=[], edges=[])) == set()
+
+
+def test_preview_renews_inference_only_for_valid_detection_branch(service):
+    from types import SimpleNamespace
+
+    leases = []
+    service.manager.worker = SimpleNamespace(request_vision_preview=lambda: leases.append(True))
+    g = graph(
+        enabled=False,
+        nodes=[
+            {"id": "detect", "type": "detections", "x": 0, "y": 0, "params": {}},
+            {"id": "monitor", "type": "preview", "x": 1, "y": 0, "params": {}},
+            {"id": "raw", "type": "camera", "x": 0, "y": 1, "params": {"camera_id": "cam1"}},
+            {"id": "raw-monitor", "type": "preview", "x": 1, "y": 1, "params": {}},
+        ],
+        edges=[
+            {"from": "detect", "to": "monitor"},
+            {"from": "raw", "to": "raw-monitor", "input": "camera"},
+        ],
+    )
+    assert service.preview(g, "monitor", "cam1")["state"] == "running"
+    assert leases == [True]
+    service.preview(g, "raw-monitor", "cam1")
+    assert leases == [True]
+    with pytest.raises(ValueError):
+        service.preview(g, "monitor", "unrelated")
+    assert leases == [True]

@@ -370,3 +370,156 @@ def test_runtime_reports_bounded_model_classes_from_local_engine():
         assert pipeline.process(frame)[1]["cv"]["classes"] == ["person", "car"]
     finally:
         pipeline.close()
+
+
+def test_suspend_discards_inflight_and_pending_results_then_resumes_same_engine():
+    entered, release = threading.Event(), threading.Event()
+    calls, created, resets = [], [], []
+
+    class Engine:
+        def __init__(self):
+            created.append(self)
+
+        def infer(self, frame):
+            calls.append(int(frame[0, 0, 0]))
+            if len(calls) == 1:
+                entered.set()
+                assert release.wait(3)
+            return [Detection("person", (0, 0, 1, 1), 1)]
+
+        def reset(self):
+            resets.append(threading.current_thread().name)
+
+        def close(self):
+            pass
+
+    pipeline = VisionPipeline(VisionConfig(inference_fps=30), lambda _config: Engine())
+    frame = np.zeros((2, 2, 3), np.uint8)
+    try:
+        pipeline.process(frame)
+        assert entered.wait(2)
+        frame.fill(1)
+        with pipeline._condition:
+            pipeline._next_submission = 0
+        pipeline.process(frame)  # Pending frame must be cleared on suspend.
+        pipeline.set_active(False)
+        frame.fill(2)
+        output, metadata = pipeline.process(frame)
+        assert output is frame
+        assert metadata["cv"]["state"] == "idle"
+        assert metadata["cv"]["detections"] == []
+        assert "idle" in metadata["cv"]["message"]
+        pipeline.set_active(True)
+        pipeline.process(frame)
+        with pipeline._condition:
+            pipeline._next_submission = float("inf")
+        release.set()
+        wait_for(lambda: pipeline.process(frame)[1]["cv"]["state"] == "ready")
+        assert calls == [0, 2]
+        assert resets == [pipeline._thread.name]
+        assert len(created) == 1
+    finally:
+        release.set()
+        pipeline.close()
+
+
+def test_suspend_clears_existing_overlay_and_can_close_while_paused():
+    class Engine:
+        def infer(self, _frame):
+            return []
+
+        def close(self):
+            pass
+
+    pipeline = VisionPipeline(VisionConfig(), lambda _config: Engine())
+    frame = np.zeros((32, 32, 3), np.uint8)
+    try:
+        with pipeline._condition:
+            pipeline._next_submission = float("inf")
+            pipeline._result_time = time.monotonic()
+            pipeline._result = {
+                "state": "ready",
+                "frame_size": [32, 32],
+                "detections": [Detection("person", (1, 1, 20, 20), 1).to_dict()],
+            }
+        assert np.count_nonzero(pipeline.process(frame)[0]) > 0
+        pipeline.set_active(False)
+        output, metadata = pipeline.process(frame)
+        assert output is frame and not frame.any()
+        assert metadata["cv"]["detections"] == []
+        pipeline.close()
+        assert not pipeline.is_alive
+    finally:
+        if pipeline.is_alive:
+            pipeline.close()
+
+
+@pytest.mark.parametrize("fail_on_init", [False, True])
+def test_pause_preserves_terminal_engine_failure(fail_on_init):
+    class Engine:
+        def infer(self, frame):
+            raise RuntimeError("failed")
+
+        def close(self):
+            pass
+
+    def factory(config):
+        if fail_on_init:
+            raise RuntimeError("failed")
+        return Engine()
+
+    pipeline = VisionPipeline(VisionConfig(), factory)
+    frame = np.zeros((2, 2, 3), np.uint8)
+    try:
+        wait_for(lambda: pipeline.process(frame)[1]["cv"]["state"] == "error")
+        pipeline.set_active(False)
+        assert pipeline.process(frame)[1]["cv"]["state"] == "idle"
+        pipeline.set_active(True)
+        assert pipeline.process(frame)[1]["cv"]["state"] == "error"
+        assert pipeline._pending is None
+    finally:
+        pipeline.close()
+
+
+def test_pause_during_temporal_reset_does_not_start_obsolete_inference():
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    class Engine:
+        def reset(self):
+            entered.set()
+            assert release.wait(3)
+
+        def infer(self, frame):
+            calls.append(True)
+            return []
+
+        def close(self):
+            pass
+
+    pipeline = VisionPipeline(VisionConfig(), lambda config: Engine())
+    try:
+        pipeline.set_active(False)
+        pipeline.set_active(True)
+        pipeline.process(np.zeros((2, 2, 3), np.uint8))
+        assert entered.wait(2)
+        pipeline.set_active(False)
+        release.set()
+        pipeline.close()
+        assert calls == []
+    finally:
+        release.set()
+        pipeline.close()
+
+
+def test_insightface_resume_reset_clears_temporal_identity_without_unloading_models():
+    engine = InsightFaceEngine.__new__(InsightFaceEngine)
+    cleared = []
+    engine.identity_stabilizer = SimpleNamespace(clear=lambda: cleared.append(True))
+    engine.model, engine.recognizer, engine.classifier = object(), object(), object()
+    models = (engine.model, engine.recognizer, engine.classifier)
+    engine.reset()
+    assert cleared == [True]
+    assert (engine.model, engine.recognizer, engine.classifier) == models
+    engine.identity_stabilizer = None
+    engine.reset()

@@ -495,8 +495,40 @@ class WorkflowService:
         self._clip_threads: set[threading.Thread] = set()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="spyder-workflows", daemon=True)
+        self._sync_inference_demand()
         self._sync_pre_event_buffer()
         self._thread.start()
+
+    @staticmethod
+    def _inference_camera_ids(graph: dict[str, Any]) -> set[str]:
+        """Only detector inputs need CV; a raw camera/preview branch does not."""
+        nodes = {node["id"]: node for node in graph["nodes"]}
+        cameras = set()
+        for node in graph["nodes"]:
+            if node["type"] != "detections":
+                continue
+            inputs = [
+                edge
+                for edge in graph["edges"]
+                if edge["to"] == node["id"] and edge.get("input") == "camera"
+            ]
+            if inputs:
+                cameras.update(
+                    nodes[edge["from"]]["params"].get("camera_id", "") for edge in inputs
+                )
+            else:
+                cameras.update(graph["camera_ids"])
+        cameras.discard("")
+        return cameras
+
+    def _sync_inference_demand(self) -> None:
+        publish = getattr(self.manager, "set_workflow_vision_cameras", None)
+        if publish is not None:
+            cameras = set()
+            for graph in self._graphs.values():
+                if graph["enabled"]:
+                    cameras.update(self._inference_camera_ids(graph))
+            publish(cameras)
 
     def _sync_pre_event_buffer(self) -> None:
         """Opt in existing camera workers without retaining or starting a camera."""
@@ -1069,6 +1101,7 @@ class WorkflowService:
             if previous and previous["enabled"] and not normalized["enabled"]:
                 self._release_workflow_recordings(normalized["id"])
                 self._clear_graph_state(normalized["id"])
+            self._sync_inference_demand()
             self._sync_pre_event_buffer()
             return copy.deepcopy(normalized)
 
@@ -1456,6 +1489,7 @@ class WorkflowService:
             self._release_workflow_recordings(workflow_id)
             self._clear_graph_state(workflow_id)
             self._debug.pop(workflow_id, None)
+            self._sync_inference_demand()
             self._sync_pre_event_buffer()
 
     def _transfer_event_clip(self, session_id: str) -> None:
@@ -1727,6 +1761,13 @@ class WorkflowService:
             camera_id = allowed_cameras[0]
         if not isinstance(camera_id, str) or camera_id not in allowed_cameras:
             raise ValueError("Camera is not connected to this workflow")
+        # Preview requests renew a bounded inference lease only for detector branches.
+        # Polling camera status or fetching raw frames must never wake an idle model.
+        if any(nodes[parent]["type"] == "detections" for parent in ancestors):
+            worker = self._camera_worker(camera_id)
+            request = getattr(worker, "request_vision_preview", None)
+            if request is not None:
+                request()
         status = next(
             (item for item in self.manager.statuses() if item.get("id") == camera_id), None
         )
@@ -2609,6 +2650,9 @@ class WorkflowService:
         for thread in clip_threads:
             thread.join(6.0)
         with self._lock:
+            publish = getattr(self.manager, "set_workflow_vision_cameras", None)
+            if publish is not None:
+                publish(set())
             history = getattr(self.manager, "pre_event_buffer", None)
             if history is not None:
                 history.configure({})

@@ -117,6 +117,30 @@ and execution stays disabled. Existing single-draft data remains editable; choos
 profile, and site origin, and can be cleared by browser settings. Export JSON files
 for portable backups. No workflow data is sent to the showcase host.
 
+## Inference follows active workflows and previews
+
+The local application runs a camera's detector while at least one enabled workflow
+needs detections from that camera. Disabling or deleting the last such workflow
+idles inference while the live camera continues. Model settings remain saved;
+loaded model weights stay available for resuming without another model load.
+An idle camera is not a CV error and its old detection overlays are cleared.
+
+Multiple workflows share the same camera worker and detector. Disabling one
+workflow keeps inference running when another enabled workflow still needs it.
+Raw video views, recording, status polling, and camera-only preview nodes do not
+keep a face/object detector running.
+
+A running workflow preview with an upstream Detections node temporarily keeps that
+camera's configured detector active, including when its workflow is disabled.
+Pause the preview, leave the editor, or hide its tab to stop renewing this lease;
+it expires within five seconds. Previewing does not change saved model settings or
+run workflow action nodes. An inference call already in progress may finish, but
+its obsolete results are discarded and no further jobs are submitted while idle.
+Identity confirmation starts fresh on resume.
+
+Standalone camera workers outside the workflow application retain their explicit
+pipeline behavior. The static showcase continues to perform no server inference.
+
 ## Build a workflow
 
 1. Create a workflow and add a **Camera** node for a configured source.

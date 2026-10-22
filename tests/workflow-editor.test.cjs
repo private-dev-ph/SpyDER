@@ -1723,7 +1723,7 @@ test("disable saves an inactive workflow while camera pipeline remains untouched
   );
   assert.equal(saved.body.workflow.enabled, false);
   assert.equal(saved.body.disable_motion, undefined);
-  assert.match(h.root.innerHTML, /camera model settings stay active/i);
+  assert.match(h.root.innerHTML, /inference idles when unused/i);
   assert.equal(
     h.calls.some((call) => call.url === "/api/workflows/activation-preview"),
     false,

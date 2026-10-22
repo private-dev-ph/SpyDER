@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import logging
+import math
 import sys
 import threading
 import time
@@ -76,7 +77,14 @@ class CameraWorker:
         self._jpeg: bytes | None = None
         self._preview_raw: Any = None
         self._preview_updated = 0.0
-        self._preview_requested_until = 0.0
+        self._vision_preview_requested_until = 0.0
+        self._raw_preview_requested_until = 0.0
+        self._pipeline_activity_lock = threading.Lock()
+        self._workflow_vision_required: bool | None = None
+        self._vision_active: bool | None = None
+        self._vision_generation = 0
+        self._pipeline: Any = None
+        self._pipeline_activity_applied: bool | None = None
         self._updated: float | None = None
         self._metadata: dict[str, Any] = {}
         self._frames = 0
@@ -109,13 +117,118 @@ class CameraWorker:
         with self._lock:
             self.config = config
             self._vision_revision += 1
+            self._vision_generation += 1
+            self._vision_active = None
             self._metadata["cv"] = {"state": "scheduled", "detections": []}
+
+    @staticmethod
+    def _idle_cv() -> dict[str, Any]:
+        return {
+            "state": "idle",
+            "detections": [],
+            "result_age_seconds": None,
+            "message": "Waiting for an active workflow or preview",
+        }
+
+    def _vision_demanded_locked(self, now: float | None = None) -> bool:
+        if self._workflow_vision_required is None:
+            return True
+        now = time.monotonic() if now is None else now
+        return self._workflow_vision_required or now < self._vision_preview_requested_until
+
+    def _managed_vision_idle_locked(self) -> bool:
+        return (
+            self.config.pipeline == "vision"
+            and self._workflow_vision_required is not None
+            and not self._vision_demanded_locked()
+        )
+
+    def _apply_pipeline_active_locked(self, pipeline: Any, active: bool) -> None:
+        setter = getattr(pipeline, "set_active", None)
+        if setter is None:
+            return
+        with self._lock:
+            if self._pipeline is not pipeline or self._pipeline_activity_applied == active:
+                return
+        try:
+            setter(active)
+        except Exception:
+            logger.warning("Pipeline activity update failed for camera %s", self.config.id)
+        else:
+            with self._lock:
+                if self._pipeline is pipeline:
+                    self._pipeline_activity_applied = active
+
+    def _set_pipeline_active(
+        self, pipeline: Any, active: bool, generation: int | None = None
+    ) -> None:
+        with self._pipeline_activity_lock:
+            with self._lock:
+                if self._pipeline is not pipeline:
+                    return
+                if generation is not None:
+                    if generation != self._vision_generation:
+                        return
+                    active = self._vision_demanded_locked()
+            self._apply_pipeline_active_locked(pipeline, active)
+
+    def _sync_pipeline_activity(self, pipeline: Any) -> bool:
+        with self._pipeline_activity_lock:
+            with self._lock:
+                active = self._vision_demanded_locked()
+            self._apply_pipeline_active_locked(pipeline, active)
+            return active
+
+    def set_workflow_vision_required(self, required: bool) -> None:
+        if type(required) is not bool:
+            raise ValueError("Workflow vision demand must be boolean")
+        with self._pipeline_activity_lock:
+            with self._lock:
+                self._workflow_vision_required = required
+                demanded = self._vision_demanded_locked()
+                changed = demanded != self._vision_active
+                if changed:
+                    self._vision_generation += 1
+                    self._vision_active = demanded
+                    self._metadata["cv"] = (
+                        {"state": "scheduled", "detections": []} if demanded else self._idle_cv()
+                    )
+                pipeline = self._pipeline
+            if changed and pipeline is not None and self.config.pipeline == "vision":
+                self._apply_pipeline_active_locked(pipeline, demanded)
+
+    def request_vision_preview(self, ttl: float = 5) -> None:
+        if (
+            not isinstance(ttl, (int, float))
+            or isinstance(ttl, bool)
+            or not math.isfinite(ttl)
+            or ttl <= 0
+        ):
+            raise ValueError("Preview TTL must be a finite positive number")
+        with self._pipeline_activity_lock:
+            with self._lock:
+                expires = time.monotonic() + float(ttl)
+                self._vision_preview_requested_until = max(
+                    self._vision_preview_requested_until, expires
+                )
+                self._raw_preview_requested_until = max(self._raw_preview_requested_until, expires)
+                demanded = self._vision_demanded_locked()
+                changed = demanded != self._vision_active
+                if changed:
+                    self._vision_generation += 1
+                    self._vision_active = demanded
+                    self._metadata["cv"] = {"state": "scheduled", "detections": []}
+                pipeline = self._pipeline
+            if changed and pipeline is not None and self.config.pipeline == "vision":
+                self._apply_pipeline_active_locked(pipeline, demanded)
 
     def vision_snapshot(self) -> dict[str, Any]:
         with self._lock:
             runtime = copy.deepcopy(self._metadata.get("cv", {"state": "loading"}))
             if self.config.vision is None:
                 runtime = {"state": "disabled"}
+            elif self._managed_vision_idle_locked():
+                runtime = self._idle_cv()
             elif self._state not in ("starting", "running"):
                 runtime = {
                     "state": "paused",
@@ -251,6 +364,10 @@ class CameraWorker:
             self._state, self._error = "starting", None
             self._jpeg, self._updated = None, None
             self._metadata, self._frames = {}, 0
+            if self._workflow_vision_required is not None:
+                self._vision_active = self._vision_demanded_locked()
+                if not self._vision_active:
+                    self._metadata["cv"] = self._idle_cv()
             self._reconnect_attempts = self._recoveries = 0
             self._reconnect_at = self._connected_since = None
             self._applied_revision = -1
@@ -301,6 +418,9 @@ class CameraWorker:
     def status(self) -> dict[str, Any]:
         with self._lock:
             age = None if self._updated is None else round(time.monotonic() - self._updated, 3)
+            metadata = copy.deepcopy(self._metadata)
+            if self._managed_vision_idle_locked():
+                metadata["cv"] = self._idle_cv()
             return {
                 "id": self.config.id,
                 "name": self.config.name or self.config.id,
@@ -319,7 +439,7 @@ class CameraWorker:
                 "error": self._error,
                 "frames": self._frames,
                 "frame_age_seconds": age,
-                "metadata": copy.deepcopy(self._metadata),
+                "metadata": metadata,
                 "analysis_enabled": self.config.analysis.enabled,
                 "analysis_settings": asdict(self.config.analysis),
                 "vision_inference_fps": self.config.vision.inference_fps
@@ -348,8 +468,9 @@ class CameraWorker:
     def raw_frame(self) -> Any:
         """Lease a bounded raw preview buffer without opening another capture."""
         with self._lock:
-            self._preview_requested_until = time.monotonic() + 5
-            if self._state != "running" or time.monotonic() - self._preview_updated > 1:
+            now = time.monotonic()
+            self._raw_preview_requested_until = max(self._raw_preview_requested_until, now + 5)
+            if self._state != "running" or now - self._preview_updated > 1:
                 return None
             return None if self._preview_raw is None else self._preview_raw.copy()
 
@@ -467,13 +588,42 @@ class CameraWorker:
                     raise _CaptureDisconnected from None
                 except Exception:
                     raise _CaptureDisconnected from None
-                with self._lock:
-                    desired_vision, pipeline_name = self._vision_revision, self.config.pipeline
-                    vision_options = self.config.vision
+                with self._pipeline_activity_lock:
+                    with self._lock:
+                        desired_vision, pipeline_name = self._vision_revision, self.config.pipeline
+                        vision_options = self.config.vision
+                        vision_managed = self._workflow_vision_required is not None
+                        vision_demanded = self._vision_demanded_locked()
+                        vision_activity_changed = (
+                            self._vision_active is None or self._vision_active != vision_demanded
+                        )
+                        if vision_activity_changed:
+                            self._vision_generation += 1
+                            self._vision_active = vision_demanded
+                            self._metadata["cv"] = (
+                                {"state": "scheduled", "detections": []}
+                                if vision_demanded
+                                else self._idle_cv()
+                            )
+                        vision_generation = self._vision_generation
+                        current_pipeline = self._pipeline
+                    if (
+                        vision_activity_changed
+                        and current_pipeline is not None
+                        and pipeline_name == "vision"
+                    ):
+                        self._apply_pipeline_active_locked(current_pipeline, vision_demanded)
                 if self._retiring_pipeline is not None and not self._retiring_pipeline.is_alive:
                     self._retiring_pipeline = None
-                if desired_vision != vision_revision and self._retiring_pipeline is None:
+                needs_pipeline_update = desired_vision != vision_revision or (
+                    vision_managed
+                    and pipeline_name == "vision"
+                    and vision_demanded
+                    and pipeline is None
+                )
+                if needs_pipeline_update and self._retiring_pipeline is None:
                     if pipeline is not None and hasattr(pipeline, "close"):
+                        self._set_pipeline_active(pipeline, False)
                         try:
                             if hasattr(pipeline, "is_alive"):
                                 pipeline.close(timeout=0.05)
@@ -483,7 +633,12 @@ class CameraWorker:
                             if getattr(pipeline, "is_alive", False):
                                 self._retiring_pipeline = pipeline
                     pipeline = None
-                    if self._retiring_pipeline is None:
+                    with self._lock:
+                        self._pipeline = None
+                        self._pipeline_activity_applied = None
+                    if self._retiring_pipeline is None and (
+                        not vision_managed or pipeline_name != "vision" or vision_demanded
+                    ):
                         vision_error = False
                         try:
                             pipeline = (
@@ -494,8 +649,16 @@ class CameraWorker:
                         except Exception:
                             vision_error = True
                         vision_revision = desired_vision
+                        with self._pipeline_activity_lock:
+                            with self._lock:
+                                self._pipeline = pipeline
+                                self._pipeline_activity_applied = None
+                    elif self._retiring_pipeline is None:
+                        vision_revision = desired_vision
+                if pipeline is not None and pipeline_name == "vision":
+                    vision_demanded = self._sync_pipeline_activity(pipeline)
                 with self._lock:
-                    preview_requested = time.monotonic() < self._preview_requested_until
+                    preview_requested = time.monotonic() < self._raw_preview_requested_until
                 raw = None
                 if preview_requested:
                     raw = (
@@ -540,11 +703,15 @@ class CameraWorker:
                         "message": "Motion analysis could not start" if analysis_error else "",
                     }
                 )
-                if pipeline is not None:
+                original_frame = frame
+                vision_process = pipeline_name != "vision" or vision_demanded
+                if pipeline is not None and vision_process:
                     frame, metadata = pipeline.process(frame)
                     if "cv" in metadata:
-                        metadata["cv"]["generation"] = vision_revision
-                else:
+                        metadata["cv"]["generation"] = vision_generation
+                elif pipeline_name == "vision" and vision_managed and not vision_demanded:
+                    metadata = {"cv": self._idle_cv()}
+                elif pipeline is None and pipeline_name == "vision":
                     metadata = {
                         "cv": {
                             "state": "error" if vision_error else "stopping",
@@ -552,6 +719,8 @@ class CameraWorker:
                             "message": "Model pipeline unavailable",
                         }
                     }
+                else:
+                    metadata = {}
                 if analysis is not None:
                     frame = analysis.annotate(frame, analysis_result)
                     metadata["motion_fraction"] = analysis_result.get("motion_fraction", 0)
@@ -561,8 +730,14 @@ class CameraWorker:
                 with self._lock:
                     if self._stop.is_set():
                         break
-                    if vision_revision != self._vision_revision:
-                        metadata["cv"] = {"state": "scheduled", "detections": []}
+                    if vision_generation != self._vision_generation:
+                        frame = original_frame
+                        metadata["cv"] = (
+                            self._idle_cv()
+                            if self._managed_vision_idle_locked()
+                            else {"state": "scheduled", "detections": []}
+                        )
+                        jpeg = self._encoder(frame)
                     self._jpeg, self._metadata = jpeg, copy.deepcopy(metadata)
                     self._updated = time.monotonic()
                     self._frames += 1
@@ -620,6 +795,8 @@ class CameraWorker:
             with self._lock:
                 self._analysis_runtime = None
                 self._preview_raw = None
+                self._pipeline = None
+                self._pipeline_activity_applied = None
             if pipeline is not None and hasattr(pipeline, "close"):
                 try:
                     pipeline.close()
@@ -672,6 +849,7 @@ class CameraManager:
         if len({profile.name.casefold() for profile in profiles}) != len(profiles):
             raise ValueError("Profile names must be unique")
         self._profiles = {profile.id: profile for profile in profiles}
+        self._workflow_vision_cameras: set[str] | None = None
         self.pre_event_buffer = (
             pre_event_buffer if pre_event_buffer is not None else PreEventBuffer()
         )
@@ -815,6 +993,21 @@ class CameraManager:
             worker.update_settings(config, desired)
             return worker.settings_snapshot()
 
+    def set_workflow_vision_cameras(self, camera_ids: set[str]) -> None:
+        if not isinstance(camera_ids, set) or any(
+            not isinstance(camera_id, str) for camera_id in camera_ids
+        ):
+            raise ValueError("Workflow camera ids must be a set of strings")
+        with self._mutations:
+            if self._closed:
+                raise RuntimeError("Camera manager is closed")
+            required_ids = set(camera_ids)
+            with self._registry:
+                self._workflow_vision_cameras = required_ids
+                workers = list(self.workers.items())
+            for camera_id, worker in workers:
+                worker.set_workflow_vision_required(camera_id in required_ids)
+
     def set_vision(self, camera_id: str, settings: object) -> dict[str, Any]:
         if settings is not None and not isinstance(settings, dict):
             raise ValueError("Send a model settings object or null")
@@ -925,6 +1118,9 @@ class CameraManager:
                 updated = self.workers | {camera.id: worker}
                 self._persist(updated)
                 self.workers = updated
+                managed_demand = self._workflow_vision_cameras
+            if managed_demand is not None:
+                worker.set_workflow_vision_required(camera.id in managed_demand)
             if camera.autostart:
                 self._intent.add(camera.id)
                 if self._should_suspend():
