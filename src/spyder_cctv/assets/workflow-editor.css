@@ -1898,3 +1898,32 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* A bounded picker opens the workflow library instead of rendering every graph. */
+.we-workflow-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: start;
+}
+.we-workflow-picker:hover:not(:disabled) {
+  background: var(--rail);
+}
+.we-workflow-picker > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.we-toolbar-identity [data-workflow-count] {
+  color: var(--muted);
+  font-size: 10px;
+}

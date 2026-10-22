@@ -172,7 +172,7 @@ try {
       const checked=box.checked;
       box.checked=true;
       const selected=getComputedStyle(select), check=getComputedStyle(box);
-      const result={appearance:selected.appearance, arrow:selected.backgroundImage,
+      const result={appearance:selected.appearance, arrow:!!select.querySelector("svg"), popup:select.getAttribute("aria-haspopup"),
         padding:parseFloat(selected.paddingRight), red:check.backgroundColor,
         whiteCheck:check.backgroundImage.includes('white'), width:box.getBoundingClientRect().width};
       box.disabled=true;
@@ -180,9 +180,8 @@ try {
       box.disabled=false; box.checked=checked;
       return result;
     })()`);
-    assert.equal(controls.appearance, "none");
-    assert.match(controls.arrow, /svg/);
-    assert.ok(controls.padding >= 40);
+    assert.equal(controls.popup, "dialog");
+    assert.equal(controls.arrow, true);
     assert.equal(controls.red, "rgb(190, 26, 26)");
     assert.equal(controls.whiteCheck, true);
     assert.equal(controls.width, 18);
@@ -646,6 +645,9 @@ try {
       for (const theme of ["light", "dark"]) {
         await evaluate(
           `document.documentElement.dataset.theme=${JSON.stringify(theme)}`,
+        );
+        await evaluate(
+          "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
         );
         await assertSettingsFit(
           ".we-inspector",

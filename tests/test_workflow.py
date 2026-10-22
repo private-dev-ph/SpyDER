@@ -2790,7 +2790,8 @@ def test_library_indexes_thousand_workflows_without_returning_graphs(service):
     }
     service._rebuild_summary_cache()
     result = service.library(query="WORKFLOW 00", page=2, size=50)
-    assert result["total"] == 100
+    # Search terms also match IDs such as flow-0100 through flow-0900.
+    assert result["total"] == 109
     assert len(result["items"]) == 50
     assert result["counts"] == {"total": 1000, "enabled": 1000, "disabled": 0}
     assert "nodes" not in result["items"][0]

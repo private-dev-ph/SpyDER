@@ -240,7 +240,9 @@ test("toolbar node copy and paste stays a disabled draft", async () => {
 test("latest status endpoint polls in editor and showcase explains status is unavailable", async () => {
   const editor = mountHarness();
   await editor.flush();
-  assert.ok(editor.calls.some((call) => call.url === "/api/workflows/debug"));
+  assert.ok(
+    editor.calls.some((call) => call.url.startsWith("/api/workflows/debug?")),
+  );
   editor.window.spyderWorkflows.unmount();
   const showcase = mountHarness({ showcase: true });
   await showcase.flush();
@@ -254,7 +256,7 @@ test("latest status endpoint polls in editor and showcase explains status is una
     /Latest node status unavailable in showcase/,
   );
   assert.equal(
-    showcase.calls.some((call) => call.url === "/api/workflows/debug"),
+    showcase.calls.some((call) => call.url.startsWith("/api/workflows/debug?")),
     false,
   );
   showcase.window.spyderWorkflows.unmount();
@@ -431,6 +433,7 @@ function mountHarness({
     console,
     Event,
     TextEncoder,
+    URLSearchParams,
     localStorage: {
       getItem: (key) => local.get(key) ?? null,
       setItem: (key, value) => local.set(key, value),
@@ -450,7 +453,14 @@ function mountHarness({
         body: options.body ? JSON.parse(options.body) : undefined,
       });
       return fetcher
-        ? fetcher(url, options)
+        ? fetcher(
+            url.startsWith("/api/workflows?current=")
+              ? "/api/workflows"
+              : url.startsWith("/api/workflows/debug?")
+                ? "/api/workflows/debug"
+                : url,
+            options,
+          )
         : {
             ok: true,
             status: 200,
@@ -3200,5 +3210,185 @@ test("unknown identity conditions need no value and remain editable in the filte
     { field: "identity", operator: "is_known", value: "" },
   ]);
   assert.match(h.root.innerHTML, /placeholder="No value needed" disabled/);
+  h.window.spyderWorkflows.unmount();
+});
+
+test("workflow picker keeps graph lists out of the toolbar and scopes polls", async () => {
+  const h = mountHarness();
+  await h.flush();
+  assert.match(h.root.innerHTML, /data-open-workflow-manager/);
+  assert.doesNotMatch(h.root.innerHTML, /<select data-workflow/);
+  assert.ok(
+    h.calls.some(
+      (x) =>
+        x.url.startsWith("/api/workflows?current=") &&
+        x.url.endsWith("&first=1"),
+    ),
+  );
+  assert.ok(
+    !h.calls.some(
+      (x) => x.url === "/api/workflows" && x.options.method !== "POST",
+    ),
+  );
+  h.window.spyderWorkflows.unmount();
+});
+
+test("manager uses paged summaries and fetches only the graph selected", async () => {
+  const h = mountHarness({
+    fetcher: async (url) => ({
+      ok: true,
+      json: async () =>
+        url.startsWith("/api/workflows/library?")
+          ? { items: [], counts: { total: 5000, enabled: 2, disabled: 4998 } }
+          : url === "/api/workflows/other"
+            ? {
+                workflow: {
+                  id: "other",
+                  name: "Other",
+                  enabled: false,
+                  camera_ids: [],
+                  nodes: [],
+                  edges: [],
+                },
+              }
+            : { workflows: [], events: [] },
+    }),
+  });
+  await h.flush();
+  let options;
+  h.window.spyderWorkflowManager = {
+    open: (value) => {
+      options = value;
+      return {
+        close() {
+          value.onClose();
+        },
+      };
+    },
+  };
+  h.root.dispatch("click", h.target("button", { openWorkflowManager: "" }));
+  await options.loadPage(
+    {
+      status: "all",
+      camera: "all",
+      engine: "all",
+      page: 2,
+      size: 25,
+      query: "Door",
+    },
+    {},
+  );
+  const call = h.calls.find((x) => x.url.startsWith("/api/workflows/library?"));
+  const query = new URLSearchParams(call.url.split("?")[1]);
+  assert.equal(query.get("status"), "");
+  assert.equal(query.get("camera"), "");
+  assert.equal(query.get("engine"), "");
+  assert.equal(query.get("page"), "2");
+  assert.ok(!h.calls.some((x) => x.url === "/api/workflows/other"));
+  assert.equal(await options.onOpen("other"), true);
+  assert.match(h.root.innerHTML, /value="Other"/);
+  assert.equal(
+    h.calls.filter((x) => x.url === "/api/workflows/other").length,
+    1,
+  );
+  h.window.spyderWorkflows.unmount();
+});
+
+test("closed manager cannot replace editor with a late graph fetch", async () => {
+  let resolveGraph;
+  const h = mountHarness({
+    fetcher: async (url) =>
+      url === "/api/workflows/late"
+        ? new Promise(
+            (resolve) =>
+              (resolveGraph = () =>
+                resolve({
+                  ok: true,
+                  json: async () => ({
+                    workflow: {
+                      id: "late",
+                      name: "Late workflow",
+                      enabled: false,
+                      camera_ids: [],
+                      nodes: [],
+                      edges: [],
+                    },
+                  }),
+                })),
+          )
+        : { ok: true, json: async () => ({ workflows: [], events: [] }) },
+  });
+  await h.flush();
+  let options;
+  h.window.spyderWorkflowManager = {
+    open: (value) => {
+      options = value;
+      return {
+        close() {
+          value.onClose();
+        },
+      };
+    },
+  };
+  h.root.dispatch("click", h.target("button", { openWorkflowManager: "" }));
+  const result = options.onOpen("late");
+  options.onClose();
+  resolveGraph();
+  assert.equal(await result, false);
+  assert.doesNotMatch(h.root.innerHTML, /value="Late workflow"/);
+  h.window.spyderWorkflows.unmount();
+});
+
+test("toolbar delete opens confirmation manager rather than deleting immediately", async () => {
+  const h = mountHarness();
+  await h.flush();
+  let options;
+  h.window.spyderWorkflowManager = {
+    open: (value) => {
+      options = value;
+      return {
+        close() {
+          value.onClose();
+        },
+      };
+    },
+  };
+  h.root.dispatch("click", h.target("button", { remove: "" }));
+  assert.ok(options.initialDelete.id);
+  assert.ok(!h.calls.some((x) => x.url.endsWith("/remove")));
+  h.window.spyderWorkflows.unmount();
+});
+
+test("demo library save preserves edits made while persistence is pending", async () => {
+  const h = mountHarness({ showcase: true });
+  await h.flush();
+  let complete;
+  h.window.spyderWorkflowStore = {
+    save: (value) =>
+      new Promise((resolve) => {
+        complete = () => resolve(value);
+      }),
+    page: async () => ({ counts: { total: 1, enabled: 0, disabled: 1 } }),
+  };
+  h.root.dispatch("click", h.target("button", { save: "" }));
+  const name = h.target("[data-name]");
+  name.value = "Edited during save";
+  h.root.dispatch("input", name);
+  complete();
+  await h.flush();
+  let options;
+  h.window.spyderWorkflowManager = {
+    open: (value) => {
+      options = value;
+      return {
+        close() {
+          value.onClose();
+        },
+      };
+    },
+  };
+  h.root.dispatch("click", h.target("button", { openWorkflowManager: "" }));
+  assert.equal(options.isDirty(), true);
+  assert.match(h.root.innerHTML, /value="Edited during save"/);
   h.window.spyderWorkflows.unmount();
 });
