@@ -120,3 +120,9 @@ Use a tile's recording control to add or remove that feed from the composite rec
 Use capture for a still frame. Recording membership and wall visibility are separate:
 hiding a tile in a layout does not remove it from recording. See
 [Recordings and storage](../recording-storage.md) for clip rotation, quotas, and recovery.
+
+## ONVIF network cameras
+
+Camera Setup includes explicit LAN discovery, authenticated media profile selection,
+and supported PTZ controls. See [Face galleries and ONVIF cameras](face-galleries-and-onvif.md)
+for connection steps, session persistence, and compatibility limits.

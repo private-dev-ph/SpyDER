@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import importlib
@@ -601,7 +602,30 @@ class FaceEnrollmentService:
                 raise ValueError("No face detected")
             if face_index is None and count != 1:
                 candidates = [self._candidate(row, index) for index, row in enumerate(boxes)]
-                return {"needs_face_selection": True, "candidates": candidates}
+                preview = image.copy()
+                scale = min(1, 640 / max(preview.shape[:2]))
+                if scale < 1:
+                    preview = cv2.resize(preview, None, fx=scale, fy=scale)
+                for candidate in candidates:
+                    x1, y1, x2, y2 = (round(value * scale) for value in candidate["box"])
+                    cv2.rectangle(preview, (x1, y1), (x2, y2), (30, 30, 210), 2)
+                    cv2.putText(
+                        preview,
+                        str(candidate["index"] + 1),
+                        (x1, max(18, y1)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (127, 216, 247),
+                        2,
+                    )
+                ok, encoded = cv2.imencode(".jpg", preview)
+                return {
+                    "needs_face_selection": True,
+                    "candidates": candidates,
+                    "preview": "data:image/jpeg;base64," + base64.b64encode(encoded).decode()
+                    if ok
+                    else None,
+                }
             if face_index is None:
                 face_index = 0
             if (

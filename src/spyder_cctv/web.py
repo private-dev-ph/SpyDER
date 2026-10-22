@@ -29,10 +29,14 @@ from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
 from spyder_cctv.config import CameraConfig, SettingsProfile, load_app_config
 from spyder_cctv.configuration_backup import ConfigurationBackup
+from spyder_cctv.cv.contracts import VisionUnavailable
 from spyder_cctv.cv.detectors import DetectorCatalog
 from spyder_cctv.cv.diagnostics import engine_info
+from spyder_cctv.device_services import DeviceServices
+from spyder_cctv.face_gallery import FaceEnrollmentService
 from spyder_cctv.health import summarize_health
 from spyder_cctv.model_library import MAX_UPLOAD_BYTES, ModelLibrary
+from spyder_cctv.onvif import OnvifBackend
 from spyder_cctv.recording import RecordingService
 from spyder_cctv.schedules import RecordingSchedules
 from spyder_cctv.workflow import WorkflowService
@@ -52,13 +56,23 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         Path(app_data_dir) / "media" if app_data_dir is not None else manager.media_dir
     )
     detectors = DetectorCatalog()
+    try:
+        galleries = FaceEnrollmentService(manager.app_data_dir / "face-galleries")
+    except OSError:
+        from spyder_cctv.device_services import UnavailableFaceGalleries
+
+        galleries = UnavailableFaceGalleries()
+    onvif = OnvifBackend()
     workflows = WorkflowService(
         manager,
         recorder,
         manager.app_data_dir,
         model_library=models,
         detector_catalog=detectors,
+        face_galleries=galleries,
     )
+
+    devices = DeviceServices(manager, models, workflows, galleries, onvif)
 
     schedules = RecordingSchedules(
         manager, recorder, manager.app_data_dir / "schedules.json", autostart=False
@@ -74,6 +88,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
 
     def schedule_loop():
         while not schedule_stop.wait(1):
+            devices.expire_enrollments()
             try:
                 with mutation_gate:
                     if not backup or not backup.pending:
@@ -174,6 +189,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             if schedule_thread.ident is not None:
                 schedule_thread.join(timeout=6)
             schedules.close()
+            devices.close()
             try:
                 workflows.close()
             finally:
@@ -273,6 +289,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     else "text/css; charset=utf-8",
                 )
             elif path in (
+                "/device-tools.js",
+                "/device-tools.css",
                 "/icons.svg",
                 "/spyder-emblem.png",
                 "/activity.js",
@@ -319,6 +337,16 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     files("spyder_cctv").joinpath("assets", asset).read_bytes(),
                     content_type,
                 )
+            elif path.startswith("/api/faces/") or path == "/api/onvif/sessions":
+                try:
+                    result = devices.get(path.strip("/").split("/"))
+                    self.json(200, result)
+                except KeyError:
+                    self.json(404, {"error": "Unknown face gallery resource"})
+                except (ValueError, RuntimeError) as error:
+                    self.json(400, {"error": str(error)})
+                except OSError:
+                    self.json(503, {"error": "Face gallery storage is unavailable"})
             elif path == "/api/cameras":
                 self.json(200, manager.statuses())
             elif path == "/api/preferences":
@@ -560,11 +588,25 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     camera_configs = camera_configurations()
                 except RuntimeError as error:
                     usage_errors.append(str(error))
+                try:
+                    gallery_usage = {
+                        descriptor["id"]: [
+                            "Face gallery " + item["gallery_name"]
+                            for item in galleries.model_references(descriptor["id"])
+                        ]
+                        for descriptor in descriptors
+                    }
+                except (OSError, ValueError, RuntimeError):
+                    gallery_usage = {}
+                    usage_errors.append(
+                        "Face gallery storage is unavailable; model removal is blocked"
+                    )
                 for descriptor in descriptors:
                     model_path = Path(descriptor["path"]).expanduser().resolve()
                     references = [
                         *usage_errors,
                         *workflow_usage.get(descriptor["id"], []),
+                        *gallery_usage.get(descriptor["id"], []),
                         *camera_model_references(model_path, camera_configs),
                     ]
                     descriptor["usage"] = {
@@ -855,7 +897,9 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             parts = urlsplit(self.path).path.strip("/").split("/")
             # Model uploads/installations cannot start capture or alter restored files.
             # Keep their potentially slow I/O outside the camera/restore control gate.
-            if parts[:2] == ["api", "models"] or parts[:3] == ["api", "vision", "detectors"]:
+            if parts[:2] in (["api", "models"], ["api", "faces"], ["api", "onvif"]) or parts[
+                :3
+            ] == ["api", "vision", "detectors"]:
                 self._post()
             else:
                 with mutation_gate:
@@ -877,7 +921,9 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     raise RuntimeError(
                         "Configuration restore is pending; restart SpyDER before changing settings"
                     )
-                if parts == ["api", "recordings", "schedules"]:
+                if parts[:2] in (["api", "faces"], ["api", "onvif"]):
+                    self.json(200, devices.post(parts, self.body(12 * 1024 * 1024 + 4096)))
+                elif parts == ["api", "recordings", "schedules"]:
                     data = self.body(262144)
                     if set(data) != {"schedules"}:
                         raise ValueError("Send schedules")
@@ -1009,6 +1055,10 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         descriptor = models.get(parts[2])
                         model_path = Path(descriptor["path"]).expanduser().resolve()
                         references = workflows.model_references(parts[2])
+                        references.extend(
+                            "Face gallery " + item["gallery_name"]
+                            for item in galleries.model_references(parts[2])
+                        )
                         references.extend(camera_model_references(model_path))
                         references = list(dict.fromkeys(references))
                         outcome = None if references else models.remove(parts[2])
@@ -1289,6 +1339,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 elif len(parts) == 4 and parts[:2] == ["api", "cameras"]:
                     if parts[3] == "remove":
                         manager.remove(parts[2])
+                        devices.camera_removed(parts[2])
                         self.json(200, {"removed": parts[2]})
                     elif parts[3] in ("start", "stop"):
                         self.json(200, manager.control(parts[2], parts[3]))
@@ -1315,6 +1366,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         "error": str(error)
                         if parts[:2]
                         in (
+                            ["api", "faces"],
+                            ["api", "onvif"],
                             ["api", "workflows"],
                             ["api", "models"],
                             ["api", "preferences"],
@@ -1325,6 +1378,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         else "Invalid details. Check camera selection, fields or settings (0-100%)."
                     },
                 )
+            except VisionUnavailable as error:
+                self.json(409, {"error": str(error), "code": error.code})
             except sqlite3.Error:
                 self.json(503, {"error": "Execution history storage is unavailable"})
             except OSError:
@@ -1342,6 +1397,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
     except Exception:
         schedule_stop.set()
         schedules.close()
+        devices.close()
         workflows.close()
         previews.close()
         capacity.close()

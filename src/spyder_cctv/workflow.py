@@ -207,7 +207,9 @@ def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
                 p.setdefault("margin", 0.15)
                 if (
                     not _finite(p["threshold"])
-                    or not 0 <= p["threshold"] <= 1
+                    or not (-1 if p["model_id"].startswith("gallery-") else 0)
+                    <= p["threshold"]
+                    <= 1
                     or p["output"] not in ("probabilities", "logits")
                     or p["preprocessing"] not in ("arcface", "embedded")
                     or type(p["confirmations"]) is not int
@@ -499,9 +501,11 @@ class WorkflowService:
         storage_dir: Path,
         model_library: Any = None,
         detector_catalog: Any = None,
+        face_galleries: Any = None,
     ) -> None:
         self.manager, self.recorder = manager, recorder
         self.model_library = model_library
+        self.face_galleries = face_galleries
         self.detector_catalog = detector_catalog or DetectorCatalog()
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -1208,6 +1212,22 @@ class WorkflowService:
         return result
 
     def _model_descriptor(self, model_id: str) -> dict[str, Any]:
+        if model_id.startswith("gallery-"):
+            if self.face_galleries is None:
+                raise ValueError("Face galleries are unavailable in this application")
+            gallery_id = model_id.removeprefix("gallery-")
+            config = self.face_galleries.config(gallery_id)
+            gallery = self.face_galleries.descriptor(gallery_id)
+            return {
+                "id": model_id,
+                "name": gallery["name"],
+                "engine": "insightface",
+                "path": config["recognition_model"],
+                "classes": gallery["classes"],
+                "settings": {},
+                "metadata": {"model_type": "face_gallery"},
+                "identity_gallery": config["identity_gallery"],
+            }
         if model_id in _BUILTIN_MODELS:
             return {
                 "id": model_id,
@@ -1272,7 +1292,10 @@ class WorkflowService:
         options_by_camera: dict[str, dict[str, Any]] = {}
         for camera_id, model_id in bindings.items():
             descriptor = self._model_descriptor(model_id)
-            if descriptor.get("metadata", {}).get("model_type") == "face_classifier":
+            if descriptor.get("metadata", {}).get("model_type") in (
+                "face_classifier",
+                "face_gallery",
+            ):
                 raise ValueError(
                     "This model is a face identity classifier. Its labels are readable, but "
                     "use it in an InsightFace Classifier node connected to CLASSIFIER IN. "
@@ -1366,8 +1389,12 @@ class WorkflowService:
                 descriptor = self._model_descriptor(classifier["model_id"])
                 if (
                     descriptor["engine"] != "insightface"
-                    or descriptor.get("metadata", {}).get("model_type") != "face_classifier"
-                    or not descriptor["classes"]
+                    or descriptor.get("metadata", {}).get("model_type")
+                    not in ("face_classifier", "face_gallery")
+                    or (
+                        descriptor.get("metadata", {}).get("model_type") == "face_classifier"
+                        and not descriptor["classes"]
+                    )
                 ):
                     raise ValueError(
                         "Classifier node requires an InsightFace identity classifier "
@@ -1385,7 +1412,26 @@ class WorkflowService:
                         "engine": "insightface",
                         "model": self.detector_catalog.resolve(detector),
                     }
-                if classifier:
+                if (
+                    classifier
+                    and descriptor.get("metadata", {}).get("model_type") == "face_gallery"
+                ):
+                    for key in (
+                        "classifier_model",
+                        "classifier_labels",
+                        "classifier_threshold",
+                        "classifier_output",
+                        "classifier_preprocessing",
+                    ):
+                        options.pop(key, None)
+                    options.update(
+                        recognition_model=descriptor["path"],
+                        identity_gallery=descriptor["identity_gallery"],
+                        recognition_threshold=classifier["threshold"],
+                        classifier_confirmation_frames=classifier["confirmations"],
+                        classifier_switch_frames=classifier["switch_confirmations"],
+                    )
+                elif classifier:
                     # An explicit classifier replaces gallery recognition.
                     for key in ("recognition_model", "identity_gallery", "recognition_threshold"):
                         options.pop(key, None)
@@ -2143,7 +2189,7 @@ class WorkflowService:
                         if p["model_id"] and self.model_library
                         else None
                     )
-                except (ValueError, KeyError, TypeError):
+                except (ValueError, KeyError, TypeError, RuntimeError):
                     descriptor = None
                 model_descriptors[nid] = descriptor
                 result = [
@@ -2521,6 +2567,18 @@ class WorkflowService:
                 settings = snapshot.get("settings")
             if settings is not None and not isinstance(settings, dict):
                 settings = vars(settings)
+            if descriptor.get("metadata", {}).get("model_type") == "face_gallery":
+                return bool(
+                    settings
+                    and settings.get("recognition_model") == descriptor["path"]
+                    and settings.get("identity_gallery") == descriptor["identity_gallery"]
+                    and settings.get("recognition_threshold", 0.5) == params["threshold"]
+                    and settings.get("classifier_confirmation_frames", 3)
+                    == params.get("confirmations", 3)
+                    and settings.get("classifier_switch_frames", 5)
+                    == params.get("switch_confirmations", 5)
+                    and not settings.get("classifier_model")
+                )
             return bool(
                 settings
                 and settings.get("classifier_model") == descriptor["path"]
