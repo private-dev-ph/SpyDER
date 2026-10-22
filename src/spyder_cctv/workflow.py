@@ -229,7 +229,7 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
                 field, operator, value = rule["field"], rule["operator"], rule["value"]
                 allowed = {
                     "label": {"eq", "neq"},
-                    "identity": {"eq", "neq"},
+                    "identity": {"eq", "neq", "is_unknown", "is_known"},
                     "confidence": {"eq", "neq", "gte", "lte"},
                 }
                 if (
@@ -242,6 +242,11 @@ def _validate_graph(raw: Any) -> dict[str, Any]:
                 if field == "confidence":
                     if not _finite(value) or not 0 <= value <= 1:
                         raise ValueError("Invalid confidence rule value")
+                elif operator in ("is_unknown", "is_known"):
+                    if field != "identity" or value != "" or p["identity_source"] == "class":
+                        raise ValueError(
+                            "Identity status operators require identity source and empty value"
+                        )
                 elif not isinstance(value, str) or len(value) > 128:
                     raise ValueError("Invalid string rule value")
         elif kind == "zone":
@@ -1998,6 +2003,19 @@ class WorkflowService:
                 "label" if field == "identity" and identity_source == "class" else field
             )
             expected = rule["value"]
+            op = rule["operator"]
+            if field == "identity" and op in ("is_unknown", "is_known"):
+                checks.append(
+                    identity_source == "identity"
+                    and (
+                        detection.get("identity_status") == "unknown"
+                        and detection.get("identity") is None
+                        if op == "is_unknown"
+                        else detection.get("identity_status") == "known"
+                        and isinstance(detection.get("identity"), str)
+                    )
+                )
+                continue
             if (
                 field == "identity"
                 and identity_source == "identity"
@@ -2011,7 +2029,6 @@ class WorkflowService:
                     actual in expected if rule["operator"] == "eq" else actual not in expected
                 )
                 continue
-            op = rule["operator"]
             if rule["field"] == "confidence":
                 actual = WorkflowService._detection_confidence(detection)
             checks.append(

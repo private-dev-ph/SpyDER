@@ -215,7 +215,8 @@ def test_insightface_classifier_uses_five_point_alignment_and_preserves_detectio
     monkeypatch.setitem(sys.modules, "insightface.model_zoo", model_zoo)
     monkeypatch.setitem(sys.modules, "insightface.utils", utils)
     monkeypatch.setitem(sys.modules, "insightface.utils.face_align", align_module)
-    install_runtime(monkeypatch, Session(np.array([[0.1, 0.9]], dtype=np.float32)))
+    session = Session(np.array([[0.1, 0.9]], dtype=np.float32))
+    install_runtime(monkeypatch, session)
 
     from spyder_cctv.cv.engines import InsightFaceEngine
 
@@ -230,8 +231,8 @@ def test_insightface_classifier_uses_five_point_alignment_and_preserves_detectio
     )
     assert engine.class_names == ["staff", "visitor"]
     frame = np.zeros((50, 50, 3), dtype=np.uint8)
-    assert engine.infer(frame)[0].identity is None
-    assert engine.infer(frame)[0].identity is None
+    assert engine.infer(frame)[0].identity_status == "pending"
+    assert engine.infer(frame)[0].identity_status == "pending"
     detection = engine.infer(frame)[0]
     assert observed["max_num"] == 7
     assert observed["image_size"] == 112
@@ -240,8 +241,13 @@ def test_insightface_classifier_uses_five_point_alignment_and_preserves_detectio
     assert detection.confidence == pytest.approx(0.91)
     assert detection.label == "face" and detection.class_id == 0
     assert detection.identity == "visitor"
+    assert detection.identity_status == "known"
     assert detection.identity_confidence == pytest.approx(0.9)
     assert detection.similarity is None
+    session.output = np.array([[0.5, 0.5]], dtype=np.float32)
+    rejected = engine.infer(frame)[0]
+    assert rejected.identity is None
+    assert rejected.identity_status == "unknown"
     engine.close()
 
 

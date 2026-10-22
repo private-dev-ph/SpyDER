@@ -2954,38 +2954,69 @@ test("saved usage and current unsaved draft references both block library remova
   h.window.spyderWorkflows.unmount();
 });
 
-test("pre-event template uses built-in person detection and safe clip timing", () => {
-  const graph = preEventTemplate({ cameraId: "front" });
+test("pre-event template connects lightweight InsightFace and unknown identity filtering", () => {
+  const graph = preEventTemplate({
+    cameraId: "front",
+    classifierId: "face-classes",
+  });
   assert.equal(graph.enabled, false);
   assert.deepEqual(
     graph.nodes.map((n) => n.type),
-    ["camera", "detections", "filter", "cooldown", "event"],
+    [
+      "camera",
+      "model",
+      "classifier",
+      "detections",
+      "filter",
+      "cooldown",
+      "event",
+    ],
   );
-  assert.equal(graph.nodes[0].params.camera_id, "front");
-  assert.equal(graph.nodes[1].params.engine, "opencv");
-  assert.equal(graph.nodes[2].params.label, "person");
-  assert.equal(graph.nodes[2].params.confidence, 0);
-  assert.equal(graph.nodes[3].params.seconds, 45);
-  assert.deepEqual(graph.edges[0], {
-    from: graph.nodes[0].id,
-    to: graph.nodes[1].id,
-    input: "camera",
-  });
-  const event = graph.nodes[4];
+  const [camera, model, classifier, detection, filter, cooldown, event] =
+    graph.nodes;
+  assert.equal(camera.params.camera_id, "front");
+  assert.equal(model.params.model_id, "builtin-scrfd-500mf");
+  assert.equal(classifier.params.model_id, "face-classes");
+  assert.equal(detection.params.engine, "insightface");
+  assert.equal(filter.params.label, "face");
+  assert.equal(filter.params.identity_source, "identity");
+  assert.deepEqual(filter.params.rules, [
+    { field: "identity", operator: "is_unknown", value: "" },
+  ]);
+  assert.equal(cooldown.params.seconds, 45);
+  for (const [input, source] of [
+    ["camera", camera],
+    ["model", model],
+    ["classifier", classifier],
+  ])
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.from === source.id && e.to === detection.id && e.input === input,
+      ),
+    );
   assert.equal(event.params.attachment, "recording");
   assert.equal(event.params.pre_event_seconds, 10);
   assert.equal(event.params.duration_seconds, 20);
+  assert.match(event.params.message, /Unknown face/);
   assert.deepEqual(validate(graph), []);
-  assert.equal(
-    decodeWorkflow(encodeWorkflow(graph)).nodes[4].params.pre_event_seconds,
-    10,
+  assert.deepEqual(
+    decodeWorkflow(encodeWorkflow(graph)).nodes.find((n) => n.type === "filter")
+      .params.rules,
+    filter.params.rules,
   );
   const second = createWorkflowTemplate("pre-event-person", {
     cameraId: "back",
   });
   assert.notEqual(second.id, graph.id);
-  second.nodes[4].params.pre_event_seconds = 1;
+  assert.equal(
+    second.nodes.find((n) => n.type === "classifier").params.model_id,
+    "",
+  );
+  second.nodes.at(-1).params.pre_event_seconds = 1;
   assert.equal(event.params.pre_event_seconds, 10);
+  filter.params.identity_source = "class";
+  assert.match(validate(graph).join(" "), /Recognized identity/);
 });
 
 test("template catalog describes requirements and supports purpose search", () => {
@@ -3002,7 +3033,7 @@ test("template catalog describes requirements and supports purpose search", () =
     assert.equal(createWorkflowTemplate(entry.id).enabled, false);
   }
   assert.deepEqual(
-    templateEntries("OpenCV recording").map((t) => t.id),
+    templateEntries("unknown recording").map((t) => t.id),
     ["pre-event-person"],
   );
   assert.deepEqual(
@@ -3037,11 +3068,11 @@ test("template picker browses without modifying draft or requesting permissions"
     /Showcase: templates are editable local drafts/,
   );
   const search = h.target("[data-template-search]");
-  search.value = "OpenCV recording";
+  search.value = "unknown recording";
   h.root.dispatch("input", search);
   assert.match(
     h.root.querySelector("[data-template-list]").innerHTML,
-    /Pre-event person recording/,
+    /Pre-event unknown face recording/,
   );
   assert.doesNotMatch(
     h.root.querySelector("[data-template-list]").innerHTML,
@@ -3139,4 +3170,35 @@ test("field help preserves existing descriptions and keeps live statuses visible
     /aria-describedby="existing-help we-help-alert-params-1"/,
   );
   assert.match(result, /<\/div><p role="status">Delivery unavailable<\/p>/);
+});
+
+test("unknown identity conditions need no value and remain editable in the filter", async () => {
+  const h = mountHarness({ showcase: true });
+  await h.flush();
+  loadTemplate(h, "pre-event-person");
+  const graph = JSON.parse(h.local.get("spyder.workflow-editor.draft"));
+  const filter = graph.nodes.find((n) => n.type === "filter");
+  assert.match(h.root.innerHTML, /Face · Is unknown/);
+  assert.match(h.root.innerHTML, /Record · 10s before · 20s after/);
+  h.root.dispatch("dblclick", h.target("[data-node]", { node: filter.id }));
+  assert.match(h.root.innerHTML, /value="is_unknown" selected/);
+  assert.match(h.root.innerHTML, /placeholder="No value needed" disabled/);
+  assert.doesNotMatch(h.root.innerHTML, /data-bind-field="rules.0.value"/);
+  const op = h.target("[data-rule]", { rule: "0", ruleKey: "operator" });
+  op.value = "eq";
+  h.root.dispatch("change", op);
+  assert.doesNotMatch(h.root.innerHTML, /placeholder="No value needed"/);
+  const value = h.target("[data-rule]", { rule: "0", ruleKey: "value" });
+  value.value = "Alice";
+  h.root.dispatch("input", value);
+  op.value = "is_known";
+  h.root.dispatch("change", op);
+  const updated = JSON.parse(
+    h.local.get("spyder.workflow-editor.draft"),
+  ).nodes.find((n) => n.type === "filter");
+  assert.deepEqual(updated.params.rules, [
+    { field: "identity", operator: "is_known", value: "" },
+  ]);
+  assert.match(h.root.innerHTML, /placeholder="No value needed" disabled/);
+  h.window.spyderWorkflows.unmount();
 });

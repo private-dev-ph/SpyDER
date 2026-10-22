@@ -188,6 +188,7 @@ class InsightFaceEngine:
         for index, row in enumerate(boxes[: self.config.max_detections]):
             identity, similarity = None, None
             identity_confidence = None
+            identity_status = None
             if self.classifier is not None:
                 if landmarks is None or index >= len(landmarks):
                     raise VisionUnavailable(
@@ -200,6 +201,7 @@ class InsightFaceEngine:
                         "alignment_failed", "Face classifier could not align detected face."
                     ) from error
                 identity, identity_confidence = self.classifier.classify(aligned)
+                identity_status = "known" if identity is not None else "unknown"
             if (
                 self.recognizer is not None
                 and index < 16
@@ -230,6 +232,7 @@ class InsightFaceEngine:
                 )
                 if similarity < self.config.recognition_threshold:
                     identity = None
+                identity_status = "known" if identity is not None else "unknown"
             detections.append(
                 Detection(
                     "face",
@@ -239,6 +242,7 @@ class InsightFaceEngine:
                     identity=identity,
                     similarity=similarity,
                     identity_confidence=identity_confidence,
+                    identity_status=identity_status,
                 )
             )
         if self.identity_stabilizer is not None:

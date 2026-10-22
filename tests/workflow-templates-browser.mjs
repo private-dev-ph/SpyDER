@@ -240,7 +240,7 @@ try {
     true,
   );
   await evaluate(
-    "var input=document.querySelector('[data-template-search]');input.value='OpenCV recording';input.dispatchEvent(new Event('input',{bubbles:true}))",
+    "var input=document.querySelector('[data-template-search]');input.value='unknown recording';input.dispatchEvent(new Event('input',{bubbles:true}))",
   );
   assert.equal(
     await evaluate("document.querySelectorAll('.we-template-row').length"),
@@ -324,6 +324,30 @@ try {
   assert.equal(loaded.enabled, false);
   assert.equal(loaded.nodes.at(-1).params.pre_event_seconds, 10);
   assert.equal(loaded.nodes.at(-1).params.duration_seconds, 20);
+  assert.equal(loaded.name, "Pre-event unknown face recording");
+  assert.equal(
+    loaded.nodes.find((n) => n.type === "model").params.model_id,
+    "builtin-scrfd-500mf",
+  );
+  assert.equal(
+    loaded.nodes.find((n) => n.type === "detections").params.engine,
+    "insightface",
+  );
+  assert.ok(loaded.edges.some((e) => e.input === "classifier"));
+  await evaluate(
+    "document.querySelector('.we-node-filter').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-rule-key=operator]').value"),
+    "is_unknown",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-rule-key=value]').disabled"),
+    true,
+  );
+  await evaluate(
+    "document.querySelector('[data-settings-modal] header [data-close-settings]').click()",
+  );
   await evaluate(
     "document.querySelector('.we-node-event').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
   );
