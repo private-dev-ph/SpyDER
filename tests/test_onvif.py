@@ -94,12 +94,20 @@ def test_connect_returns_redacted_session_and_stream_helper_is_internal(monkeypa
         "GetNode",
         "GetPresets",
     ]
-    assert connected["profiles"] == [{"token": "main", "name": "Main", "ptz": True}]
+    assert connected["profiles"] == [
+        {
+            "token": "main",
+            "name": "Main",
+            "ptz": True,
+            "ptz_caps": {"pan_tilt": True, "zoom": True, "presets": True},
+        }
+    ]
     assert connected["ptz"] == {"pan_tilt": True, "zoom": True, "presets": True}
     assert "view user" not in repr(connected)
     assert "p@ss word" not in repr(connected)
     session_id = connected["session_id"]
     assert backend.status(session_id)["connected"] is True
+    assert backend.status(session_id)["profiles"] == connected["profiles"]
 
     stream_response = b'<Envelope><Body><Uri>rtsp://cam:pw@192.168.1.8/live?channel=1</Uri></Body></Envelope>'
     monkeypatch.setattr(backend, "_request", lambda *_args: onvif._safe_xml(stream_response))
@@ -210,6 +218,92 @@ def test_move_uses_selected_profile_capabilities():
     backend._sessions["sid"] = session
     with pytest.raises(onvif.OnvifError, match="unsupported"):
         backend.move("sid", "zoom-profile", 1, 0, 0)
+
+
+def test_lost_continuous_move_response_keeps_deadman_stop_armed(monkeypatch):
+    backend = onvif.OnvifBackend()
+    session = onvif._Session(
+        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media", "http://192.168.1.8/ptz",
+        [{"token": "main", "name": "Main", "ptz": True}],
+        {"pan_tilt": True, "zoom": False, "presets": False},
+    )
+    session.profile_ptz_caps["main"] = {
+        "pan_tilt": True,
+        "zoom": False,
+        "presets": False,
+        "pan_tilt_space": {"uri": "space:pt", "xmin": -1, "xmax": 1, "ymin": -1, "ymax": 1},
+        "zoom_space": None,
+    }
+    backend._sessions["sid"] = session
+    calls = []
+
+    def request(_session, _endpoint, operation, _body):
+        calls.append(operation)
+        if operation == "ContinuousMove":
+            raise onvif.OnvifError("Camera did not respond")
+        return ET.Element("Root")
+
+    monkeypatch.setattr(backend, "_request", request)
+
+    class Timer:
+        def __init__(self, _interval, callback, args):
+            self.callback = callback
+            self.args = args
+            self.started = False
+
+        def start(self):
+            self.started = True
+
+        def cancel(self):
+            pass
+
+        def fire(self):
+            self.callback(*self.args)
+
+    timers = []
+
+    def timer_factory(interval, callback, args):
+        timer = Timer(interval, callback, args)
+        timers.append(timer)
+        return timer
+
+    monkeypatch.setattr(onvif.threading, "Timer", timer_factory)
+    with pytest.raises(onvif.OnvifError, match="did not respond"):
+        backend.move("sid", "main", 1, 0, 0, duration_ms=300)
+
+    assert session.moving is True
+    assert session.moving_profile_token == "main"
+    assert len(timers) == 1 and timers[0].started
+    timers[0].fire()
+    assert calls == ["ContinuousMove", "Stop"]
+    assert session.moving is False
+    assert session.moving_profile_token is None
+
+
+def test_close_all_stops_profile_that_is_actively_moving(monkeypatch):
+    backend = onvif.OnvifBackend()
+    session = onvif._Session(
+        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media", "http://192.168.1.8/ptz",
+        [
+            {"token": "pan-profile", "name": "Pan", "ptz": True},
+            {"token": "zoom-profile", "name": "Zoom", "ptz": True},
+        ],
+        {"pan_tilt": True, "zoom": True, "presets": False},
+        moving=True,
+        moving_profile_token="zoom-profile",
+    )
+    backend._sessions["sid"] = session
+    sent = []
+    monkeypatch.setattr(
+        backend,
+        "_request",
+        lambda _session, _endpoint, operation, body: sent.append((operation, body)),
+    )
+    backend.close_all()
+    assert sent[0][0] == "Stop"
+    assert "zoom-profile" in sent[0][1]
 
 
 def test_close_all_stops_active_pulse_and_rejects_new_connections(monkeypatch):
