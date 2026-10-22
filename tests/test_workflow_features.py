@@ -280,3 +280,19 @@ def test_unresolved_workflow_is_logged_without_flooding_history(service):
     runs = service.history.list(state="error")["runs"]
     assert len(runs) == 1
     assert service.history_detail(runs[0]["id"])["nodes"][0]["type"] == "workflow"
+
+
+def test_replay_preserves_recorded_detector_binding_failure(service):
+    service.history.configure({**service.history.settings(), "mode": "diagnostic"})
+    raw = graph()
+    raw["enabled"] = False
+    raw["nodes"][0]["params"] = {"engine": "insightface", "detector": "scrfd-500mf"}
+    service.manager.cv["engine"] = "insightface"
+    service.detector_catalog.resolve = lambda _ident: "/missing/detector.onnx"
+    service._model_matches = lambda *_args: False
+    service._evaluate(raw, "cam", service.manager.cv, 1)
+    assert service.history.flush()
+    original = service.history_detail(service.history.list()["runs"][0]["id"])
+    assert original["nodes"][0]["output_count"] == 0
+    replay = service.replay_history(original["id"])["run"]
+    assert replay["nodes"][0]["output_count"] == 0
