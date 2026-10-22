@@ -334,6 +334,25 @@ try {
     "insightface",
   );
   assert.ok(loaded.edges.some((e) => e.input === "classifier"));
+  await evaluate("document.querySelector('.we-node-filter').click()");
+  const inspectorLayout = await evaluate(`(() => {
+    const panel=document.querySelector('.we-inspector'),rule=panel.querySelector('.we-rule');
+    return {widths:[...rule.querySelectorAll('input,select')].map(e=>e.getBoundingClientRect().width),
+      removeHeight:panel.querySelector('[data-delete-node]').getBoundingClientRect().height,
+      panelOverflow:panel.scrollWidth>panel.clientWidth+1};
+  })()`);
+  assert.ok(
+    inspectorLayout.widths.every((w) => w >= 100),
+    JSON.stringify(inspectorLayout),
+  );
+  assert.ok(inspectorLayout.removeHeight < 60, JSON.stringify(inspectorLayout));
+  assert.equal(inspectorLayout.panelOverflow, false);
+  await evaluate("document.querySelector('.we-inspector').scrollIntoView({block:'start'})");
+  await delay(100);
+  const inspectorShot=await command('Page.captureScreenshot',{format:'png'},sessionId);
+  await writeFile(path.join(assets,'..','node-inspector-fixed.png'),Buffer.from(inspectorShot.data,'base64'));
+
+
   await evaluate(
     "document.querySelector('.we-node-filter').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
   );
@@ -564,7 +583,27 @@ try {
   await evaluate(
     "document.querySelector('[data-settings-modal] header [data-close-settings]').click();document.querySelector('[data-undo]').click()",
   );
-  for (const type of [
+  async function assertSettingsFit(selector, context) {
+    const failures = await evaluate(`(() => {
+      const pane=document.querySelector(${JSON.stringify(selector)}),grid=pane.querySelector('.we-parameter-fields'),bounds=grid.getBoundingClientRect();
+      const failures=[];
+      for (const field of grid.querySelectorAll('input:not([type=checkbox]),select,textarea')) {
+        const r=field.getBoundingClientRect();
+        if(r.width<100||r.left<bounds.left-1||r.right>bounds.right+1) failures.push(field.dataset.param||field.dataset.ruleKey||'field');
+      }
+      for (const rule of grid.querySelectorAll('.we-rule')) {
+        const rects=[...rule.children].filter(e=>!e.matches('.number-stepper')).map(e=>e.getBoundingClientRect());
+        for(let i=0;i<rects.length;i++) for(let j=i+1;j<rects.length;j++) {
+          const a=rects[i],b=rects[j];
+          if(Math.min(a.right,b.right)-Math.max(a.left,b.left)>1 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1) failures.push('overlapping rule fields');
+        }
+      }
+      if(grid.scrollWidth>grid.clientWidth+1) failures.push('grid overflow');
+      return failures;
+    })()`);
+    assert.deepEqual(failures, [], context);
+  }
+  const nodeTypes = [
     "camera",
     "model",
     "classifier",
@@ -578,13 +617,49 @@ try {
     "capture",
     "record",
     "code",
-  ]) {
-    await evaluate(
-      `document.querySelector('[data-add=${type}]').click();document.querySelector('.we-node.selected').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`,
-    );
-    await assertHelpAlignment(36);
-    await evaluate(
-      "document.querySelector('[data-settings-modal] header [data-close-settings]').click()",
+  ];
+  for (const type of nodeTypes) {
+    await evaluate(`document.querySelector('[data-add=${type}]').click()`);
+    if (type === "filter")
+      await evaluate(
+        "document.querySelector('[data-add-rule]').click();document.querySelector('[data-add-rule]').click()",
+      );
+    for (const viewport of [
+      { width: 1280, height: 800, mobile: false },
+      { width: 960, height: 700, mobile: false },
+      { width: 390, height: 520, mobile: true },
+      { width: 320, height: 420, mobile: true },
+    ]) {
+      await command(
+        "Emulation.setDeviceMetricsOverride",
+        { ...viewport, deviceScaleFactor: 1 },
+        sessionId,
+      );
+      for (const theme of ["light", "dark"]) {
+        await evaluate(
+          `document.documentElement.dataset.theme=${JSON.stringify(theme)}`,
+        );
+        await assertSettingsFit(
+          ".we-inspector",
+          `${type}/inline/${viewport.width}/${theme}`,
+        );
+        await evaluate(
+          "document.querySelector('.we-node.selected').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
+        );
+        await assertHelpAlignment(36);
+        await assertSettingsFit(
+          ".we-node-settings",
+          `${type}/dialog/${viewport.width}/${theme}`,
+        );
+        await evaluate(
+          "document.querySelector('[data-settings-modal] header [data-close-settings]').click()",
+        );
+      }
+    }
+    await command(
+      "Emulation.setDeviceMetricsOverride",
+      { width: 1280, height: 800, mobile: false, deviceScaleFactor: 1 },
+      sessionId,
     );
   }
   await command(
