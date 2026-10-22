@@ -561,22 +561,26 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         data = thumbnail(str(media), stats.st_size, stats.st_mtime_ns, position)
                         self.send(200, data, "image/jpeg")
                         return
-                    capture = cv2.VideoCapture(str(media))
-                    if not capture.isOpened():
-                        capture.release()
-                        self.json(415, {"error": "Recording cannot be decoded"})
-                        return
-                    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
-                    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                     duration = float(item.get("duration_seconds") or 0)
                     if action == "info":
-                        capture.release()
+                        # The catalog already knows playback duration. Opening a decoder
+                        # here can scan hours of fragmented MP4 before returning metadata.
+                        fps = item.get("fps", 0)
+                        fps = (
+                            float(fps)
+                            if isinstance(fps, (int, float))
+                            and not isinstance(fps, bool)
+                            and math.isfinite(fps)
+                            and fps > 0
+                            else 0.0
+                        )
                         self.json(
                             200,
                             {
                                 "duration_seconds": duration,
-                                "fps": fps if fps > 0 else 0,
-                                "frame_count": max(0, frame_count),
+                                "fps": fps,
+                                "frame_count": round(duration * fps),
+                                "frame_count_estimated": True,
                             },
                         )
                         return
@@ -585,7 +589,6 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     try:
                         position = float(raw_time[0])
                     except (TypeError, ValueError):
-                        capture.release()
                         self.json(400, {"error": "Invalid video time"})
                         return
                     if (
@@ -595,8 +598,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         or position > duration
                         or duration <= 0
                     ):
-                        capture.release()
                         self.json(400, {"error": "Video time is outside recording duration"})
+                        return
+                    capture = cv2.VideoCapture(str(media))
+                    if not capture.isOpened():
+                        capture.release()
+                        self.json(415, {"error": "Recording cannot be decoded"})
                         return
                     capture.set(cv2.CAP_PROP_POS_MSEC, position * 1000)
                     ok, frame = capture.read()
