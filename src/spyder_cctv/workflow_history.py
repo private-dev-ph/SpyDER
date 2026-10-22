@@ -39,6 +39,7 @@ _SECRET_KEYS = {
     "raw_data",
     "blob",
 }
+_GRAPH_SECRET_KEYS = _SECRET_KEYS | {"frame_data", "image_data", "raw_frame", "raw_image"}
 _STATUSES = {"completed", "filtered", "error"}
 
 
@@ -72,6 +73,52 @@ def _clean(value: Any, *, diagnostic: bool, depth: int = 0, key: str = "") -> An
     return None
 
 
+def _clean_graph(
+    value: Any,
+    *,
+    depth: int = 0,
+    key: str = "",
+    budget: list[int] | None = None,
+) -> Any:
+    """Keep valid workflow JSON intact within explicit graph bounds."""
+    if budget is None:
+        budget = [_MAX_RUN_BYTES]
+    if budget[0] <= 0:
+        return None
+    if key.lower() in _GRAPH_SECRET_KEYS or depth > 24:
+        return None
+    if value is None or type(value) in (bool, int, float):
+        if isinstance(value, float) and (value != value or abs(value) == float("inf")):
+            return None
+        return value
+    if isinstance(value, str):
+        limit = 16_384 if key.lower() in {"code", "source"} else _MAX_TEXT
+        text = value[: min(limit, budget[0])]
+        budget[0] -= len(text.encode("utf-8"))
+        return text
+    if isinstance(value, dict):
+        output: dict[str, Any] = {}
+        for index, (child_key, child) in enumerate(value.items()):
+            if index >= 512 or not isinstance(child_key, str):
+                break
+            clipped_key = child_key[:256]
+            budget[0] -= len(clipped_key.encode("utf-8"))
+            cleaned = _clean_graph(child, depth=depth + 1, key=clipped_key, budget=budget)
+            if cleaned is not None:
+                output[clipped_key] = cleaned
+        return output
+    if isinstance(value, (list, tuple)):
+        limit = 256 if key.lower() == "nodes" else 512
+        output = []
+        for item in value[:limit]:
+            if budget[0] <= 0:
+                break
+            budget[0] -= 1
+            output.append(_clean_graph(item, depth=depth + 1, budget=budget))
+        return output
+    return None
+
+
 class ExecutionHistory:
     """SQLite execution store with a bounded, nonblocking producer queue."""
 
@@ -79,6 +126,7 @@ class ExecutionHistory:
         self.path = Path(path)
         self._queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=_MAX_QUEUE)
         self._lock = threading.RLock()
+        self._state_lock = threading.RLock()
         self._closed = False
         self.dropped = 0
         self.error: str | None = None
@@ -169,7 +217,7 @@ class ExecutionHistory:
         for key, low, high in (
             ("retention_days", 1, 3650),
             ("max_runs", 1, 1_000_000),
-            ("max_bytes", 1024, 2**31),
+            ("max_bytes", 1024 * 1024, 2**31),
         ):
             value = raw[key]
             if type(value) is not int or not low <= value <= high:
@@ -177,22 +225,25 @@ class ExecutionHistory:
         return result
 
     def settings(self) -> dict[str, Any]:
-        with self._lock:
+        with self._state_lock:
             return dict(self._settings)
 
     def configure(self, raw: dict[str, Any]) -> dict[str, Any]:
         settings = self._validate_settings(raw)
         if not self._available:
             raise RuntimeError(self.error or "Workflow history storage unavailable")
-        with self._lock:
+        try:
+            self._call("settings", settings)
+        except Exception as exc:
+            raise RuntimeError(f"Cannot persist workflow history settings: {exc}") from exc
+        with self._state_lock:
             self._settings = settings
-        self._call("settings", settings)
         return dict(settings)
 
     def record(self, run: dict[str, Any]) -> str | None:
         """Queue run safely. Return identifier when accepted; never raise to inference caller."""
         try:
-            with self._lock:
+            with self._state_lock:
                 if self._closed or not self._settings["enabled"]:
                     return None
                 diagnostic = self._settings["mode"] == "diagnostic"
@@ -204,10 +255,17 @@ class ExecutionHistory:
             if not isinstance(nodes, list):
                 nodes = []
             nodes = nodes[:_MAX_NODES]
-            graph = _clean(run.get("graph", {}), diagnostic=True)
+            graph = _clean_graph(run.get("graph", {}))
+            if isinstance(graph, dict):
+                if isinstance(graph.get("nodes"), list):
+                    graph["nodes"] = graph["nodes"][:_MAX_NODES]
+                if isinstance(graph.get("edges"), list):
+                    graph["edges"] = graph["edges"][:512]
             graph_json = json.dumps(
                 graph, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             )
+            if len(graph_json.encode("utf-8")) > _MAX_RUN_BYTES:
+                return None
             graph_revision = hashlib.sha256(graph_json.encode("utf-8")).hexdigest()[:32]
             details = _clean(
                 {
@@ -220,14 +278,34 @@ class ExecutionHistory:
                 diagnostic=diagnostic,
             )
             if not diagnostic:
+                allowed_node_fields = {
+                    "id",
+                    "type",
+                    "state",
+                    "input_count",
+                    "output_count",
+                    "duration_ms",
+                    "error",
+                    "path",
+                    "signal_count",
+                    "signals_count",
+                }
                 details = {
                     "nodes": [
-                        {k: v for k, v in node.items() if k not in ("inputs", "outputs")}
+                        {k: v for k, v in node.items() if k in allowed_node_fields}
                         for node in details["nodes"]
                         if isinstance(node, dict)
                     ],
                     "model_refs": details["model_refs"],
-                    "actions": details["actions"],
+                    "actions": [
+                        {
+                            key: action[key]
+                            for key in ("id", "type", "state", "status", "media_ref", "media_id")
+                            if key in action
+                        }
+                        for action in details["actions"]
+                        if isinstance(action, dict)
+                    ],
                 }
             state = str(run.get("state", "completed"))
             if state not in _STATUSES:
@@ -247,7 +325,7 @@ class ExecutionHistory:
                 summary["graph_revision"] = graph_revision
             else:
                 summary["graph_revision"] = graph_revision
-            payload = (summary, details, graph_json)
+            payload = (summary, details)
             encoded_size = len(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             )
@@ -264,20 +342,29 @@ class ExecutionHistory:
                 return None
             if not self._available:
                 return None
-            self._queue.put_nowait(("record", (summary, details, graph_json, encoded_size)))
+            with self._state_lock:
+                if self._closed or not self._settings["enabled"]:
+                    return None
+                self._queue.put_nowait(("record", (summary, details, graph_json, encoded_size)))
             return identifier
         except Exception:
-            with self._lock:
+            with self._state_lock:
                 self.dropped += 1
             return None
 
     def annotate(self, run_id: str, patch: dict[str, Any]) -> bool:
         """Queue bounded outcome metadata update."""
         try:
-            self._queue.put_nowait(("annotate", (str(run_id)[:64], _clean(patch, diagnostic=True))))
+            with self._state_lock:
+                if self._closed:
+                    return False
+                self._queue.put_nowait(
+                    ("annotate", (str(run_id)[:64], _clean(patch, diagnostic=True)))
+                )
             return True
         except Exception:
-            self.dropped += 1
+            with self._state_lock:
+                self.dropped += 1
             return False
 
     def list(
@@ -358,35 +445,49 @@ class ExecutionHistory:
         return int(self._call("clear", None))
 
     def flush(self, timeout: float = 5.0) -> bool:
-        if self._closed:
-            return not self._writer.is_alive()
-        event = threading.Event()
-        try:
-            self._queue.put(("flush", event), timeout=max(0, timeout))
-            return event.wait(max(0, timeout))
-        except queue.Full:
-            return False
+        with self._state_lock:
+            if self._closed:
+                return not self._writer.is_alive()
+            event = threading.Event()
+            try:
+                self._queue.put(("flush", event), timeout=max(0, timeout))
+            except queue.Full:
+                return False
+        return event.wait(max(0, timeout)) and self.error is None
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self.flush(10)
-        self._closed = True
-        self._queue.put(("stop", None))
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+        flushed = threading.Event()
+        try:
+            self._queue.put(("flush", flushed), timeout=2)
+            flushed.wait(10)
+        except queue.Full:
+            pass
+        try:
+            self._queue.put(("stop", None), timeout=10)
+        except queue.Full:
+            self.error = self.error or "Workflow history writer queue did not drain during close"
         self._writer.join(timeout=10)
         with self._lock:
             try:
-                if self._available:
+                if self._available and not self._writer.is_alive():
                     self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                     self._db.execute("PRAGMA incremental_vacuum")
             except sqlite3.Error as exc:
                 self.error = str(exc)
-            self._db.close()
+            if not self._writer.is_alive():
+                self._db.close()
 
     def _call(self, operation: str, value: Any) -> Any:
         event = threading.Event()
         box: list[Any] = []
-        self._queue.put((operation, (value, event, box)), timeout=2)
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("Workflow history is closed")
+            self._queue.put((operation, (value, event, box)), timeout=2)
         if not event.wait(5):
             raise TimeoutError("workflow history writer did not respond")
         if box and isinstance(box[0], Exception):
@@ -407,6 +508,8 @@ class ExecutionHistory:
                     time.sleep(0.001)
             with self._lock:
                 try:
+                    acknowledgements: list[tuple[str, Any]] = []
+                    configured: dict[str, Any] | None = None
                     for operation, payload in pending:
                         if operation == "record":
                             summary, details, graph, size = payload
@@ -460,30 +563,42 @@ class ExecutionHistory:
                                     "INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",
                                     (key, json.dumps(value)),
                                 )
-                            box.append(dict(values))
-                            event.set()
+                            configured = dict(values)
+                            acknowledgements.append((operation, payload))
                         elif operation == "delete":
                             before = self._db.total_changes
                             self._db.executemany(
                                 "DELETE FROM runs WHERE id=?", [(item,) for item in payload[0]]
                             )
-                            payload[2].append(self._db.total_changes - before)
-                            payload[1].set()
+                            acknowledgements.append(
+                                (operation, (payload, self._db.total_changes - before))
+                            )
                         elif operation == "clear":
                             count = self._db.execute("SELECT count(*) FROM runs").fetchone()[0]
                             self._db.execute("DELETE FROM runs")
-                            payload[2].append(count)
-                            payload[1].set()
+                            acknowledgements.append((operation, (payload, count)))
                         elif operation == "flush":
                             pass
                         elif operation == "stop":
                             stopping = True
-                    self._cleanup_locked()
+                    self._cleanup_locked(configured)
+                    self._set_page_limit_locked(configured)
                     self._db.commit()
                     if self._available:
                         self.error = None
-                    self._set_page_limit_locked()
                     self._db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    if configured is not None:
+                        with self._state_lock:
+                            self._settings = configured
+                    for operation, acknowledgement in acknowledgements:
+                        if operation == "settings":
+                            values, event, box = acknowledgement
+                            box.append(dict(values))
+                            event.set()
+                        else:
+                            payload, result = acknowledgement
+                            payload[2].append(result)
+                            payload[1].set()
                 except Exception as exc:
                     self.error = str(exc)[:512]
                     self.dropped += sum(op == "record" for op, _ in pending)
@@ -498,10 +613,6 @@ class ExecutionHistory:
                         elif operation == "settings":
                             payload[2].append(exc)
                             payload[1].set()
-                        elif operation == "flush":
-                            payload.set()
-                        elif operation == "settings":
-                            pass
                 for operation, payload in pending:
                     if operation == "flush":
                         payload.set()
@@ -509,11 +620,12 @@ class ExecutionHistory:
                         stopping = True
                 pending.clear()
 
-    def _cleanup_locked(self) -> None:
-        cutoff = (datetime.now(UTC) - timedelta(days=self._settings["retention_days"])).isoformat()
+    def _cleanup_locked(self, settings: dict[str, Any] | None = None) -> None:
+        settings = settings or self._settings
+        cutoff = (datetime.now(UTC) - timedelta(days=settings["retention_days"])).isoformat()
         self._db.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))
         excess = self._db.execute(
-            "SELECT count(*) - ? FROM runs", (self._settings["max_runs"],)
+            "SELECT count(*) - ? FROM runs", (settings["max_runs"],)
         ).fetchone()[0]
         if excess > 0:
             self._db.execute(
@@ -528,7 +640,7 @@ class ExecutionHistory:
             "SELECT (SELECT coalesce(sum(size_bytes),0) FROM runs) + "
             "(SELECT coalesce(sum(size_bytes),0) FROM graphs)"
         ).fetchone()[0]
-        budget = self._settings["max_bytes"]
+        budget = settings["max_bytes"]
         while total_bytes > budget:
             row = self._db.execute(
                 "SELECT id,size_bytes FROM runs ORDER BY started_at ASC LIMIT 1"
@@ -564,7 +676,8 @@ class ExecutionHistory:
             "error": self.error,
         }
 
-    def _set_page_limit_locked(self) -> None:
+    def _set_page_limit_locked(self, settings: dict[str, Any] | None = None) -> None:
         if self._available:
-            pages = max(32, self._settings["max_bytes"] // 4096 + 64)
+            settings = settings or self._settings
+            pages = max(32, settings["max_bytes"] // 4096 + 64)
             self._db.execute(f"PRAGMA max_page_count={pages}")

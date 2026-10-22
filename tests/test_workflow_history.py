@@ -121,15 +121,101 @@ def test_storage_failure_does_not_abort_startup_or_inference(tmp_path: Path):
     store.close()
 
 
+def test_record_does_not_wait_for_reader_database_lock(tmp_path: Path):
+    store = ExecutionHistory(tmp_path / "history.sqlite")
+    store._lock.acquire()
+    try:
+        assert store.record(_run(1)) == "run-1"
+    finally:
+        store._lock.release()
+    assert store.flush()
+    store.close()
+
+
+def test_graph_preserves_large_nested_path_maps_and_code(tmp_path: Path):
+    store = ExecutionHistory(tmp_path / "history.sqlite")
+    paths = {f"node-{index}": ["nested"] for index in range(100)}
+    code = "x" * 12_000
+    graph = {
+        "_paths": paths,
+        "nodes": [{"id": "n", "params": {"bindings": {"deep": {"again": {"source": code}}}}}],
+    }
+    store.record(_run(1, graph=graph))
+    assert store.flush()
+    restored = store.get("run-1")["graph"]
+    assert len(restored["_paths"]) == 100
+    assert restored["nodes"][0]["params"]["bindings"]["deep"]["again"]["source"] == code
+    store.close()
+
+
+def test_summary_drops_signal_payload_but_keeps_trace_fields(tmp_path: Path):
+    store = ExecutionHistory(tmp_path / "history.sqlite")
+    store.record(
+        _run(
+            1,
+            nodes=[
+                {
+                    "id": "n",
+                    "type": "filter",
+                    "state": "ok",
+                    "path": ["outer", "inner"],
+                    "signals": {"identity": "private person", "count": 2},
+                    "identity": "private person",
+                }
+            ],
+        )
+    )
+    assert store.flush()
+    node = store.get("run-1")["nodes"][0]
+    assert node["path"] == ["outer", "inner"]
+    assert "signals" not in node
+    assert "identity" not in node
+    store.close()
+
+
+def test_settings_report_success_only_after_commit(tmp_path: Path):
+    store = ExecutionHistory(tmp_path / "history.sqlite")
+    assert store.flush()
+    with store._lock:
+        store._db.execute(
+            "CREATE TRIGGER reject_settings BEFORE INSERT ON settings "
+            "BEGIN SELECT RAISE(ABORT, 'forced settings failure'); END"
+        )
+        store._db.commit()
+    original = store.settings()
+    with pytest.raises(RuntimeError, match="forced settings failure"):
+        store.configure({**original, "mode": "diagnostic"})
+    assert store.settings() == original
+    store.close()
+
+
+def test_close_racing_record_does_not_leave_writer_queue_hung(tmp_path: Path):
+    store = ExecutionHistory(tmp_path / "history.sqlite")
+    started = threading.Event()
+
+    def produce():
+        for index in range(300):
+            store.record(_run(index))
+            started.set()
+
+    thread = threading.Thread(target=produce)
+    thread.start()
+    assert started.wait(1)
+    store.close()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert store.record(_run(999)) is None
+
+
 def test_retention_run_and_byte_limits(tmp_path: Path):
     store = ExecutionHistory(tmp_path / "history.sqlite")
-    store.configure({**store.settings(), "max_runs": 2, "max_bytes": 2048})
+    store.configure({**store.settings(), "max_runs": 2, "max_bytes": 1024 * 1024})
     for i in range(6):
         store.record(_run(i, metadata={"text": "x" * 500}))
     assert store.flush()
     result = store.list(size=10)
     assert result["total"] <= 2
-    assert result["stats"]["data_bytes"] <= 2048
+    assert result["stats"]["data_bytes"] <= 1024 * 1024
     store.close()
     assert (tmp_path / "history.sqlite").stat().st_size < 100_000
 
