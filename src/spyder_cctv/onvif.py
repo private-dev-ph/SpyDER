@@ -36,8 +36,7 @@ PASSWORD_DIGEST_TYPE = (
     "oasis-200401-wss-username-token-profile-1.0#PasswordDigest"
 )
 NONCE_ENCODING_TYPE = (
-    "http://docs.oasis-open.org/wss/2004/01/"
-    "oasis-200401-wss-soap-message-security-1.0#Base64Binary"
+    "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"
 )
 DEVICE_NS = "http://www.onvif.org/ver10/device/wsdl"
 MEDIA_NS = "http://www.onvif.org/ver10/media/wsdl"
@@ -122,11 +121,14 @@ def _validated_addresses(host: str) -> tuple[str, ...]:
             raise OnvifError("Device address is invalid") from None
         lan_private = (
             address.version == 4
-            and any(address in network for network in (
-                ipaddress.ip_network("10.0.0.0/8"),
-                ipaddress.ip_network("172.16.0.0/12"),
-                ipaddress.ip_network("192.168.0.0/16"),
-            ))
+            and any(
+                address in network
+                for network in (
+                    ipaddress.ip_network("10.0.0.0/8"),
+                    ipaddress.ip_network("172.16.0.0/12"),
+                    ipaddress.ip_network("192.168.0.0/16"),
+                )
+            )
         ) or (address.version == 6 and address in ipaddress.ip_network("fc00::/7"))
         if (
             not lan_private
@@ -195,9 +197,10 @@ class _PinnedHTTPS(_PinnedHTTP):
 
 
 def _digest_header(challenge: str, username: str, password: str, method: str, uri: str) -> str:
-    params = {key: quoted or bare for key, quoted, bare in re.findall(
-        r'(\w+)=(?:"([^"]*)"|([^,\s]+))', challenge
-    )}
+    params = {
+        key: quoted or bare
+        for key, quoted, bare in re.findall(r'(\w+)=(?:"([^"]*)"|([^,\s]+))', challenge)
+    }
     realm, nonce = params.get("realm"), params.get("nonce")
     algorithm = params.get("algorithm", "MD5").upper()
     qop = [item.strip() for item in params.get("qop", "auth").split(",")]
@@ -212,6 +215,7 @@ def _digest_header(challenge: str, username: str, password: str, method: str, ur
         ha1 = hash_fn(f"{ha1}:{nonce}:{cnonce}".encode()).hexdigest()
     ha2 = hash_fn(f"{method}:{uri}".encode()).hexdigest()
     response = hash_fn(f"{ha1}:{nonce}:{nc}:{cnonce}:auth:{ha2}".encode()).hexdigest()
+
     def quote(value: str) -> str:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -298,17 +302,17 @@ def _soap(action: str, body: str, username: str, password: str) -> bytes:
         hashlib.sha1(nonce + created.encode() + password.encode()).digest()
     ).decode()
     token = (
-        f'<wsse:UsernameToken><wsse:Username>{_xml_escape(username)}</wsse:Username>'
+        f"<wsse:UsernameToken><wsse:Username>{_xml_escape(username)}</wsse:Username>"
         f'<wsse:Password Type="{PASSWORD_DIGEST_TYPE}">{digest}</wsse:Password>'
         f'<wsse:Nonce EncodingType="{NONCE_ENCODING_TYPE}">'
-        f'{base64.b64encode(nonce).decode()}</wsse:Nonce>'
-        f'<wsu:Created>{created}</wsu:Created></wsse:UsernameToken>'
+        f"{base64.b64encode(nonce).decode()}</wsse:Nonce>"
+        f"<wsu:Created>{created}</wsu:Created></wsse:UsernameToken>"
     )
     return (
         f'<s:Envelope xmlns:s="{SOAP_NS}" xmlns:wsa="{WSA_NS}" '
         f'xmlns:wsse="{WSSE_NS}" xmlns:wsu="{WSU_NS}"><s:Header>'
         f'<wsa:Action>{action_uri}</wsa:Action><wsse:Security s:mustUnderstand="1">{token}'
-        f'</wsse:Security></s:Header><s:Body>{body}</s:Body></s:Envelope>'
+        f"</wsse:Security></s:Header><s:Body>{body}</s:Body></s:Envelope>"
     ).encode()
 
 
@@ -341,10 +345,14 @@ def _strip_uri_credentials(value: str) -> str:
             host = f"{host}:{parsed.port}"
         query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
         sensitive = ("user", "pass", "credential", "token", "auth")
-        query = [(key, item) for key, item in query
-                 if not any(part in key.casefold() for part in sensitive)]
-        return urllib.parse.urlunsplit((parsed.scheme, host, parsed.path,
-                                        urllib.parse.urlencode(query), ""))
+        query = [
+            (key, item)
+            for key, item in query
+            if not any(part in key.casefold() for part in sensitive)
+        ]
+        return urllib.parse.urlunsplit(
+            (parsed.scheme, host, parsed.path, urllib.parse.urlencode(query), "")
+        )
     except (ValueError, UnicodeError):
         raise OnvifError("Camera returned an invalid stream URI") from None
 
@@ -386,9 +394,9 @@ class OnvifBackend:
             f'<e:Envelope xmlns:e="{SOAP_NS}" xmlns:w="{DISCOVERY_WSA_NS}" '
             f'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" '
             f'xmlns:dn="http://www.onvif.org/ver10/network/wsdl">'
-            f'<e:Header><w:MessageID>{message_id}</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>'
-            '<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>'
-            '<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>'
+            f"<e:Header><w:MessageID>{message_id}</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>"
+            "<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>"
+            "<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>"
         ).encode()
         found: dict[str, dict[str, str]] = {}
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -421,11 +429,15 @@ class OnvifBackend:
                             continue
                     if endpoint is None:
                         continue
-                    name = next((urllib.parse.unquote(s.rsplit("/", 1)[-1]) for s in scopes.split()
-                                 if "/name/" in s), "ONVIF camera")
-                    _scheme, _port, host, _path, _addresses = _endpoint(
-                        endpoint, literal_only=True
+                    name = next(
+                        (
+                            urllib.parse.unquote(s.rsplit("/", 1)[-1])
+                            for s in scopes.split()
+                            if "/name/" in s
+                        ),
+                        "ONVIF camera",
                     )
+                    _scheme, _port, host, _path, _addresses = _endpoint(endpoint, literal_only=True)
                     key = host.casefold()
                     found.setdefault(
                         key, {"endpoint": endpoint, "name": name[:80], "scopes": scopes[:512]}
@@ -439,8 +451,13 @@ class OnvifBackend:
         return list(found.values())[:MAX_DISCOVERED]
 
     def connect(self, endpoint: str, username: str, password: str) -> dict[str, Any]:
-        if (not isinstance(username, str) or not isinstance(password, str) or len(username) > 256
-                or len(password) > 1024 or any(ord(char) < 32 for char in username + password)):
+        if (
+            not isinstance(username, str)
+            or not isinstance(password, str)
+            or len(username) > 256
+            or len(password) > 1024
+            or any(ord(char) < 32 for char in username + password)
+        ):
             raise OnvifError("Invalid camera credentials")
         with self._lock:
             self._expire_locked()
@@ -470,8 +487,9 @@ class OnvifBackend:
                 session.ptz_endpoint = self._approved_service(
                     ptz_endpoint, session.approved_addresses
                 )
-        root = self._request(session, session.media_endpoint, "GetProfiles",
-                             _soap_body("GetProfiles", MEDIA_NS))
+        root = self._request(
+            session, session.media_endpoint, "GetProfiles", _soap_body("GetProfiles", MEDIA_NS)
+        )
         profiles = []
         for profile in _children(root, "Profiles"):
             token = profile.attrib.get("token", "")
@@ -548,16 +566,12 @@ class OnvifBackend:
                     "token": item["token"],
                     "name": item["name"],
                     "ptz": item["ptz"],
-                    "ptz_caps": self._public_profile_caps(
-                        profile_ptz_caps[item["token"]]
-                    ),
+                    "ptz_caps": self._public_profile_caps(profile_ptz_caps[item["token"]]),
                 }
                 for item in profiles
             ],
             "ptz": {
-                key: value
-                for key, value in caps.items()
-                if key in {"pan_tilt", "zoom", "presets"}
+                key: value for key, value in caps.items() if key in {"pan_tilt", "zoom", "presets"}
             },
         }
 
@@ -594,8 +608,13 @@ class OnvifBackend:
         node_cache: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         node_token = profile.get("node_token", "")
-        caps: dict[str, Any] = {"pan_tilt": False, "zoom": False, "presets": False,
-                                "pan_tilt_space": None, "zoom_space": None}
+        caps: dict[str, Any] = {
+            "pan_tilt": False,
+            "zoom": False,
+            "presets": False,
+            "pan_tilt_space": None,
+            "zoom_space": None,
+        }
         if node_token:
             cached = node_cache.get(node_token)
             if cached is None:
@@ -659,8 +678,11 @@ class OnvifBackend:
 
     def _expire_locked(self):
         now = time.monotonic()
-        expired = [key for key, value in self._sessions.items()
-                   if not value.pinned and value.expires_at <= now]
+        expired = [
+            key
+            for key, value in self._sessions.items()
+            if not value.pinned and value.expires_at <= now
+        ]
         for key in expired:
             session = self._sessions.pop(key)
             self._stop_session(session)
@@ -670,11 +692,15 @@ class OnvifBackend:
         profile = self._profile(session, profile_token)
         if profile_token in session.stream_uris:
             return session.stream_uris[profile_token]
-        root = self._request(session, session.media_endpoint, "GetStreamUri",
-                             f'<t:GetStreamUri xmlns:t="{MEDIA_NS}" xmlns:tt="{SCHEMA_NS}">'
-                             '<t:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>'
-                             '<tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></t:StreamSetup>'
-                             f'<t:ProfileToken>{_xml_escape(profile["token"])}</t:ProfileToken></t:GetStreamUri>')
+        root = self._request(
+            session,
+            session.media_endpoint,
+            "GetStreamUri",
+            f'<t:GetStreamUri xmlns:t="{MEDIA_NS}" xmlns:tt="{SCHEMA_NS}">'
+            "<t:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream>"
+            "<tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport></t:StreamSetup>"
+            f"<t:ProfileToken>{_xml_escape(profile['token'])}</t:ProfileToken></t:GetStreamUri>",
+        )
         # Camera credentials in returned URI never leave this backend.
         uri = _strip_uri_credentials(_text(root, "Uri"))
         parsed = urllib.parse.urlsplit(uri)
@@ -722,13 +748,17 @@ class OnvifBackend:
 
     @staticmethod
     def _public_profile_caps(caps: dict[str, Any]) -> dict[str, bool]:
-        return {
-            key: bool(caps.get(key, False))
-            for key in ("pan_tilt", "zoom", "presets")
-        }
+        return {key: bool(caps.get(key, False)) for key in ("pan_tilt", "zoom", "presets")}
 
-    def move(self, session_id: str, profile_token: str, pan: float, tilt: float, zoom: float,
-             duration_ms: int = 250) -> dict[str, Any]:
+    def move(
+        self,
+        session_id: str,
+        profile_token: str,
+        pan: float,
+        tilt: float,
+        zoom: float,
+        duration_ms: int = 250,
+    ) -> dict[str, Any]:
         session = self._session(session_id)
         self._profile(session, profile_token)
         try:
@@ -743,8 +773,10 @@ class OnvifBackend:
         caps = session.profile_ptz_caps.get(profile_token, {})
         if (
             not session.ptz_endpoint
-            or (pan or tilt) and not caps["pan_tilt"]
-            or zoom and not caps["zoom"]
+            or (pan or tilt)
+            and not caps["pan_tilt"]
+            or zoom
+            and not caps["zoom"]
         ):
             raise OnvifError("Requested PTZ movement is unsupported")
         if not (pan or tilt or zoom):
@@ -774,8 +806,7 @@ class OnvifBackend:
                 x = self._map_speed(pan, space["xmin"], space["xmax"])
                 y = self._map_speed(tilt, space["ymin"], space["ymax"])
                 velocity += (
-                    f'<tt:PanTilt x="{x:.6f}" y="{y:.6f}" '
-                    f'space="{_xml_escape(space["uri"])}"/>'
+                    f'<tt:PanTilt x="{x:.6f}" y="{y:.6f}" space="{_xml_escape(space["uri"])}"/>'
                 )
             if zoom:
                 space = caps["zoom_space"]
@@ -783,9 +814,9 @@ class OnvifBackend:
                 velocity += f'<tt:Zoom x="{z:.6f}" space="{_xml_escape(space["uri"])}"/>'
             body = (
                 f'<t:ContinuousMove xmlns:t="{PTZ_NS}" xmlns:tt="{SCHEMA_NS}">'
-                f'<t:ProfileToken>{_xml_escape(profile_token)}</t:ProfileToken>'
-                f'<t:Velocity>{velocity}</t:Velocity>'
-                f'<t:Timeout>PT{duration_ms / 1000:.3f}S</t:Timeout>'
+                f"<t:ProfileToken>{_xml_escape(profile_token)}</t:ProfileToken>"
+                f"<t:Velocity>{velocity}</t:Velocity>"
+                f"<t:Timeout>PT{duration_ms / 1000:.3f}S</t:Timeout>"
                 "</t:ContinuousMove>"
             )
             session.moving = True
@@ -816,9 +847,7 @@ class OnvifBackend:
             session.timer.cancel()
             session.timer = None
 
-    def _deadman_stop(
-        self, session: _Session, profile_token: str, generation: int, retry: int = 0
-    ):
+    def _deadman_stop(self, session: _Session, profile_token: str, generation: int, retry: int = 0):
         with session.lock:
             if generation != session.move_generation:
                 return
@@ -841,7 +870,7 @@ class OnvifBackend:
             return
         body = (
             f'<t:Stop xmlns:t="{PTZ_NS}">'
-            f'<t:ProfileToken>{_xml_escape(profile_token)}</t:ProfileToken>'
+            f"<t:ProfileToken>{_xml_escape(profile_token)}</t:ProfileToken>"
             "<t:PanTilt>true</t:PanTilt><t:Zoom>true</t:Zoom></t:Stop>"
         )
         self._request(session, session.ptz_endpoint, "Stop", body)
@@ -869,8 +898,12 @@ class OnvifBackend:
         profile_caps = session.profile_ptz_caps.get(profile_token, {})
         if not session.ptz_endpoint or not profile_caps.get("presets"):
             return []
-        root = self._request(session, session.ptz_endpoint, "GetPresets",
-                             _soap_body("GetPresets", PTZ_NS, {"ProfileToken": profile_token}))
+        root = self._request(
+            session,
+            session.ptz_endpoint,
+            "GetPresets",
+            _soap_body("GetPresets", PTZ_NS, {"ProfileToken": profile_token}),
+        )
         return [
             {
                 "token": item.attrib.get("token", "")[:256],
@@ -882,21 +915,27 @@ class OnvifBackend:
 
     def status(self, session_id: str) -> dict[str, Any]:
         session = self._session(session_id)
-        return {"connected": True, "expires_in": max(0, int(session.expires_at - time.monotonic())),
-                "profiles": [
-                    {
-                        "token": item["token"],
-                        "name": item["name"],
-                        "ptz": item["ptz"],
-                        "ptz_caps": self._public_profile_caps(
-                            session.profile_ptz_caps.get(item["token"], {})
-                        ),
-                    }
-                    for item in session.profiles
-                ],
-                "ptz": {key: value for key, value in session.ptz_caps.items()
-                        if key in {"pan_tilt", "zoom", "presets"}},
-                "moving": bool(session.moving)}
+        return {
+            "connected": True,
+            "expires_in": max(0, int(session.expires_at - time.monotonic())),
+            "profiles": [
+                {
+                    "token": item["token"],
+                    "name": item["name"],
+                    "ptz": item["ptz"],
+                    "ptz_caps": self._public_profile_caps(
+                        session.profile_ptz_caps.get(item["token"], {})
+                    ),
+                }
+                for item in session.profiles
+            ],
+            "ptz": {
+                key: value
+                for key, value in session.ptz_caps.items()
+                if key in {"pan_tilt", "zoom", "presets"}
+            },
+            "moving": bool(session.moving),
+        }
 
     def close(self, session_id: str) -> None:
         if not isinstance(session_id, str) or not 1 <= len(session_id) <= 128:
@@ -932,4 +971,3 @@ class OnvifBackend:
             self._sessions.clear()
         for session in sessions:
             self._stop_session(session)
-

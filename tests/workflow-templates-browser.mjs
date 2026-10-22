@@ -777,6 +777,31 @@ try {
       ]) {
         await evaluate(`location.hash=${JSON.stringify(route)}`);
         await delay(100);
+        if (route === "vision-lab") {
+          await evaluate(
+            "document.querySelector('#vision-gallery-tab').click()",
+          );
+          await until(
+            "!!document.querySelector('#face-gallery-tools .dt-card')",
+          );
+          assert.equal(
+            await evaluate(
+              "document.querySelector('#face-gallery-tools [data-create]').disabled",
+            ),
+            true,
+          );
+        }
+        if (route === "camera-setup") {
+          await until(
+            "!!document.querySelector('#onvif-camera-tools .dt-card')",
+          );
+          assert.equal(
+            await evaluate(
+              "document.querySelector('#onvif-camera-tools [data-discover]').disabled",
+            ),
+            true,
+          );
+        }
         const audit =
           await evaluate(`(() => ({overflow:document.documentElement.scrollWidth>innerWidth+1,
           icons:[...document.querySelectorAll('.icon-button > svg,.dialog-close > svg,.video-focus > svg')].filter(i=>i.getClientRects().length).flatMap(i=>{

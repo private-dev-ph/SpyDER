@@ -151,6 +151,9 @@ try {
     "(()=>{const d=document.querySelector('.dt-dialog');d.querySelector('[name=name]').value='New gallery';d.querySelector('[name=detector_model_id]').value='det-1';d.querySelector('[name=recognition_model_id]').value='rec-1';d.querySelector('[value=create]').click()})()",
   );
   await until(
+    "!document.querySelector('.dt-dialog') && calls.some(x=>x.path==='/api/faces/galleries' && x.method==='POST')",
+  );
+  await until(
     "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
   );
   await evaluate(

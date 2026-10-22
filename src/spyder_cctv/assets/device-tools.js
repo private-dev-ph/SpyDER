@@ -171,21 +171,49 @@
           return await load();
         }
         if (b.hasAttribute("data-create")) {
-          let ms = (await api("/api/models")).models || [],
-            detectors = ms.filter(
-              (m) =>
-                m.engine === "insightface" &&
-                (!((m.metadata || {}).model_type || m.model_type) ||
-                  ((m.metadata || {}).model_type || m.model_type) ===
-                    "face_detection"),
-            ),
-            recognizers = ms.filter(
-              (m) =>
-                m.engine === "insightface" &&
-                (!((m.metadata || {}).model_type || m.model_type) ||
-                  ((m.metadata || {}).model_type || m.model_type) ===
-                    "face_recognition"),
-            );
+          if (h._creatingGallery || document.querySelector(".dt-dialog"))
+            return;
+          h._creatingGallery = true;
+          b.disabled = true;
+          const ms = (await api("/api/models")).models || [];
+          const role = (m) =>
+            String(m.metadata?.model_type || m.model_type || "")
+              .toLowerCase()
+              .replace(/[^a-z]/g, "");
+          const classifiers = new Set([
+            "faceclassifier",
+            "faceidentityclassifier",
+            "classifier",
+            "classification",
+          ]);
+          const detectors = ms.filter(
+            (m) =>
+              m.engine === "insightface" &&
+              !classifiers.has(role(m)) &&
+              !["facerecognition", "recognition", "arcface"].includes(role(m)),
+          );
+          const recognizers = ms.filter(
+            (m) =>
+              m.engine === "insightface" &&
+              !classifiers.has(role(m)) &&
+              !["facedetection", "detection", "scrfd", "retinaface"].includes(
+                role(m),
+              ),
+          );
+          try {
+            const catalog = await api("/api/vision/detectors");
+            for (const item of catalog.detectors || []) {
+              const id = {
+                "scrfd-500mf": "builtin-scrfd-500mf",
+                "scrfd-2.5gf": "builtin-scrfd-2-5gf",
+                "scrfd-10gf": "builtin-scrfd-10gf",
+              }[item.id];
+              if (id && item.available)
+                detectors.unshift({ id, name: item.name || item.id });
+            }
+          } catch {
+            /* Registered detectors remain available without the built-in catalog. */
+          }
           let d = document.createElement("dialog");
           d.className = "dt-dialog";
           d.innerHTML =
@@ -234,6 +262,8 @@
                 say(h, x.message, true);
               }
               d.remove();
+              h._creatingGallery = false;
+              b.disabled = false;
             },
             { once: true },
           );
@@ -338,6 +368,9 @@
           );
         }
       } catch (x) {
+        h._creatingGallery = false;
+        const create = h.querySelector("[data-create]");
+        if (create) create.disabled = blocked;
         say(h, x.message, true);
       }
     });
@@ -349,6 +382,8 @@
       try {
         let file = f.elements.image.files[0];
         if (file) {
+          if (file.size > 8 * 1024 * 1024)
+            throw Error("Choose an image smaller than 8 MiB.");
           let u = await new Promise((ok, no) => {
             let r = new FileReader();
             r.onload = () => ok(r.result);
@@ -365,6 +400,11 @@
         );
         if (d.requires_selection) {
           f.querySelector("[data-choice]").innerHTML =
+            (d.preview?.startsWith("data:image/jpeg;base64,")
+              ? '<img class="dt-face-selection" alt="Captured faces with numbered selection boxes" src="' +
+                esc(d.preview) +
+                '">'
+              : "") +
             "<label>Select face<select data-face-index>" +
             d.faces
               .map(
@@ -426,7 +466,7 @@
       conn = null;
     h.classList.add("dt-host");
     h.innerHTML =
-      '<section class="dt-card"><header class="dt-head"><div><p class="dt-eyebrow">CAMERA DISCOVERY</p><h2>ONVIF discovery and PTZ</h2><p>Credentials stay in page session. Discovery starts only on click.</p></div></header>' +
+      '<section class="dt-card"><header class="dt-head"><div><p class="dt-eyebrow">CAMERA DISCOVERY</p><h2>ONVIF discovery and PTZ</h2><p>Credentials stay in local server memory. Discovery starts only on click.</p></div></header>' +
       (blocked
         ? '<p class="dt-notice">Installed local app required. Showcase makes no network calls.</p>'
         : "") +
@@ -462,7 +502,7 @@
               "</option>",
           )
           .join("") +
-        '</select></label><label>Camera name<input data-name maxlength="128"></label><button class="dt-button dt-primary" data-add ' +
+        '</select></label><label>Camera name<input data-name maxlength="80"></label><button class="dt-button dt-primary" data-add ' +
         (!profile ? "disabled" : "") +
         ' >Add to Camera Setup</button><div class="dt-ptz"><button data-move="0,1,0" ' +
         (!cap.pan_tilt ? "disabled" : "") +

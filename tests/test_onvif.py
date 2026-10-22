@@ -31,7 +31,7 @@ def test_safe_xml_rejects_dtd_entities_and_large_documents():
     with pytest.raises(onvif.OnvifError, match="Unsafe XML"):
         onvif._safe_xml(b'<!DOCTYPE x [<!ENTITY e "boom">]><x>&e;</x>')
     with pytest.raises(onvif.OnvifError, match="Unsafe XML"):
-        onvif._safe_xml('<!DOCTYPE x><x/>'.encode("utf-16"))
+        onvif._safe_xml("<!DOCTYPE x><x/>".encode("utf-16"))
     with pytest.raises(onvif.OnvifError, match="too large"):
         onvif._safe_xml(b" " * (onvif.MAX_XML_BYTES + 1))
     with pytest.raises(onvif.OnvifError, match="Invalid ONVIF response"):
@@ -78,10 +78,10 @@ def test_discovery_uses_onvif_wsa_namespace_literal_private_xaddr_and_skips_bad_
     monkeypatch,
 ):
     packet = (
-        b'<Envelope><Body><ProbeMatch>'
-        b'<XAddrs>http://8.8.8.8/device http://192.168.1.9/device</XAddrs>'
-        b'<Scopes>onvif://www.onvif.org/name/Front%20Door</Scopes>'
-        b'</ProbeMatch></Body></Envelope>'
+        b"<Envelope><Body><ProbeMatch>"
+        b"<XAddrs>http://8.8.8.8/device http://192.168.1.9/device</XAddrs>"
+        b"<Scopes>onvif://www.onvif.org/name/Front%20Door</Scopes>"
+        b"</ProbeMatch></Body></Envelope>"
     )
 
     class FakeSocket:
@@ -125,8 +125,8 @@ def test_discovery_uses_onvif_wsa_namespace_literal_private_xaddr_and_skips_bad_
 
 def test_space_parses_schema_uri_element_and_rejects_ranges_without_zero():
     space = onvif._safe_xml(
-        b'<Space><URI>space:pan</URI><XRange><Min>-1</Min><Max>1</Max></XRange>'
-        b'<YRange><Min>-2</Min><Max>2</Max></YRange></Space>'
+        b"<Space><URI>space:pan</URI><XRange><Min>-1</Min><Max>1</Max></XRange>"
+        b"<YRange><Min>-2</Min><Max>2</Max></YRange></Space>"
     )
     assert onvif.OnvifBackend._space(space, two_axis=True) == {
         "uri": "space:pan",
@@ -136,8 +136,8 @@ def test_space_parses_schema_uri_element_and_rejects_ranges_without_zero():
         "ymax": 2.0,
     }
     invalid = onvif._safe_xml(
-        b'<Space><URI>space:pan</URI><XRange><Min>0.1</Min><Max>1</Max></XRange>'
-        b'<YRange><Min>-1</Min><Max>1</Max></YRange></Space>'
+        b"<Space><URI>space:pan</URI><XRange><Min>0.1</Min><Max>1</Max></XRange>"
+        b"<YRange><Min>-1</Min><Max>1</Max></YRange></Space>"
     )
     assert onvif.OnvifBackend._space(invalid, two_axis=True) is None
 
@@ -180,16 +180,16 @@ def test_connect_returns_redacted_session_and_stream_helper_is_internal(monkeypa
     backend = onvif.OnvifBackend()
     calls = []
     responses = [
-        b'<Envelope><Body><Capabilities><Media><XAddr>http://192.168.1.8:80/media</XAddr></Media>'
-        b'<PTZ><XAddr>http://192.168.1.8:80/ptz</XAddr></PTZ></Capabilities></Body></Envelope>',
+        b"<Envelope><Body><Capabilities><Media><XAddr>http://192.168.1.8:80/media</XAddr></Media>"
+        b"<PTZ><XAddr>http://192.168.1.8:80/ptz</XAddr></PTZ></Capabilities></Body></Envelope>",
         b'<Envelope><Body><Profiles token="main"><Name>Main</Name>'
         b'<PTZConfiguration NodeToken="node"/></Profiles></Body></Envelope>',
-        b'<Envelope><Body><SupportedPTZSpaces><ContinuousPanTiltVelocitySpace><URI>ptz:pan</URI>'
-        b'<XRange><Min>-1</Min><Max>1</Max></XRange><YRange><Min>-1</Min><Max>1</Max></YRange>'
-        b'</ContinuousPanTiltVelocitySpace><ContinuousZoomVelocitySpace><URI>ptz:zoom</URI>'
-        b'<XRange><Min>-1</Min><Max>1</Max></XRange></ContinuousZoomVelocitySpace>'
-        b'</SupportedPTZSpaces></Body></Envelope>',
-        b'<Envelope><Body><GetPresetsResponse /></Body></Envelope>',
+        b"<Envelope><Body><SupportedPTZSpaces><ContinuousPanTiltVelocitySpace><URI>ptz:pan</URI>"
+        b"<XRange><Min>-1</Min><Max>1</Max></XRange><YRange><Min>-1</Min><Max>1</Max></YRange>"
+        b"</ContinuousPanTiltVelocitySpace><ContinuousZoomVelocitySpace><URI>ptz:zoom</URI>"
+        b"<XRange><Min>-1</Min><Max>1</Max></XRange></ContinuousZoomVelocitySpace>"
+        b"</SupportedPTZSpaces></Body></Envelope>",
+        b"<Envelope><Body><GetPresetsResponse /></Body></Envelope>",
     ]
 
     def request(_session, endpoint, operation, body):
@@ -221,7 +221,9 @@ def test_connect_returns_redacted_session_and_stream_helper_is_internal(monkeypa
     assert backend.status(session_id)["connected"] is True
     assert backend.status(session_id)["profiles"] == connected["profiles"]
 
-    stream_response = b'<Envelope><Body><Uri>rtsp://cam:pw@192.168.1.8/live?channel=1</Uri></Body></Envelope>'
+    stream_response = (
+        b"<Envelope><Body><Uri>rtsp://cam:pw@192.168.1.8/live?channel=1</Uri></Body></Envelope>"
+    )
     monkeypatch.setattr(backend, "_request", lambda *_args: onvif._safe_xml(stream_response))
     uri = backend.get_stream_uri(session_id, "main")
     assert uri == "rtsp://192.168.1.8/live?channel=1"
@@ -244,12 +246,20 @@ def test_service_endpoint_must_resolve_to_approved_device_host(monkeypatch):
 def test_ptz_pulse_uses_supported_spaces_and_deadman_stop(monkeypatch):
     backend = onvif.OnvifBackend()
     session = onvif._Session(
-        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
-        "http://192.168.1.8/media", "http://192.168.1.8/ptz",
+        "http://192.168.1.8/device",
+        "u",
+        "p",
+        frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media",
+        "http://192.168.1.8/ptz",
         [{"token": "main", "name": "Main", "ptz": True}],
-        {"pan_tilt": True, "zoom": True, "presets": True,
-         "pan_tilt_space": {"uri": "space:pt", "xmin": -2, "xmax": 2, "ymin": -1, "ymax": 1},
-         "zoom_space": {"uri": "space:z", "xmin": -1, "xmax": 1}},
+        {
+            "pan_tilt": True,
+            "zoom": True,
+            "presets": True,
+            "pan_tilt_space": {"uri": "space:pt", "xmin": -2, "xmax": 2, "ymin": -1, "ymax": 1},
+            "zoom_space": {"uri": "space:z", "xmin": -1, "xmax": 1},
+        },
     )
     session.profile_ptz_caps["main"] = dict(session.ptz_caps)
     backend._sessions["sid"] = session
@@ -285,9 +295,9 @@ def test_ptz_pulse_uses_supported_spaces_and_deadman_stop(monkeypatch):
     monkeypatch.setattr(onvif.threading, "Timer", timer_factory)
     result = backend.move("sid", "main", 0.5, -1, 1, duration_ms=300)
     assert result == {"moving": True, "duration_ms": 300}
-    assert "x=\"1.000000\"" in sent[0][1]
-    assert "y=\"-1.000000\"" in sent[0][1]
-    assert "x=\"1.000000\"" in sent[0][1]
+    assert 'x="1.000000"' in sent[0][1]
+    assert 'y="-1.000000"' in sent[0][1]
+    assert 'x="1.000000"' in sent[0][1]
     assert "PT0.300S" in sent[0][1]
     timers[0].fire()
     assert [operation for operation, _body in sent] == ["ContinuousMove", "Stop"]
@@ -303,8 +313,12 @@ def test_ptz_pulse_uses_supported_spaces_and_deadman_stop(monkeypatch):
 def test_move_uses_selected_profile_capabilities():
     backend = onvif.OnvifBackend()
     session = onvif._Session(
-        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
-        "http://192.168.1.8/media", "http://192.168.1.8/ptz",
+        "http://192.168.1.8/device",
+        "u",
+        "p",
+        frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media",
+        "http://192.168.1.8/ptz",
         [
             {"token": "pan-profile", "name": "Pan", "ptz": True},
             {"token": "zoom-profile", "name": "Zoom", "ptz": True},
@@ -335,8 +349,12 @@ def test_move_uses_selected_profile_capabilities():
 def test_lost_continuous_move_response_keeps_deadman_stop_armed(monkeypatch):
     backend = onvif.OnvifBackend()
     session = onvif._Session(
-        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
-        "http://192.168.1.8/media", "http://192.168.1.8/ptz",
+        "http://192.168.1.8/device",
+        "u",
+        "p",
+        frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media",
+        "http://192.168.1.8/ptz",
         [{"token": "main", "name": "Main", "ptz": True}],
         {"pan_tilt": True, "zoom": False, "presets": False},
     )
@@ -396,8 +414,12 @@ def test_lost_continuous_move_response_keeps_deadman_stop_armed(monkeypatch):
 def test_close_all_stops_profile_that_is_actively_moving(monkeypatch):
     backend = onvif.OnvifBackend()
     session = onvif._Session(
-        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
-        "http://192.168.1.8/media", "http://192.168.1.8/ptz",
+        "http://192.168.1.8/device",
+        "u",
+        "p",
+        frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media",
+        "http://192.168.1.8/ptz",
         [
             {"token": "pan-profile", "name": "Pan", "ptz": True},
             {"token": "zoom-profile", "name": "Zoom", "ptz": True},
@@ -421,10 +443,15 @@ def test_close_all_stops_profile_that_is_actively_moving(monkeypatch):
 def test_close_all_stops_active_pulse_and_rejects_new_connections(monkeypatch):
     backend = onvif.OnvifBackend()
     session = onvif._Session(
-        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
-        "http://192.168.1.8/media", "http://192.168.1.8/ptz",
+        "http://192.168.1.8/device",
+        "u",
+        "p",
+        frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media",
+        "http://192.168.1.8/ptz",
         [{"token": "main", "name": "Main", "ptz": True}],
-        {"pan_tilt": True, "zoom": False, "presets": True}, moving=True,
+        {"pan_tilt": True, "zoom": False, "presets": True},
+        moving=True,
     )
     backend._sessions["sid"] = session
     sent = []
@@ -440,8 +467,14 @@ def test_close_all_stops_active_pulse_and_rejects_new_connections(monkeypatch):
 def test_pinned_session_survives_idle_expiry_until_explicit_close():
     backend = onvif.OnvifBackend()
     session = onvif._Session(
-        "http://192.168.1.8/device", "u", "p", frozenset({"192.168.1.8"}),
-        "http://192.168.1.8/media", None, [{"token": "main", "name": "Main", "ptz": False}], {},
+        "http://192.168.1.8/device",
+        "u",
+        "p",
+        frozenset({"192.168.1.8"}),
+        "http://192.168.1.8/media",
+        None,
+        [{"token": "main", "name": "Main", "ptz": False}],
+        {},
     )
     backend._sessions["sid"] = session
     backend.pin_session("sid")

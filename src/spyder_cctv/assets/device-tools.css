@@ -320,3 +320,11 @@
   height: 22px;
   fill: var(--danger, #bc0202);
 }
+
+.dt-face-selection {
+  display: block;
+  width: min(100%, 640px);
+  height: auto;
+  border-radius: 10px;
+  margin: 12px 0;
+}

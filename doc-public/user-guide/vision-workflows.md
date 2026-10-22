@@ -250,3 +250,9 @@ comparison](../deployment/cloudflare.md#capabilities).
 
 See [subflows and execution history](subflows-and-history.md) for versioned reusable
 workflow definitions, run inspection, diagnostic dry runs, and retention settings.
+
+## Enrolled face identities
+
+Use Vision Lab’s Face galleries tab to enroll local identities and manage samples.
+Select a gallery in a Classifier node connected to InsightFace Detections. See
+[Face galleries and ONVIF cameras](face-galleries-and-onvif.md) for setup and storage details.
