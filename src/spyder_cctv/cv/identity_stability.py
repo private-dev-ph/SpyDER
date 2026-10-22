@@ -86,7 +86,7 @@ class IdentityStabilizer:
             if track_id is None:
                 track_id = self._new_track(detection.bbox, timestamp, reserved_tracks)
                 if track_id is None:
-                    output.append(replace(detection, identity=None))
+                    output.append(replace(detection, identity=None, identity_status="pending"))
                     continue
                 reserved_tracks.add(track_id)
             track = self._tracks[track_id]
@@ -98,7 +98,13 @@ class IdentityStabilizer:
             track.present = True
             track.bbox = detection.bbox
             track.last_seen = timestamp
-            output.append(replace(detection, identity=self._confirm(track, detection.identity)))
+            confirmed = self._confirm(track, detection.identity)
+            status = detection.identity_status
+            if status == "known" and confirmed is None:
+                status = "pending"
+            elif confirmed is not None:
+                status = "known"
+            output.append(replace(detection, identity=confirmed, identity_status=status))
 
         return output
 

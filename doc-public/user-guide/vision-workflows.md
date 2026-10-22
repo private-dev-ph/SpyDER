@@ -151,15 +151,28 @@ current editor session. Cancel or Escape closes the picker without changing it.
 
 | Template | Purpose | Setup |
 | --- | --- | --- |
-| Pre-event person recording | Save 10 seconds before and 20 seconds after person detection, with a 45-second cooldown. | Built-in OpenCV HOG detector; running camera and idle local recorder. |
+| Pre-event unknown face recording | Save 10 seconds before and 20 seconds after an unknown face, with a 45-second cooldown. | Local InsightFace runtime, SCRFD 500MF detector, compatible face classifier, running camera, and idle local recorder. |
 | InsightFace detection alert | Notify when a face or selected identity matches. | Local SCRFD 500MF detector and InsightFace runtime; optional compatible classifier; browser notification permission. |
 | Face event log | Create named events without video attachments. | Select cameras with an existing InsightFace pipeline. |
 
-For pre-event recording, review the Camera node and Event node, save the draft, then
-enable it. Allow the running camera's RAM buffer to warm up. The 10-second history
-is best effort within memory limits; this template does not identify particular
-people. HOG is a baseline detector, so test its results in your scene. Change the
-filter, clip timing, and cooldown for your use case. See [Events and notifications](events.md#include-footage-before-a-trigger)
+The pre-event template connects Camera, the lightweight SCRFD 500MF Model, and a
+Classifier to InsightFace Detections, followed by Filter, Cooldown, and Event.
+A compatible registered classifier is selected when available; otherwise choose one
+in the Classifier node before enabling. Review its labels, preprocessing, threshold,
+and stability settings. Missing detector weights require explicit installation.
+
+The Filter uses **Recognized identity → Is unknown**. It requires an explicit
+rejection from the classifier or recognizer; detector-only faces and identities
+still awaiting stability confirmation do not match. **Is known** matches accepted
+identities. These conditions do not take a value or a live value link and cannot
+use Model class as their identity source. A closed-set classifier can still assign
+an unfamiliar face to a known class; this workflow cannot guarantee stranger detection.
+
+The Event node has **Attachment → Recording** and starts/stops its own bounded clip;
+no separate Record node is needed. Save and enable the draft, keep the camera
+running, and allow its RAM buffer to warm up. History is best effort within memory
+limits. Change clip timing and cooldown for your scene. Existing saved workflows
+are unchanged; load the updated template to create a new disabled draft. See [Events and notifications](events.md#include-footage-before-a-trigger)
 for buffer limits and recording behavior.
 
 For InsightFace alerts, review the camera/model and intended class or identity

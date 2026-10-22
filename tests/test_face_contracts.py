@@ -10,6 +10,13 @@ def test_detection_identity_and_cosine_are_optional_and_serializable():
     assert Detection("face", (0, 0, 1, 1)).identity is None
 
 
+def test_identity_status_serializes_and_rejects_unknown_values():
+    detection = Detection("face", (0, 0, 1, 1), identity_status="unknown")
+    assert detection.to_dict()["identity_status"] == "unknown"
+    with pytest.raises(ValueError, match="identity status"):
+        Detection("face", (0, 0, 1, 1), identity_status="maybe")
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

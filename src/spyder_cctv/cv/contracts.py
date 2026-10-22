@@ -177,6 +177,7 @@ class Detection:
     identity: str | None = None
     similarity: float | None = None
     identity_confidence: float | None = None
+    identity_status: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.label, str) or not self.label or len(self.label) > 128:
@@ -206,6 +207,8 @@ class Detection:
             not isinstance(self.identity, str) or not self.identity or len(self.identity) > 128
         ):
             raise ValueError("Invalid detection identity")
+        if self.identity_status not in (None, "known", "unknown", "pending"):
+            raise ValueError("Invalid identity status")
         if self.similarity is not None and (
             isinstance(self.similarity, bool)
             or not isinstance(self.similarity, Real)

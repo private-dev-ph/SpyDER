@@ -122,6 +122,12 @@ def test_code_round_trip_preserves_classifier_probability():
         }
     ]
     assert run_code("output = detections", detections, {}) == detections
+    detections[0]["identity_status"] = "unknown"
+    assert run_code("output = detections", detections, {}) == detections
+    detections[0]["identity_status"] = "pending-ish"
+    with pytest.raises(ValueError, match="identity_status"):
+        run_code("output = detections", detections, {})
+    detections[0].pop("identity_status")
     detections[0]["identity_confidence"] = 1.1
     with pytest.raises(ValueError, match="identity_confidence"):
         run_code("output = detections", detections, {})

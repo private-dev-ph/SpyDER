@@ -31,6 +31,25 @@ def test_first_identity_requires_three_consecutive_predictions():
     result = stabilizer.update([face(0, "a")], 2)[0]
     assert result.identity == "a"
     assert result.identity_confidence == 0.91
+    assert result.identity_status == "known"
+
+
+def test_stabilizer_marks_classifier_rejection_and_unconfirmed_candidate_pending():
+    stabilizer = IdentityStabilizer()
+    rejected = face(0, None)
+    rejected = Detection("face", rejected.bbox, identity_status="unknown")
+    assert stabilizer.update([rejected], 0)[0].identity_status == "unknown"
+    candidate = Detection("face", (0, 0, 10, 10), identity="Ada", identity_status="known")
+    pending = stabilizer.update([candidate], 1)[0]
+    assert pending.identity is None and pending.identity_status == "pending"
+
+
+def test_stabilizer_capacity_overflow_is_pending_not_unknown():
+    stabilizer = IdentityStabilizer(max_tracks=1)
+    first = Detection("face", (0, 0, 10, 10), identity="Ada", identity_status="known")
+    second = Detection("face", (40, 0, 50, 10), identity_status="unknown")
+    result = stabilizer.update([first, second], 0)
+    assert result[1].identity_status == "pending"
 
 
 def test_rejection_and_label_mismatch_suppress_confirmed_identity_immediately():

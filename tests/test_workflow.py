@@ -2378,6 +2378,54 @@ def test_unconfirmed_classifier_identity_never_matches_negative_identity_rule():
     assert not WorkflowService._matches_rules(detection, rule, "all", identity_source="identity")
 
 
+@pytest.mark.parametrize(
+    "detection,expected",
+    [
+        ({"identity": None, "identity_status": "unknown"}, True),
+        ({"identity": None, "identity_status": "pending"}, False),
+        ({"identity": None}, False),
+        ({"identity": "Ada", "identity_status": "known"}, False),
+    ],
+)
+def test_is_unknown_requires_explicit_rejected_identity(detection, expected):
+    rule = [{"field": "identity", "operator": "is_unknown", "value": ""}]
+    assert WorkflowService._matches_rules(detection, rule, "all") is expected
+
+
+def test_confirmed_classifier_rejection_remains_unknown_after_stabilization():
+    from spyder_cctv.cv.contracts import Detection
+    from spyder_cctv.cv.identity_stability import IdentityStabilizer
+
+    rejected = Detection("face", (0, 0, 10, 10), identity_status="unknown")
+    output = IdentityStabilizer().update([rejected], 0)[0].to_dict()
+    rule = [{"field": "identity", "operator": "is_unknown", "value": ""}]
+    assert WorkflowService._matches_rules(output, rule, "all")
+
+
+def test_is_known_requires_confirmed_identity_and_status():
+    rule = [{"field": "identity", "operator": "is_known", "value": ""}]
+    assert WorkflowService._matches_rules(
+        {"identity": "Ada", "identity_status": "known"}, rule, "all"
+    )
+    assert not WorkflowService._matches_rules(
+        {"identity": None, "identity_status": "pending"}, rule, "all"
+    )
+    assert not WorkflowService._matches_rules({"identity": "Ada"}, rule, "all")
+
+
+def test_identity_status_rule_rejects_class_source(service):
+    graph = face_classifier_graph()
+    graph["enabled"] = False
+    for node in graph["nodes"]:
+        if node["type"] == "filter":
+            node["params"].update(
+                identity_source="class",
+                rules=[{"field": "identity", "operator": "is_unknown", "value": ""}],
+            )
+    with pytest.raises(ValueError, match="Identity status operators"):
+        service.save(graph)
+
+
 def test_preview_catalog_matches_terminal_camera_and_data_ports(service):
     descriptor = next(node for node in service.catalog() if node["type"] == "preview")
     assert descriptor["inputs"] == ["camera", "detections"]
@@ -2649,3 +2697,86 @@ def test_failed_manual_takeover_preserves_event_clip_endpoint(service):
         service._record("start", "other", "missing")
     assert not recorder.cancelled
     assert "clip" not in service._event_clip_transferred
+
+
+def test_unknown_face_filter_dispatches_bounded_event_recording_only_for_rejection(
+    service, monkeypatch
+):
+    calls = []
+    started = threading.Event()
+
+    def clip(event_id, camera_id, duration, pre_event_seconds, trigger_time):
+        calls.append((event_id, camera_id, duration, pre_event_seconds, trigger_time))
+        started.set()
+
+    monkeypatch.setattr(service, "_record_event_clip", clip)
+    service.save(
+        graph(
+            nodes=[
+                {"id": "detect", "type": "detections", "x": 0, "y": 0, "params": {}},
+                {
+                    "id": "filter",
+                    "type": "filter",
+                    "x": 1,
+                    "y": 0,
+                    "params": {
+                        "label": "face",
+                        "identity_source": "identity",
+                        "rules": [{"field": "identity", "operator": "is_unknown", "value": ""}],
+                    },
+                },
+                {
+                    "id": "event",
+                    "type": "event",
+                    "x": 2,
+                    "y": 0,
+                    "params": {
+                        "message": "Unknown face",
+                        "attachment": "recording",
+                        "pre_event_seconds": 10,
+                        "duration_seconds": 20,
+                    },
+                },
+            ],
+            edges=[{"from": "detect", "to": "filter"}, {"from": "filter", "to": "event"}],
+        )
+    )
+    for sequence, identity in enumerate(
+        [
+            {"identity": None, "identity_status": "pending"},
+            {"identity": "Ada", "identity_status": "known"},
+            {"identity": None},
+        ],
+        1,
+    ):
+        service.manager.cv.update(
+            sequence=sequence,
+            detections=[
+                {
+                    "label": "face",
+                    "confidence": 0.9,
+                    "bbox": [10, 10, 30, 30],
+                    **identity,
+                }
+            ],
+        )
+        service._tick()
+    assert not calls
+    assert not service.event_store.list()["events"]
+    service.manager.cv.update(
+        sequence=4,
+        detections=[
+            {
+                "label": "face",
+                "confidence": 0.9,
+                "bbox": [10, 10, 30, 30],
+                "identity": None,
+                "identity_status": "unknown",
+            }
+        ],
+    )
+    service._tick()
+    assert started.wait(1)
+    event = service.event_store.list()["events"][0]
+    assert calls[0][:4] == (event["id"], "cam1", 20, 10)
+    assert isinstance(calls[0][4], float)

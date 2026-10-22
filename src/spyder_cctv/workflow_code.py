@@ -23,6 +23,7 @@ _FIELDS = {
     "identity",
     "similarity",
     "identity_confidence",
+    "identity_status",
 }
 
 
@@ -232,6 +233,8 @@ def _validate_detection(item: Any) -> None:
         raise CodeError("confidence must be between 0 and 1")
     if item.get("identity_confidence") is not None and not 0 <= item["identity_confidence"] <= 1:
         raise CodeError("identity_confidence must be between 0 and 1")
+    if item.get("identity_status") not in (None, "known", "unknown", "pending"):
+        raise CodeError("identity_status must be known, unknown, pending, or null")
     if item.get("similarity") is not None and not -1 <= item["similarity"] <= 1:
         raise CodeError("similarity must be between -1 and 1")
     if "class_id" in item and item["class_id"] is not None and type(item["class_id"]) is not int:

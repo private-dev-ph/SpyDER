@@ -249,6 +249,13 @@
       if (["label", "identity"].includes(field)) return "strings";
       if (field === "confidence") return "number";
       const rule = /^rules\.(\d+)\.value$/.exec(field);
+      if (
+        rule &&
+        ["is_unknown", "is_known"].includes(
+          n.params.rules?.[+rule[1]]?.operator,
+        )
+      )
+        return null;
       if (rule && n.params.rules?.[+rule[1]])
         return n.params.rules[+rule[1]].field === "confidence"
           ? "number"
@@ -562,6 +569,16 @@
     }
     if ([...ids.keys()].some(visit)) errors.push("Workflow contains a cycle.");
     for (const n of nodes) {
+      if (
+        n.type === "filter" &&
+        n.params?.identity_source === "class" &&
+        n.params?.rules?.some((r) =>
+          ["is_unknown", "is_known"].includes(r.operator),
+        )
+      )
+        errors.push(
+          "Is unknown / Is known requires Recognized identity as the source.",
+        );
       if (n.type === "detections") {
         const modelInputs = (graph.edges || []).filter(
             (e) => e.to === n.id && inputType(e, nodes) === "model",
@@ -737,51 +754,72 @@
       ],
     };
   }
-  function preEventTemplate({ cameraId = "" } = {}) {
+  function preEventTemplate({ cameraId = "", classifierId = "" } = {}) {
     const nodes = [
       node("camera", 40, 90),
+      node("model", 40, 240),
+      node("classifier", 40, 410),
       node("detections", 280, 90),
       node("filter", 520, 90),
       node("cooldown", 760, 90),
       node("event", 1000, 90),
     ];
-    nodes[0].params.camera_id = cameraId;
-    nodes[1].params.engine = "opencv";
-    Object.assign(nodes[2].params, { label: "person", confidence: 0 });
-    nodes[3].params.seconds = 45;
-    Object.assign(nodes[4].params, {
-      message: "Person detected",
+    const [camera, model, classifier, detection, filter, cooldown, event] =
+      nodes;
+    camera.params.camera_id = cameraId;
+    model.params.model_id = "builtin-scrfd-500mf";
+    classifier.params.model_id = classifierId;
+    detection.params.engine = "insightface";
+    Object.assign(filter.params, {
+      label: "face",
+      confidence: 0.5,
+      identity_source: "identity",
+      rules: [{ field: "identity", operator: "is_unknown", value: "" }],
+      match: "all",
+    });
+    cooldown.params.seconds = 45;
+    Object.assign(event.params, {
+      message: "Unknown face detected",
       attachment: "recording",
       pre_event_seconds: 10,
       duration_seconds: 20,
-      name_pattern: "{camera} · Person detected · {date} {time}",
+      name_pattern: "{camera} · Unknown face · {date} {time}",
     });
     return {
       id: `workflow-${Math.random().toString(36).slice(2, 10)}`,
-      name: "Pre-event person recording",
+      name: "Pre-event unknown face recording",
       enabled: false,
       camera_ids: [],
       nodes,
-      edges: nodes.slice(1).map((item, index) => ({
-        from: nodes[index].id,
-        to: item.id,
-        ...(index === 0 ? { input: "camera" } : {}),
-      })),
+      edges: [
+        { from: camera.id, to: detection.id, input: "camera" },
+        { from: model.id, to: detection.id, input: "model" },
+        { from: classifier.id, to: detection.id, input: "classifier" },
+        { from: detection.id, to: filter.id },
+        { from: filter.id, to: cooldown.id },
+        { from: cooldown.id, to: event.id },
+      ],
     };
   }
   const TEMPLATE_CATALOG = [
     {
       id: "pre-event-person",
-      name: "Pre-event person recording",
+      name: "Pre-event unknown face recording",
       category: "Recording",
-      engine: "OpenCV",
+      engine: "InsightFace",
       description:
-        "See the approach, detection, and what happens next in one event clip.",
+        "Record the approach and aftermath when a face is rejected as unknown.",
       purpose: "Entrances, corridors, and activity evidence",
       details: "10s before · 20s after · 45s cooldown",
-      requirements: ["Installed local app", "Running camera", "Idle recorder"],
+      requirements: [
+        "Local InsightFace runtime",
+        "SCRFD 500MF detector",
+        "Compatible face classifier",
+        "Running camera",
+        "Idle recorder",
+      ],
       setup:
-        "Built-in OpenCV person detector; no model download. Keep the camera running and allow history to warm up. HOG is a baseline detector, not identity recognition.",
+        "Choose a compatible classifier and review its threshold/preprocessing. The filter uses Recognized identity / Is unknown. Unknown means the classifier rejected the face; pending identities do not trigger. Closed-set models cannot guarantee unknown-person rejection. The Event node records automatically; allow 10s for camera history to warm up.",
     },
     {
       id: "insightface-alert",
@@ -899,9 +937,9 @@
     rule_field:
       "Choose the detection property for this rule: Class compares label, Identity compares identity, and Confidence compares a numeric score.",
     rule_operator:
-      "Choose the comparison. Is / If identity includes matches; Is not / If not identity excludes them. At least / At most compares confidence numerically.",
+      "Choose the comparison. Is unknown requires an explicit rejected identity from recognition/classification; pending identities and detector-only faces do not match. Is known requires an accepted identity. Both require Recognized identity as the source and need no value. Other comparisons match class, identity, or confidence values.",
     rule_value:
-      "Enter or select the class or identity to compare. Confidence comparisons accept a number from 0 to 1. Available model labels appear as choices.",
+      "Enter or select the class or identity to compare. Confidence comparisons accept a number from 0 to 1. Available model labels appear as choices. Is unknown and Is known have no value; this field stays disabled.",
     edge_label:
       "Optional connection label, up to 80 characters. This only describes the wire; it does not change the data or workflow behavior.",
     node_input:
@@ -1183,7 +1221,7 @@
                   : classes,
               useClasses =
                 choices.length && ["label", "identity"].includes(r.field);
-            return `<div class="we-rule"><label>Field<select data-rule="${i}" data-rule-key="field">${["label", "identity", "confidence"].map((f) => `<option value="${f}" ${r.field === f ? "selected" : ""}>${{ label: "Class", identity: "Identity", confidence: "Confidence" }[f]}</option>`).join("")}</select></label><label>Condition<select data-rule="${i}" data-rule-key="operator">${(r.field === "confidence" ? ["gte", "lte"] : ["eq", "neq"]).map((op) => `<option value="${op}" ${r.operator === op ? "selected" : ""}>${r.field === "identity" ? (op === "eq" ? "If identity" : "If not identity") : { eq: "Is", neq: "Is not", gte: "At least", lte: "At most" }[op]}</option>`).join("")}</select></label><label>Value${useClasses ? `<select data-rule="${i}" data-rule-key="value"><option value="">Choose ${r.field === "identity" ? "an identity" : "a class"}</option>${[...new Set([...choices, ...(r.value ? [r.value] : [])])].map((c) => `<option value="${esc(c)}" ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>` : `<input data-rule="${i}" data-rule-key="value" value="${esc(r.value)}" ${r.field === "confidence" ? 'type="number" min="0" max="1" step="0.01"' : 'maxlength="128"'}>`}</label><button class="button secondary" data-remove-rule="${i}" aria-label="Remove filter rule ${i + 1}">Remove rule</button></div>`;
+            return `<div class="we-rule"><label>Field<select data-rule="${i}" data-rule-key="field">${["label", "identity", "confidence"].map((f) => `<option value="${f}" ${r.field === f ? "selected" : ""}>${{ label: "Class", identity: "Identity", confidence: "Confidence" }[f]}</option>`).join("")}</select></label><label>Condition<select data-rule="${i}" data-rule-key="operator">${(r.field === "confidence" ? ["gte", "lte"] : r.field === "identity" ? ["eq", "neq", "is_unknown", "is_known"] : ["eq", "neq"]).map((op) => `<option value="${op}" ${r.operator === op ? "selected" : ""} ${["is_unknown", "is_known"].includes(op) && n.params.identity_source === "class" ? "disabled" : ""}>${r.field === "identity" ? { eq: "If identity", neq: "If not identity", is_unknown: "Is unknown", is_known: "Is known" }[op] : { eq: "Is", neq: "Is not", gte: "At least", lte: "At most" }[op]}</option>`).join("")}</select></label><label>Value${["is_unknown", "is_known"].includes(r.operator) ? '<input data-rule="' + i + '" data-rule-key="value" value="" placeholder="No value needed" disabled>' : useClasses ? `<select data-rule="${i}" data-rule-key="value"><option value="">Choose ${r.field === "identity" ? "an identity" : "a class"}</option>${[...new Set([...choices, ...(r.value ? [r.value] : [])])].map((c) => `<option value="${esc(c)}" ${c === r.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>` : `<input data-rule="${i}" data-rule-key="value" value="${esc(r.value)}" ${r.field === "confidence" ? 'type="number" min="0" max="1" step="0.01"' : 'maxlength="128"'}>`}</label><button class="button secondary" data-remove-rule="${i}" aria-label="Remove filter rule ${i + 1}">Remove rule</button></div>`;
           })
           .join(
             "",
@@ -1852,6 +1890,13 @@
         changed();
       }
       function nodeSummary(n) {
+        if (
+          n.type === "filter" &&
+          n.params.rules?.some((r) => r.operator === "is_unknown")
+        )
+          return "Face · Is unknown";
+        if (n.type === "event" && n.params.attachment === "recording")
+          return `Record · ${n.params.pre_event_seconds || 0}s before · ${n.params.duration_seconds}s after`;
         if (n.type === "preview")
           return "Live branch monitor · CAM / DATA input";
         if (n.type === "camera")
@@ -1896,7 +1941,7 @@
       }
       function templateRows() {
         const entries = templateEntries(templateQuery);
-        return `<p class="we-template-count" role="status">${entries.length} ${entries.length === 1 ? "template" : "templates"}</p>${entries.map((entry) => `<article class="we-template-row" aria-labelledby="we-template-${entry.id}"><div class="we-template-preview">${templateThumbnail(entry)}<span>${esc(entry.category)}</span></div><div class="we-template-copy"><h4 id="we-template-${entry.id}">${esc(entry.name)}</h4><p>${esc(entry.description)}</p><p class="we-template-purpose"><strong>Best for:</strong> ${esc(entry.purpose)}</p><p class="we-template-timing">${esc(entry.details)} · ${createWorkflowTemplate(entry.id, templateContext()).nodes.length} nodes</p><ul class="we-template-requirements" aria-label="Requirements">${entry.requirements.map((value) => `<li>${esc(value)}</li>`).join("")}</ul><p class="we-template-setup">${esc(entry.setup)}</p></div><button type="button" class="button primary" data-load-template="${entry.id}" aria-label="Load ${esc(entry.name)}">Load template</button></article>`).join("") || '<p class="we-template-empty">No templates match. Try “recording”, “face”, or “OpenCV”.</p>'}`;
+        return `<p class="we-template-count" role="status">${entries.length} ${entries.length === 1 ? "template" : "templates"}</p>${entries.map((entry) => `<article class="we-template-row" aria-labelledby="we-template-${entry.id}"><div class="we-template-preview">${templateThumbnail(entry)}<span>${esc(entry.category)}</span></div><div class="we-template-copy"><h4 id="we-template-${entry.id}">${esc(entry.name)}</h4><p>${esc(entry.description)}</p><p class="we-template-purpose"><strong>Best for:</strong> ${esc(entry.purpose)}</p><p class="we-template-timing">${esc(entry.details)} · ${createWorkflowTemplate(entry.id, templateContext()).nodes.length} nodes</p><ul class="we-template-requirements" aria-label="Requirements">${entry.requirements.map((value) => `<li>${esc(value)}</li>`).join("")}</ul><p class="we-template-setup">${esc(entry.setup)}</p></div><button type="button" class="button primary" data-load-template="${entry.id}" aria-label="Load ${esc(entry.name)}">Load template</button></article>`).join("") || '<p class="we-template-empty">No templates match. Try “recording”, “face”, or “InsightFace”.</p>'}`;
       }
       function templatePanel() {
         if (!templatePickerOpen) return "";
@@ -2878,8 +2923,15 @@
             rule.value = rule.field === "confidence" ? 0.5 : "";
             if (n.bindings) delete n.bindings[`rules.${t.dataset.rule}.value`];
           }
+          if (
+            key === "operator" &&
+            ["is_unknown", "is_known"].includes(rule.operator)
+          ) {
+            rule.value = "";
+            if (n.bindings) delete n.bindings[`rules.${t.dataset.rule}.value`];
+          }
           mark();
-          if (key === "field") render(true);
+          if (["field", "operator"].includes(key)) render(true);
           return;
         }
         if (!t.matches("[data-param]")) return;
