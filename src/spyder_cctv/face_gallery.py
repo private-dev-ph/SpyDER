@@ -529,14 +529,17 @@ class FaceEnrollmentService:
         gallery_id: str,
         identity_name: str,
         image_bytes: bytes,
-        detector_path: str | Path,
-        recognition_path: str | Path,
+        detector_path: str | Path | None = None,
+        recognition_path: str | Path | None = None,
         *,
         face_index: int | None = None,
     ) -> dict[str, Any]:
         catalog = self._load(gallery_id, copy_data=True)
         name = _clean_name(identity_name)
-        detector, recognition = Path(detector_path), Path(recognition_path)
+        if (detector_path is None) != (recognition_path is None):
+            raise ValueError("Provide both model paths or use the gallery's stored models")
+        detector = Path(detector_path or catalog["detector"]["path"])
+        recognition = Path(recognition_path or catalog["recognition"]["path"])
         if not detector.is_file() or not recognition.is_file():
             raise VisionUnavailable(
                 "model_missing", "Select local detector and recognition models."

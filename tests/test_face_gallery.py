@@ -43,9 +43,12 @@ class _ModelZoo:
 
 
 class _Align:
-    @staticmethod
-    def norm_crop(image, landmarks, image_size):
+    last_landmarks = None
+
+    @classmethod
+    def norm_crop(cls, image, landmarks, image_size):
         assert image_size == 112
+        cls.last_landmarks = np.asarray(landmarks).copy()
         return np.zeros((112, 112, 3), dtype=np.uint8)
 
 
@@ -73,8 +76,13 @@ def test_gallery_crud_exports_centroid_and_metadata_hides_vectors(tmp_path, monk
     assert [candidate["index"] for candidate in ambiguous["candidates"]] == [0, 1]
     assert service.list_identities(gallery["id"])["identities"] == []
 
-    enrolled = service.enroll(gallery["id"], "Ada", image, detector, recognition, face_index=1)
+    enrolled = service.enroll(gallery["id"], "Ada", image, face_index=1)
     assert enrolled["needs_face_selection"] is False
+    assert enrolled["face"]["index"] == 1
+    assert np.array_equal(
+        _Align.last_landmarks,
+        np.asarray([[55, 12], [80, 12], [68, 24], [58, 37], [78, 37]], dtype=np.float32),
+    )
     assert enrolled["identity"]["sample_count"] == 1
     assert "embedding" not in json.dumps(service.list_galleries())
     assert "embedding" not in json.dumps(service.list_identities(gallery["id"]))
@@ -114,26 +122,52 @@ def test_gallery_reload_uses_changed_atomic_export(tmp_path, monkeypatch):
     assert json.loads(after)["identities"][0]["name"] == "Grace"
 
 
-def test_engine_reloads_changed_gallery_and_accepts_empty_gallery(tmp_path):
+def test_engine_hot_reloads_empty_gallery_as_unknown(tmp_path):
     import os
+    from types import SimpleNamespace
 
     from spyder_cctv.cv.engines import InsightFaceEngine
+    from spyder_cctv.cv.identity_stability import IdentityStabilizer
 
     path = tmp_path / "gallery.json"
     path.write_text(
         json.dumps({"version": 1, "identities": [{"name": "Ada", "embedding": [1.0, 0.0]}]}),
         encoding="utf-8",
     )
+
+    class Detector:
+        def detect(self, frame, max_num):
+            return (
+                np.asarray([[1, 2, 20, 24, 0.98]], dtype=np.float32),
+                np.asarray([[[3, 5], [15, 5], [9, 12], [5, 19], [14, 19]]], dtype=np.float32),
+            )
+
+    class Recognizer:
+        def get_feat(self, aligned_faces):
+            return np.asarray([[1.0, 0.0]], dtype=np.float32)
+
     engine = InsightFaceEngine.__new__(InsightFaceEngine)
-    engine.recognizer = object()
+    engine.config = SimpleNamespace(max_detections=100, recognition_threshold=0.5)
+    engine.model = Detector()
+    engine.recognizer = Recognizer()
+    engine.classifier = None
+    engine.align = SimpleNamespace(
+        norm_crop=lambda *args, **kwargs: np.zeros((112, 112, 3), np.uint8)
+    )
     engine.gallery_path = path
     engine._gallery_mtime_ns = path.stat().st_mtime_ns
     engine.gallery = _load_identity_gallery(path)
+    engine.identity_stabilizer = IdentityStabilizer(confirmations=1, switch_confirmations=1)
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+
+    known = engine.infer(frame)[0]
+    assert known.identity == "Ada" and known.identity_status == "known"
+
     path.write_text(json.dumps({"version": 1, "identities": []}), encoding="utf-8")
     os.utime(path, ns=(path.stat().st_atime_ns, engine._gallery_mtime_ns + 2_000_000_000))
-
-    engine._reload_gallery_if_changed()
+    unknown = engine.infer(frame)[0]
     assert engine.gallery == []
+    assert unknown.identity is None and unknown.identity_status == "unknown"
 
 
 def test_oversized_png_is_rejected_from_header_before_decode(tmp_path, monkeypatch):
