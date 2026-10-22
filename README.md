@@ -33,7 +33,7 @@ not surveillance footage or evidence of model accuracy.*
 | Visual workflows | Camera/model inputs, detection/classification, multi-connection branches, filters, zones, counts, cooldowns, restricted Python/JavaScript transformations and action nodes. |
 | Model library | Local upload/registration, class metadata inspection, search/filtering, reusable model nodes and reference checks before removal. |
 | Events | Persistent motion/workflow records, naming patterns, image/clip attachments, inline viewing, search, grouping, pagination, rename and bulk ZIP export/deletion. |
-| Recordings | One tiled video that adapts as camera membership changes, frame captures and a persistent media catalog. |
+| Recordings | One tiled video that adapts as camera membership changes, frame captures, a persistent media catalog and clock-based timeline playback. |
 | Layouts | Saved walls, fixed camera pins, activity priority, drag/keyboard ordering, visibility, featured/rotating views, import/export and browser-only dummy cameras for simulation. |
 | Setup and System | Supported device controls, reusable tuning profiles, focus policy, dependency diagnostics and configurable media output. |
 
