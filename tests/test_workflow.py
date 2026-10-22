@@ -2827,3 +2827,89 @@ def test_rename_rolls_back_when_persistence_fails(service, monkeypatch):
         service.rename("people", "Changed")
     assert service.get("people")["name"] == "People"
     assert service.library()["items"][0]["name"] == "People"
+
+
+def test_scoped_list_and_debug_do_not_copy_unselected_workflows(service):
+    class PoisonDict(dict):
+        def __deepcopy__(self, memo):
+            raise AssertionError("unselected workflow was copied")
+
+    selected = graph(enabled=False)
+    selected["id"] = "selected"
+    selected["name"] = "Selected"
+    other = graph(enabled=False)
+    other["id"] = "other"
+    other["name"] = "Other"
+    service._graphs = {"selected": selected, "other": PoisonDict(other)}
+    service._rebuild_summary_cache()
+    service._runtime = {
+        "selected": {"state": "disabled"},
+        "other": PoisonDict({"state": "disabled"}),
+    }
+    service._debug = {"selected": {"nodes": {}, "updated_at": None}, "other": PoisonDict()}
+
+    assert [item["id"] for item in service.list(current="selected")["workflows"]] == ["selected"]
+    assert set(service.debug(workflow_id="selected")["workflows"]) == {"selected"}
+
+
+def test_library_clamps_size_sorts_stably_and_rebuilds_after_mutations(service):
+    base = graph(enabled=False)
+    for ident, name in (("z", "Same"), ("a", "Same"), ("b", "Zed")):
+        service.save({**base, "id": ident, "name": name})
+
+    asc = service.library(size=500)
+    desc = service.library(sort="name_desc", size=500)
+    assert asc["size"] == desc["size"] == 50
+    assert [item["id"] for item in asc["items"]] == ["a", "z", "b"]
+    assert [item["id"] for item in desc["items"]] == ["b", "a", "z"]
+
+    service.rename("a", "Alpha")
+    assert [item["id"] for item in service.library()["items"]] == ["a", "z", "b"]
+    service.remove("a")
+    assert [item["id"] for item in service.library()["items"]] == ["z", "b"]
+
+
+def test_workflow_count_cap_and_storage_byte_guard_roll_back(service, monkeypatch):
+    base = graph(enabled=False)
+    service._graphs = {
+        f"flow-{index:04d}": {
+            **base,
+            "id": f"flow-{index:04d}",
+            "name": f"Flow {index}",
+        }
+        for index in range(5000)
+    }
+    service._rebuild_summary_cache()
+    with pytest.raises(ValueError, match="Workflow limit exceeded"):
+        service.save({**base, "id": "overflow", "name": "Overflow"})
+
+    service._graphs = {"people": {**base, "id": "people"}}
+    service._rebuild_summary_cache()
+    monkeypatch.setattr("spyder_cctv.workflow._MAX_WORKFLOW_BYTES", 100)
+    with pytest.raises(ValueError, match="Workflow file exceeds"):
+        service.save({**base, "name": "Changed"})
+    assert service.get("people")["name"] == "People"
+    assert service.library()["items"][0]["name"] == "People"
+
+
+def test_workflow_load_rejects_storage_over_byte_cap(service, monkeypatch):
+    monkeypatch.setattr("spyder_cctv.workflow._MAX_WORKFLOW_BYTES", 100)
+    service._path.write_bytes(b"{" + b" " * 100)
+    with pytest.raises(ValueError, match="Workflow file exceeds"):
+        service._load()
+
+def test_workflow_load_rejects_more_than_5000_entries(service):
+    rows = [
+        {
+            "id": f"flow-{index:04d}",
+            "name": f"Flow {index}",
+            "enabled": False,
+            "camera_ids": [],
+            "nodes": [],
+            "edges": [],
+        }
+        for index in range(5001)
+    ]
+    service._path.write_text(json.dumps({"workflows": rows}), encoding="utf-8")
+    with pytest.raises(ValueError, match="Cannot load workflow file"):
+        service._load()
