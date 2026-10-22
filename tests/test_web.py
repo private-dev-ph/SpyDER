@@ -1263,9 +1263,11 @@ def test_model_removal_checks_relative_model_paths_in_latest_saved_camera_config
 
 def test_workflow_library_api_paginates_and_serves_one_graph(server):
     url, _ = server
+
     def request(path):
         with urlopen(url + path, timeout=4) as response:
             return json.load(response)
+
     library = request("/api/workflows/library?query=&page=1&size=25")
     assert set(library) == {"items", "total", "pages", "page", "size", "counts", "storage_error"}
     assert library["items"] == []
@@ -1305,4 +1307,35 @@ def test_workflow_list_fallback_and_malformed_queries_return_400(server):
     for path in ("/api/workflows/library?broken", "/api/workflows/debug?workflow_id"):
         with pytest.raises(HTTPError) as error:
             urlopen(url + path, timeout=4)
+        assert error.value.code == 400
+
+
+@pytest.mark.parametrize("fps", [8, None])
+def test_long_recording_info_and_invalid_seek_do_not_open_decoder(
+    server, tmp_path, monkeypatch, fps
+):
+    from spyder_cctv.recording import RecordingService
+
+    url, _ = server
+    ident = "d" * 32
+    media = tmp_path / "long.mp4"
+    media.write_bytes(b"fixture")
+    item = {"id": ident, "kind": "recording", "duration_seconds": 86400}
+    if fps is not None:
+        item["fps"] = fps
+
+    def unexpected_decoder(*args):
+        raise AssertionError("Metadata lookup must not open the video decoder")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(RecordingService, "status", lambda self: {"items": [item]})
+        patch.setattr(RecordingService, "media_path", lambda self, media_id: media)
+        patch.setattr("spyder_cctv.web.cv2.VideoCapture", unexpected_decoder)
+        with urlopen(url + f"/api/media/{ident}/info", timeout=2) as response:
+            info = json.load(response)
+        assert info["duration_seconds"] == 86400
+        assert info["frame_count"] == (691200 if fps else 0)
+        assert info["frame_count_estimated"] is True
+        with pytest.raises(HTTPError) as error:
+            urlopen(url + f"/api/media/{ident}/frame?time=999999", timeout=2)
         assert error.value.code == 400
