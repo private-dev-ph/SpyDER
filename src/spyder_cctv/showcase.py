@@ -30,6 +30,8 @@ def export_showcase(output: Path) -> None:
     )
     (output / "index.html").write_text(html, encoding="utf-8")
     for name in (
+        "device-tools.js",
+        "device-tools.css",
         "dashboard.js",
         "dashboard.css",
         "settings.js",

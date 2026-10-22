@@ -1089,7 +1089,7 @@ class CameraManager:
             worker.update_settings(config, desired)
             return worker.settings_snapshot()
 
-    def add(self, camera: CameraConfig) -> dict[str, Any]:
+    def add(self, camera: CameraConfig, *, capture_factory=None) -> dict[str, Any]:
         with self._mutations:
             if self._closed:
                 raise RuntimeError("Camera manager is closed")
@@ -1112,9 +1112,10 @@ class CameraManager:
                     raise RuntimeError("A camera with that id already exists")
                 if any(worker.config.source == camera.source for worker in self.workers.values()):
                     raise RuntimeError("This camera source is already connected")
-                worker = CameraWorker(
-                    camera, desired_settings=self._desired(camera), **self._worker_options
-                )
+                options = dict(self._worker_options)
+                if capture_factory is not None:
+                    options["capture_factory"] = capture_factory
+                worker = CameraWorker(camera, desired_settings=self._desired(camera), **options)
                 updated = self.workers | {camera.id: worker}
                 self._persist(updated)
                 self.workers = updated
