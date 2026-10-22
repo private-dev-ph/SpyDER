@@ -2780,3 +2780,50 @@ def test_unknown_face_filter_dispatches_bounded_event_recording_only_for_rejecti
     event = service.event_store.list()["events"][0]
     assert calls[0][:4] == (event["id"], "cam1", 20, 10)
     assert isinstance(calls[0][4], float)
+
+
+def test_library_indexes_thousand_workflows_without_returning_graphs(service):
+    base = graph()
+    service._graphs = {
+        f"flow-{index:04d}": {**base, "id": f"flow-{index:04d}", "name": f"Workflow {index:04d}"}
+        for index in range(1000)
+    }
+    service._rebuild_summary_cache()
+    result = service.library(query="WORKFLOW 00", page=2, size=50)
+    assert result["total"] == 100
+    assert len(result["items"]) == 50
+    assert result["counts"] == {"total": 1000, "enabled": 1000, "disabled": 0}
+    assert "nodes" not in result["items"][0]
+
+
+def test_rename_persists_only_name_and_keeps_enabled_state(service, monkeypatch):
+    service.save(graph(enabled=True))
+    calls = []
+    monkeypatch.setattr(service.manager, "set_vision", lambda *args: calls.append(args))
+    renamed = service.rename("people", "Renamed workflow")
+    assert renamed["name"] == "Renamed workflow"
+    assert renamed["enabled"] is True
+    assert service.library()["items"][0]["name"] == "Renamed workflow"
+    assert calls == []
+
+
+def test_workflow_capacity_exceeds_legacy_limit_and_reload(service, tmp_path):
+    base = graph(enabled=False)
+    for index in range(40):
+        service.save({**base, "id": f"flow-{index:03d}", "name": f"Flow {index}"})
+    restored = WorkflowService(Manager(), Recorder(), tmp_path)
+    restored._stop.set()
+    restored._thread.join(timeout=2)
+    try:
+        assert len(restored.library(size=50)["items"]) == 40
+    finally:
+        restored.close()
+
+
+def test_rename_rolls_back_when_persistence_fails(service, monkeypatch):
+    service.save(graph(enabled=False))
+    monkeypatch.setattr(service, "_persist", lambda: (_ for _ in ()).throw(OSError("disk")))
+    with pytest.raises(OSError):
+        service.rename("people", "Changed")
+    assert service.get("people")["name"] == "People"
+    assert service.library()["items"][0]["name"] == "People"
