@@ -2126,6 +2126,14 @@ class WorkflowService:
                     missing_binding = True
             if missing_binding:
                 result = []
+            elif kind in ("camera", "model", "classifier", "detections") and nid in getattr(
+                self, "_replay_sources", {}
+            ):
+                # Retain the original source gate outcome. Replaying must not turn
+                # a failed model binding into a valid detector result.
+                result = copy.deepcopy(self._replay_sources[nid])
+                if kind in ("model", "classifier"):
+                    model_descriptors[nid] = self._model_descriptor(p["model_id"])
             elif kind == "camera":
                 result = list(cv.get("detections", [])) if p["camera_id"] == camera_id else []
             elif kind in ("model", "classifier"):
