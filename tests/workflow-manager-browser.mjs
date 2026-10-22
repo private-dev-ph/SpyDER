@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/spyder_cctv/assets");
 const profile = await mkdtemp(path.join(os.tmpdir(), "spyder-workflow-manager-"));
-const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/workflow-manager.css"><style>:root{--accent:#167da4;--ink:#18232c;--muted:#65717c;--border:#d1d9df;--surface:#fff}*{box-sizing:border-box}body{font:14px Arial;margin:0;padding:12px;background:#f3f5f6}button{cursor:pointer}</style><button data-workflow id="open">Workflows</button><script src="/workflow-manager.js"></script><script>let dirty=false, calls=[];const summaries=Array.from({length:80},(_,i)=>({id:'wf-'+i,name:'Workflow '+i,enabled:i%2===0,camera_ids:['front'],engines:['yolo'],node_count:4,edge_count:3}));function launch(){window.manager=spyderWorkflowManager.open({opener:document.querySelector('#open'),isDirty:()=>dirty,currentId:()=> 'wf-0',cameras:()=>[{id:'front',name:'Front door'}],engines:['yolo'],loadPage:async(params,{signal})=>{const wait=params.query==='old'?150:10;await new Promise(r=>setTimeout(r,wait));if(signal.aborted)throw new DOMException('Aborted','AbortError');const filtered=summaries.filter(x=>x.name.toLowerCase().includes(params.query.toLowerCase()));const pages=Math.max(1,Math.ceil(filtered.length/params.size));const page=Math.min(params.page,pages);return{items:filtered.slice((page-1)*params.size,page*params.size),total:filtered.length,pages,page,size:params.size,counts:{total:summaries.length,enabled:40,disabled:40}}},onOpen:async id=>{calls.push('open:'+id);return true},onCreate:async()=>{calls.push('create');return true},onDuplicate:async id=>{calls.push('duplicate:'+id);return true},onRename:async(id,name)=>{if(name==='retry')throw Error('Rename retry');calls.push('rename:'+name);return true},onDelete:async id=>{if(!window.allowDelete)throw Error('Delete retry');calls.push('delete:'+id);return true},onExport:async id=>{calls.push('export:'+id);return true},onKeepEditing:()=>document.querySelector('#save').focus(),onClose:()=>calls.push('close')})}</script><button id="save">Save workflow</button>`;
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/workflow-manager.css"><style>:root{--accent:#be1a1a;--focus:#830000;--danger:#bc0202;--control-border:#8c8274;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--surface:#fffefa}*{box-sizing:border-box}body{font:14px Arial;margin:0;padding:12px;background:#f3f5f6}button{cursor:pointer}</style><button data-workflow id="open">Workflows</button><script src="/workflow-manager.js"></script><script>let dirty=false;window.calls=[];const summaries=Array.from({length:80},(_,i)=>({id:'wf-'+i,name:'Workflow '+i,enabled:i%2===0,camera_ids:['front'],engines:['yolo'],node_count:4,edge_count:3}));function launch(initialDelete=false){window.manager=spyderWorkflowManager.open({opener:document.querySelector('#open'),isDirty:()=>dirty,currentId:()=> 'wf-0',cameras:()=>[{id:'front',name:'Front door'}],engines:['yolo'],initialDelete:initialDelete?summaries[0]:undefined,loadPage:async(params,{signal})=>{window.loadCalls=(window.loadCalls||0)+1;const wait=params.query==='old'?500:10;await new Promise(r=>setTimeout(r,wait));if(signal.aborted)throw new DOMException('Aborted','AbortError');const filtered=summaries.filter(x=>x.name.toLowerCase().includes(params.query.toLowerCase()));const pages=Math.max(1,Math.ceil(filtered.length/params.size));const page=Math.min(params.page,pages);return{items:filtered.slice((page-1)*params.size,page*params.size),total:filtered.length,pages,page,size:params.size,counts:{total:summaries.length,enabled:40,disabled:40}}},onOpen:async id=>{window.calls.push('open:'+id);return true},onCreate:async()=>{window.calls.push('create');return true},onDuplicate:async id=>{window.calls.push('duplicate:'+id);return true},onRename:async(id,name)=>{if(name==='retry')throw Error('Rename retry');window.calls.push('rename:'+name);return true},onDelete:async id=>{if(!window.allowDelete)throw Error('Delete retry');window.calls.push('delete:'+id);return true},onExport:async id=>{window.calls.push('export:'+id);return true},onKeepEditing:()=>document.querySelector('#save').focus(),onClose:()=>window.calls.push('close')})}</script><button id="save">Save workflow</button>`;
 const server = http.createServer(async (req, res) => {
   const name = new URL(req.url, "http://localhost").pathname;
   if (name === "/") return res.writeHead(200, { "Content-Type": "text/html" }).end(html);
@@ -41,25 +41,29 @@ try {
   await wait("typeof spyderWorkflowManager === 'object'");
   await evaluate("launch()"); await wait("document.querySelectorAll('.wm-row').length===25");
   assert.equal(await evaluate("document.querySelector('.wm-summary').textContent"), "80 workflows · 40 enabled · 40 disabled");
+  await evaluate("window.loadCountBeforeClose=window.loadCalls;document.querySelector('[name=query]').value='closed';document.querySelector('[name=query]').dispatchEvent(new Event('input',{bubbles:true}));manager.close();await new Promise(r=>setTimeout(r,260))");
+  assert.equal(await evaluate("window.loadCalls===window.loadCountBeforeClose"), true);
+  await evaluate("launch()"); await wait("document.querySelectorAll('.wm-row').length===25");
   await evaluate("document.querySelector('[name=query]').value='old';document.querySelector('[name=query]').dispatchEvent(new Event('input',{bubbles:true}));setTimeout(()=>{document.querySelector('[name=query]').value='Workflow 7';document.querySelector('[name=query]').dispatchEvent(new Event('input',{bubbles:true}))},220)");
   await wait("document.querySelector('.wm-row strong')?.textContent==='Workflow 7'");
   assert.equal(await evaluate("document.querySelector('.wm-rows').textContent.includes('Workflow 7')"), true);
   await evaluate("document.querySelector('[name=status]').value='enabled';document.querySelector('[name=status]').dispatchEvent(new Event('change',{bubbles:true}))");
   await wait("document.querySelector('.wm-row')===null || document.querySelector('.wm-row .wm-status.is-enabled')");
-  await evaluate("document.querySelector('[name=query]').value='';document.querySelector('[name=query]').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[name=status]').value='all';document.querySelector('[name=status]').dispatchEvent(new Event('change',{bubbles:true}))");
+  await evaluate("document.querySelector('[name=query]').value='';document.querySelector('[name=query]').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[name=status]').value='';document.querySelector('[name=status]').dispatchEvent(new Event('change',{bubbles:true}))");
   await wait("document.querySelectorAll('.wm-row').length===25");
   await evaluate("document.querySelector('[data-next]').click()"); await wait("document.querySelector('.wm-page').textContent==='Page 2 of 4'");
   await evaluate("dirty=true;document.querySelector('[data-action=open]').click()");
   assert.equal(await evaluate("document.querySelector('.wm-guard').hidden"), false);
   await evaluate("document.querySelector('[data-keep]').click()"); assert.equal(await evaluate("document.activeElement.id"), "save");
-  await evaluate("launch();document.querySelector('[data-action=open]').click();document.querySelector('[data-discard]').click()");
-  await wait("window.calls.includes('open:wf-25')"); assert.equal(await evaluate("!document.querySelector('dialog')"), true);
+  await evaluate("launch()"); await wait("document.querySelectorAll('.wm-row').length===25");
+  await evaluate("document.querySelector('[data-action=open]').click();document.querySelector('[data-discard]').click()");
+  await wait("window.calls.includes('open:wf-0')"); assert.equal(await evaluate("!document.querySelector('dialog')"), true);
   assert.equal(await evaluate("document.activeElement.id"), "open");
   await evaluate("launch()"); await wait("document.querySelectorAll('.wm-row').length===25");
-  await evaluate("document.querySelector('[data-action=rename]').click();document.querySelector('.wm-rename input').value='retry';document.querySelector('.wm-rename form').requestSubmit()");
+  await evaluate("document.querySelector('[data-action=rename]').click();document.querySelector('.wm-rename input').value='retry';document.querySelector('.wm-rename').requestSubmit()");
   await wait("document.querySelector('.wm-error').textContent==='Rename retry'");
-  await evaluate("document.querySelector('.wm-rename input').value='Renamed';document.querySelector('.wm-rename form').requestSubmit()"); await wait("document.querySelector('.wm-error').hidden");
-  await evaluate("document.querySelector('[data-action=delete]').click()"); assert.equal(await evaluate("document.querySelector('[data-confirm-delete]').textContent"), "Delete workflow");
+  await evaluate("document.querySelector('.wm-rename input').value='Renamed';document.querySelector('.wm-rename').requestSubmit()"); await wait("document.querySelector('[data-action=rename]') && !document.querySelector('.wm-rename')");
+  await evaluate("document.querySelector('[data-action=delete]').click()"); assert.equal(await evaluate("document.querySelector('.wm-delete-confirm').hidden"), false);
   await evaluate("document.querySelector('[data-confirm-delete]').click()"); await wait("document.querySelector('.wm-error').textContent==='Delete retry'");
   await evaluate("window.allowDelete=true;document.querySelector('[data-action=delete]').click();document.querySelector('[data-confirm-delete]').click()");
   await wait("window.calls.includes('delete:wf-0')");
@@ -70,12 +74,15 @@ try {
     await evaluate("launch()"); await wait("document.querySelector('.wm-row')");
     assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth"), true);
     assert.equal(await evaluate("document.querySelector('dialog').getBoundingClientRect().height<=innerHeight"), true);
+    assert.ok(await evaluate("document.querySelector('.wm-list').getBoundingClientRect().height>35"));
     await evaluate("manager.close()");
   }
   await command("Emulation.clearDeviceMetricsOverride", {}, sessionId);
-  await evaluate("document.documentElement.style.setProperty('--surface','#202830');document.documentElement.style.setProperty('--ink','#f5f7f8');document.documentElement.style.setProperty('--muted','#bbc4cc');document.documentElement.style.setProperty('--border','#53616c');launch()");
+  await evaluate("document.documentElement.style.setProperty('--surface','#202830');document.documentElement.style.setProperty('--ink','#f5f7f8');document.documentElement.style.setProperty('--muted','#bbc4cc');document.documentElement.style.setProperty('--border','#53616c');launch(true)");
   await wait("document.querySelector('.wm-row')");
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.wm-row')).color"), "rgb(245, 247, 248)");
+  assert.equal(await evaluate("document.querySelector('.wm-delete-confirm').hidden"), false);
+  assert.equal(await evaluate("document.querySelector('#wm-delete-title').textContent"), "Delete Workflow 0?");
   await evaluate("manager.close()");
   console.log("Workflow manager browser checks passed.");
 } finally {

@@ -34,3 +34,15 @@ test("workflow metadata summary matches manager row schema", () => {
     id: "door", name: "Front door", enabled: true, camera_ids: ["front", "side"], engines: ["yolo"], node_count: 3, edge_count: 2,
   });
 });
+
+test("empty filter values mean all and page includes total enabled and disabled counts", () => {
+  const result = workflowPage(fixtures(12), { status: "", camera: "", engine: "", size: 25 });
+  assert.equal(result.total, 12);
+  assert.deepEqual(result.counts, { total: 12, enabled: 4, disabled: 8 });
+});
+
+test("name ties use deterministic ID order for both directions", () => {
+  const entries = [{ id: "wf-z", name: "Same" }, { id: "wf-a", name: "same" }];
+  assert.deepEqual(workflowPage(entries).items.map((item) => item.id), ["wf-a", "wf-z"]);
+  assert.deepEqual(workflowPage(entries, { sort: "name_desc" }).items.map((item) => item.id), ["wf-a", "wf-z"]);
+});
