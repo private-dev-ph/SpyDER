@@ -35,7 +35,7 @@
     return /^\/api\/media\/[a-zA-Z0-9_-]+(?:\?.*)?$/.test(url) || /^blob:/.test(url) ? url : null;
   }
   function enrollmentRecording(item, showcase = false) {
-    return !showcase && item?.kind === "recording" && /^[a-f0-9]{32}$/i.test(String(item.id || ""));
+    return !showcase && item?.kind === "recording" && /^[a-f0-9]{32}$/.test(String(item.id || ""));
   }
   let viewer;
   let viewerReturn;

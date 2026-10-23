@@ -40,6 +40,7 @@ test("Recording enrollment accepts native recordings only", () => {
   assert.equal(enrollmentRecording(item), true);
   assert.equal(enrollmentRecording({ ...item, kind: "capture" }), false);
   assert.equal(enrollmentRecording({ ...item, id: "browser-local-id" }), false);
+  assert.equal(enrollmentRecording({ ...item, id: item.id.toUpperCase() }), false);
   assert.equal(enrollmentRecording(item, true), false);
 });
 test("event media enrollment closes player before opening enrollment at current position", () => {
