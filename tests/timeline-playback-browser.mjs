@@ -353,6 +353,83 @@ try {
     "2026-10-23",
   );
   await evaluate("extraTimeline.unmount()");
+
+  await until("!!window.spyderEventLibrary");
+  await evaluate(`(()=>{
+    window.spyderShowcase=undefined;
+    window.recordingEnrollCalls=[];window.enrollOrder=[];
+    window.spyderFaceEnrollment={fromRecording:(item,seconds)=>{enrollOrder.push('enroll');recordingEnrollCalls.push({item,seconds,viewerOpen:!!document.querySelector('.media-viewer')})}};
+    const host=document.createElement('div');host.id='timeline-enroll';document.querySelector('main').append(host);
+    const recording={id:'0123456789abcdef0123456789abcdef',kind:'recording',filename:'Enrollment source',created_at:new Date().toISOString(),duration_seconds:20};
+    window.enrollTimelineItem=recording;
+    window.enrollTimeline=spyderRecordingTimeline.mount(host,[],{createPlayer:(_host,callbacks)=>{
+      const video=document.createElement('video');Object.defineProperty(video,'currentTime',{configurable:true,writable:true,value:1});_host.append(video);
+      window.enrollTimelineCallbacks=callbacks;
+      return {load(_item,options){callbacks.onTime(options.offset)},seek(seconds){callbacks.onTime(seconds)},play(){},pause(){enrollOrder.push('pause')},setRate(){},destroy(){enrollOrder.push('destroy')}};
+    }});
+    enrollTimeline.setItems([recording]);
+  })()`);
+  assert.equal(
+    await evaluate("document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').disabled"),
+    true,
+    "Timeline enrollment stays disabled without selected clip",
+  );
+  await evaluate("document.querySelector('#timeline-enroll .recording-timeline-clip-actions button').click()");
+  assert.equal(
+    await evaluate("document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').disabled"),
+    false,
+  );
+  await evaluate("document.querySelector('#timeline-enroll .recording-timeline-player video').currentTime=6.4;document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').click()");
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).item.id"), "0123456789abcdef0123456789abcdef");
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 6.4);
+  assert.deepEqual(await evaluate("enrollOrder"), ["pause", "destroy", "enroll"]);
+  await evaluate("enrollTimeline.unmount()");
+  await evaluate(`(()=>{
+    const host=document.createElement('div');host.id='timeline-enroll-compat';document.querySelector('main').append(host);
+    window.compatTimeline=spyderRecordingTimeline.mount(host,[enrollTimelineItem],{createPlayer:(_host,callbacks)=>{
+      const video=document.createElement('video');video.hidden=true;_host.append(video);window.compatTimelineCallbacks=callbacks;
+      return {load(_item,options){callbacks.onTime(options.offset)},seek(seconds){callbacks.onTime(seconds)},play(){},pause(){enrollOrder.push('pause')},setRate(){},destroy(){enrollOrder.push('destroy')}};
+    }});
+  })()`);
+  await evaluate("compatTimelineCallbacks.onTime(8.15);document.querySelector('#timeline-enroll-compat .recording-timeline-player-controls button:nth-child(4)').click()");
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 8.15);
+  assert.deepEqual(await evaluate("enrollOrder.slice(-3)"), ["pause", "destroy", "enroll"]);
+  await evaluate("compatTimeline.unmount()");
+
+  await evaluate(`(()=>{
+    const native={id:'abcdef0123456789abcdef0123456789',kind:'recording',url:timelineBlob,name:'Native enrollment'};
+    window.nativeEnrollmentItem=native;
+    spyderEventLibrary.openMedia(native);
+    const video=document.querySelector('.media-viewer video');Object.defineProperty(video,'currentTime',{configurable:true,writable:true,value:3.25});
+    window.nativeViewerVideo=video;
+  })()`);
+  assert.equal(await evaluate("document.querySelector('.media-viewer button').textContent"), "");
+  await evaluate("[...document.querySelectorAll('.media-viewer button')].find(button=>button.textContent==='Enroll someone').click()");
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).item.id"), "abcdef0123456789abcdef0123456789");
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 3.25);
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).viewerOpen"), false);
+  assert.equal(await evaluate("nativeViewerVideo.paused"), true);
+
+  await evaluate(`(()=>{
+    const originalFetch=window.fetch.bind(window);
+    window.fetch=async(url,options)=>String(url).endsWith('/info')?new Response(JSON.stringify({duration_seconds:12}),{status:200,headers:{'Content-Type':'application/json'}}):String(url).includes('/frame?time=')?new Response(new Blob(['frame'],{type:'image/jpeg'}),{status:200}):originalFetch(url,options);
+    const fallback={id:'fedcba9876543210fedcba9876543210',kind:'recording',url:'/api/media/fedcba9876543210fedcba9876543210',name:'Fallback enrollment'};
+    spyderEventLibrary.openMedia(fallback);
+    document.querySelector('.media-viewer video').dispatchEvent(new Event('error'));
+  })()`);
+  await until("!!document.querySelector('.media-viewer input[type=range]')");
+  await evaluate("(()=>{const seek=document.querySelector('.media-viewer input[type=range]');seek.value='5.8';seek.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('.media-viewer button')].find(button=>button.textContent==='Enroll someone').click()})()");
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).item.id"), "fedcba9876543210fedcba9876543210");
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 5.8);
+  assert.equal(await evaluate("recordingEnrollCalls.at(-1).viewerOpen"), false);
+
+  await evaluate("spyderEventLibrary.openMedia({id:'0123456789abcdef0123456789abcdef',kind:'capture',url:timelineBlob})");
+  assert.equal(await evaluate("[...document.querySelectorAll('.media-viewer button')].some(button=>button.textContent==='Enroll someone')"), false);
+  await evaluate("spyderEventLibrary.closeMedia();window.spyderShowcase={};spyderEventLibrary.openMedia({id:'0123456789abcdef0123456789abcdef',kind:'recording',url:timelineBlob})");
+  assert.equal(await evaluate("[...document.querySelectorAll('.media-viewer button')].some(button=>button.textContent==='Enroll someone')"), false);
+  await evaluate("spyderEventLibrary.closeMedia();window.spyderShowcase=undefined");
+  assert.equal(await evaluate("recordingEnrollCalls.length"), 4);
+  assert.equal(paths.some((url)=>/\/api\/(faces\/galleries|faces\/enroll|face-enrollment)/.test(url)), false);
   assert.deepEqual(await evaluate("timelineErrors"), []);
   assert.equal(
     paths.some((url) => url.startsWith("/api/")),

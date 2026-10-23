@@ -39,6 +39,7 @@ test("timeline enrollment accepts native recordings only", () => {
   assert.equal(timeline.recordingEnrollmentAvailable(item), true);
   assert.equal(timeline.recordingEnrollmentAvailable({ ...item, kind: "capture" }), false);
   assert.equal(timeline.recordingEnrollmentAvailable({ ...item, id: "browser-local-id" }), false);
+  assert.equal(timeline.recordingEnrollmentAvailable({ ...item, id: item.id.toUpperCase() }), false);
   assert.equal(timeline.recordingEnrollmentAvailable(item, true), false);
 });
 
