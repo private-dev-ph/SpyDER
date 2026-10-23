@@ -118,6 +118,9 @@
       $("[data-fe-select-all]").disabled =
         busy || saving || samples.length === 0;
       $("[data-fe-clear]").disabled = busy || saving;
+      $("[data-fe-play]").textContent = recordingPlaying
+        ? "Pause preview"
+        : "Play selected range";
       $("[data-fe-play]").disabled =
         busy || saving || source !== "video" || !Number.isFinite(videoLength());
       dialog
@@ -435,13 +438,21 @@
       const expected = generation;
       const abort = new AbortController();
       previewAbort = abort;
-      const timeout = setTimeout(() => abort.abort(), 15000);
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        abort.abort();
+      }, 15000);
       let response;
       try {
         response = await fetch(`/api/media/${item.id}/info`, {
           cache: "no-store",
           signal: abort.signal,
         });
+      } catch (error) {
+        if (timedOut)
+          throw Error("Recording metadata loading timed out. Try again.");
+        throw error;
       } finally {
         clearTimeout(timeout);
         if (previewAbort === abort) previewAbort = null;
@@ -475,7 +486,11 @@
         previewAbort?.abort();
         const abort = new AbortController();
         previewAbort = abort;
-        const timeout = setTimeout(() => abort.abort(), 15000);
+        let timedOut = false;
+        const timeout = setTimeout(() => {
+          timedOut = true;
+          abort.abort();
+        }, 15000);
         let url;
         try {
           const response = await fetch(
@@ -492,6 +507,12 @@
           recordingTime = time;
           shownToken = null;
           return await loadImage(url, expected);
+        } catch (error) {
+          if (timedOut)
+            throw Error(
+              "Recording frame loading timed out. Try another position.",
+            );
+          throw error;
         } finally {
           clearTimeout(timeout);
           if (url) URL.revokeObjectURL(url);
@@ -777,7 +798,7 @@
           drawVideo();
         }
       } catch (error) {
-        status(error.message, true);
+        if (!closed && error.name !== "AbortError") status(error.message, true);
         controls();
       }
     });
@@ -822,6 +843,11 @@
           paintSamples();
         }
         if (button.hasAttribute("data-fe-play")) {
+          if (recording && recordingPlaying) {
+            stopPreview();
+            controls();
+            return;
+          }
           const range = updateRange();
           if (!range) return;
           stopPreview();
@@ -840,13 +866,16 @@
               const time = range.start + (performance.now() - started) / 1000;
               if (time >= range.start + range.duration) {
                 recordingPlaying = false;
+                controls();
                 return;
               }
               try {
                 await seek(time, expected);
               } catch (error) {
+                const active = recordingPlaying && expected === generation;
                 recordingPlaying = false;
-                if (!closed) status(error.message, true);
+                if (active && !closed) status(error.message, true);
+                controls();
                 return;
               }
               if (recordingPlaying && expected === generation)
@@ -935,7 +964,7 @@
       try {
         await recordingSource(options.recording, options.offset || 0);
       } catch (error) {
-        if (!closed) status(error.message, true);
+        if (!closed && error.name !== "AbortError") status(error.message, true);
       }
     } else if (options.file) {
       try {

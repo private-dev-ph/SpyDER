@@ -148,6 +148,12 @@ try {
   await until("document.querySelector('#recording-timeline-tab')");
   await evaluate("document.querySelector('#recording-timeline-tab').click()");
   await until(
+    "document.querySelectorAll('.recording-timeline-toolbar input[type=date]').length===1",
+  );
+  await evaluate(
+    "document.querySelector('.recording-timeline-toolbar input[type=date]').value='2026-10-22';document.querySelector('.recording-timeline-toolbar input[type=date]').dispatchEvent(new Event('change',{bubbles:true}))",
+  );
+  await until(
     "document.querySelectorAll('.recording-timeline-clip').length===3",
   );
   await evaluate(
@@ -370,19 +376,34 @@ try {
     enrollTimeline.setItems([recording]);
   })()`);
   assert.equal(
-    await evaluate("document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').disabled"),
+    await evaluate(
+      "document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').disabled",
+    ),
     true,
     "Timeline enrollment stays disabled without selected clip",
   );
-  await evaluate("document.querySelector('#timeline-enroll .recording-timeline-clip-actions button').click()");
+  await evaluate(
+    "document.querySelector('#timeline-enroll .recording-timeline-clip-actions button').click()",
+  );
   assert.equal(
-    await evaluate("document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').disabled"),
+    await evaluate(
+      "document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').disabled",
+    ),
     false,
   );
-  await evaluate("document.querySelector('#timeline-enroll .recording-timeline-player video').currentTime=6.4;document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').click()");
-  assert.equal(await evaluate("recordingEnrollCalls.at(-1).item.id"), "0123456789abcdef0123456789abcdef");
+  await evaluate(
+    "document.querySelector('#timeline-enroll .recording-timeline-player video').currentTime=6.4;document.querySelector('#timeline-enroll .recording-timeline-player-controls button:nth-child(4)').click()",
+  );
+  assert.equal(
+    await evaluate("recordingEnrollCalls.at(-1).item.id"),
+    "0123456789abcdef0123456789abcdef",
+  );
   assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 6.4);
-  assert.deepEqual(await evaluate("enrollOrder"), ["pause", "destroy", "enroll"]);
+  assert.deepEqual(await evaluate("enrollOrder"), [
+    "pause",
+    "destroy",
+    "enroll",
+  ]);
   await evaluate("enrollTimeline.unmount()");
   await evaluate(`(()=>{
     const host=document.createElement('div');host.id='timeline-enroll-compat';document.querySelector('main').append(host);
@@ -391,9 +412,18 @@ try {
       return {load(_item,options){callbacks.onTime(options.offset)},seek(seconds){callbacks.onTime(seconds)},play(){},pause(){enrollOrder.push('pause')},setRate(){},destroy(){enrollOrder.push('destroy')}};
     }});
   })()`);
-  await evaluate("compatTimelineCallbacks.onTime(8.15);document.querySelector('#timeline-enroll-compat .recording-timeline-player-controls button:nth-child(4)').click()");
+  await evaluate(
+    "document.querySelector('#timeline-enroll-compat .recording-timeline-clip-actions button').click()",
+  );
+  await evaluate(
+    "compatTimelineCallbacks.onTime(8.15);document.querySelector('#timeline-enroll-compat .recording-timeline-player-controls button:nth-child(4)').click()",
+  );
   assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 8.15);
-  assert.deepEqual(await evaluate("enrollOrder.slice(-3)"), ["pause", "destroy", "enroll"]);
+  assert.deepEqual(await evaluate("enrollOrder.slice(-3)"), [
+    "pause",
+    "destroy",
+    "enroll",
+  ]);
   await evaluate("compatTimeline.unmount()");
 
   await evaluate(`(()=>{
@@ -403,9 +433,19 @@ try {
     const video=document.querySelector('.media-viewer video');Object.defineProperty(video,'currentTime',{configurable:true,writable:true,value:3.25});
     window.nativeViewerVideo=video;
   })()`);
-  assert.equal(await evaluate("document.querySelector('.media-viewer button').textContent"), "");
-  await evaluate("[...document.querySelectorAll('.media-viewer button')].find(button=>button.textContent==='Enroll someone').click()");
-  assert.equal(await evaluate("recordingEnrollCalls.at(-1).item.id"), "abcdef0123456789abcdef0123456789");
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.media-viewer button').textContent",
+    ),
+    "",
+  );
+  await evaluate(
+    "[...document.querySelectorAll('.media-viewer button')].find(button=>button.textContent==='Enroll someone').click()",
+  );
+  assert.equal(
+    await evaluate("recordingEnrollCalls.at(-1).item.id"),
+    "abcdef0123456789abcdef0123456789",
+  );
   assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 3.25);
   assert.equal(await evaluate("recordingEnrollCalls.at(-1).viewerOpen"), false);
   assert.equal(await evaluate("nativeViewerVideo.paused"), true);
@@ -418,18 +458,44 @@ try {
     document.querySelector('.media-viewer video').dispatchEvent(new Event('error'));
   })()`);
   await until("!!document.querySelector('.media-viewer input[type=range]')");
-  await evaluate("(()=>{const seek=document.querySelector('.media-viewer input[type=range]');seek.value='5.8';seek.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('.media-viewer button')].find(button=>button.textContent==='Enroll someone').click()})()");
-  assert.equal(await evaluate("recordingEnrollCalls.at(-1).item.id"), "fedcba9876543210fedcba9876543210");
+  await evaluate(
+    "(()=>{const seek=document.querySelector('.media-viewer input[type=range]');seek.value='5.8';seek.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('.media-viewer button')].find(button=>button.textContent==='Enroll someone').click()})()",
+  );
+  assert.equal(
+    await evaluate("recordingEnrollCalls.at(-1).item.id"),
+    "fedcba9876543210fedcba9876543210",
+  );
   assert.equal(await evaluate("recordingEnrollCalls.at(-1).seconds"), 5.8);
   assert.equal(await evaluate("recordingEnrollCalls.at(-1).viewerOpen"), false);
 
-  await evaluate("spyderEventLibrary.openMedia({id:'0123456789abcdef0123456789abcdef',kind:'capture',url:timelineBlob})");
-  assert.equal(await evaluate("[...document.querySelectorAll('.media-viewer button')].some(button=>button.textContent==='Enroll someone')"), false);
-  await evaluate("spyderEventLibrary.closeMedia();window.spyderShowcase={};spyderEventLibrary.openMedia({id:'0123456789abcdef0123456789abcdef',kind:'recording',url:timelineBlob})");
-  assert.equal(await evaluate("[...document.querySelectorAll('.media-viewer button')].some(button=>button.textContent==='Enroll someone')"), false);
-  await evaluate("spyderEventLibrary.closeMedia();window.spyderShowcase=undefined");
+  await evaluate(
+    "spyderEventLibrary.openMedia({id:'0123456789abcdef0123456789abcdef',kind:'capture',url:timelineBlob})",
+  );
+  assert.equal(
+    await evaluate(
+      "[...document.querySelectorAll('.media-viewer button')].some(button=>button.textContent==='Enroll someone')",
+    ),
+    false,
+  );
+  await evaluate(
+    "spyderEventLibrary.closeMedia();window.spyderShowcase={};spyderEventLibrary.openMedia({id:'0123456789abcdef0123456789abcdef',kind:'recording',url:timelineBlob})",
+  );
+  assert.equal(
+    await evaluate(
+      "[...document.querySelectorAll('.media-viewer button')].some(button=>button.textContent==='Enroll someone')",
+    ),
+    false,
+  );
+  await evaluate(
+    "spyderEventLibrary.closeMedia();window.spyderShowcase=undefined",
+  );
   assert.equal(await evaluate("recordingEnrollCalls.length"), 4);
-  assert.equal(paths.some((url)=>/\/api\/(faces\/galleries|faces\/enroll|face-enrollment)/.test(url)), false);
+  assert.equal(
+    paths.some((url) =>
+      /\/api\/(faces\/galleries|faces\/enroll|face-enrollment)/.test(url),
+    ),
+    false,
+  );
   assert.deepEqual(await evaluate("timelineErrors"), []);
   assert.equal(
     paths.some((url) => url.startsWith("/api/")),
