@@ -46,10 +46,12 @@ class _ModelZoo:
 
 class _Align:
     last_landmarks = None
+    last_image_shape = None
 
     @classmethod
     def norm_crop(cls, image, landmarks, image_size):
         assert image_size == 112
+        cls.last_image_shape = image.shape
         cls.last_landmarks = np.asarray(landmarks).copy()
         return np.zeros((112, 112, 3), dtype=np.uint8)
 
@@ -110,6 +112,77 @@ def test_gallery_rejects_changed_models_and_bad_images(tmp_path, monkeypatch):
     detector.write_bytes(b"detector weights")
     with pytest.raises(ValueError, match="valid JPEG or PNG image"):
         service.enroll(gallery["id"], "Ada", b"bad", detector, recognition, face_index=0)
+
+
+def test_visual_analysis_offsets_roi_faces_and_batch_saves_once(tmp_path, monkeypatch):
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    reviewed = service.analyze(gallery["id"], image, [0.25, 0.25, 0.5, 0.5])
+    assert (reviewed["width"], reviewed["height"]) == (128, 128)
+    assert len(reviewed["faces"]) == 2
+    assert np.allclose(reviewed["faces"][0]["bbox"], [33 / 128, 34 / 128, 72 / 128, 80 / 128])
+    assert _Align.last_landmarks[0].tolist() == [55.0, 12.0]
+    assert _Align.last_image_shape == (64, 64, 3)
+    assert reviewed["faces"][0]["thumbnail"].startswith("data:image/jpeg;base64,")
+    assert all("embedding" in face for face in reviewed["faces"])
+
+    saves = []
+    original_save = service._save
+
+    def count_save(gallery_id, catalog):
+        saves.append(gallery_id)
+        return original_save(gallery_id, catalog)
+
+    monkeypatch.setattr(service, "_save", count_save)
+    with pytest.raises(ValueError, match="invalid"):
+        service.enroll_embeddings(gallery["id"], "Ada", [[1.0, 0.0], [float("nan"), 1.0]])
+    assert saves == []
+    result = service.enroll_embeddings(gallery["id"], "Ada", [[1.0, 0.0], [0.0, 1.0]])
+    assert saves == [gallery["id"]]
+    assert result["identity"]["sample_count"] == 2
+
+
+def test_visual_analysis_reuses_cpu_model_pair_for_ten_frames(tmp_path, monkeypatch):
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    original_get_model = _ModelZoo.get_model
+    loaded = []
+
+    def count_get_model(path, **kwargs):
+        loaded.append(path)
+        return original_get_model(path, **kwargs)
+
+    monkeypatch.setattr(_ModelZoo, "get_model", staticmethod(count_get_model))
+    for _ in range(10):
+        service.analyze(gallery["id"], image)
+    assert len(loaded) == 2
+
+    detector = service._analysis_models[1]
+    detector.detect = lambda _image, max_num=0: (None, None)
+    assert service.analyze(gallery["id"], image)["faces"] == []
+
+    detector.detect = lambda _image, max_num=0: ([[1, 2, float("nan"), 4, 0.9]], [])
+    with pytest.raises(VisionUnavailable, match="invalid face boxes"):
+        service.analyze(gallery["id"], image)
+
+
+def test_reviewed_batch_rechecks_model_bytes_before_single_save(tmp_path, monkeypatch):
+    service, gallery, detector, _, image = _setup(tmp_path, monkeypatch)
+    original_detector = detector.read_bytes()
+    reviewed = service.analyze(gallery["id"], image)
+    staged = [reviewed["faces"][0]["embedding"]]
+    detector.write_bytes(b"modified detector")
+    saves = []
+    original_save = service._save
+    monkeypatch.setattr(
+        service,
+        "_save",
+        lambda gallery_id, catalog: saves.append(gallery_id) or original_save(gallery_id, catalog),
+    )
+    with pytest.raises(VisionUnavailable, match="changed or is unavailable"):
+        service.enroll_embeddings(gallery["id"], "Ada", staged)
+    assert saves == []
+    detector.write_bytes(original_detector)
+    service.enroll_embeddings(gallery["id"], "Ada", staged)
+    assert saves == [gallery["id"]]
 
 
 def test_gallery_rejects_same_size_model_replacement_with_preserved_mtime(tmp_path, monkeypatch):
