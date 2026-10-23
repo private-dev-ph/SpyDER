@@ -1,5 +1,6 @@
 """Tests for local face gallery storage and enrollment."""
 
+import base64
 import json
 from pathlib import Path
 
@@ -88,6 +89,10 @@ def test_gallery_crud_exports_centroid_and_metadata_hides_vectors(tmp_path, monk
         np.asarray([[55, 12], [80, 12], [68, 24], [58, 37], [78, 37]], dtype=np.float32),
     )
     assert enrolled["identity"]["sample_count"] == 1
+    assert enrolled["sample"]["thumbnail"].startswith("data:image/jpeg;base64,")
+    assert service.list_identities(gallery["id"])["identities"][0]["thumbnail"] == enrolled[
+        "sample"
+    ]["thumbnail"]
     assert "embedding" not in json.dumps(service.list_galleries())
     assert "embedding" not in json.dumps(service.list_identities(gallery["id"]))
     assert np.allclose(
@@ -242,10 +247,64 @@ def test_gallery_snapshot_returns_metadata_and_identity_samples_without_vectors(
             "id": enrolled["identity"]["id"],
             "name": "Ada",
             "sample_count": 1,
-            "samples": [{"id": enrolled["sample"]["id"]}],
+            "samples": [
+                {"id": enrolled["sample"]["id"], "thumbnail": enrolled["sample"]["thumbnail"]}
+            ],
+            "thumbnail": enrolled["sample"]["thumbnail"],
         }
     ]
     assert "embedding" not in json.dumps(snapshot)
+
+
+def test_portraits_persist_locally_are_bounded_and_fall_back_after_removal(tmp_path, monkeypatch):
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    thumb = service.analyze(gallery["id"], image)["faces"][0]["thumbnail"]
+    ok, newer_image = cv2.imencode(
+        ".jpg", np.full((48, 48, 3), (25, 80, 220), dtype=np.uint8)
+    )
+    assert ok
+    newer_thumb = "data:image/jpeg;base64," + base64.b64encode(newer_image).decode("ascii")
+    first = service.enroll_embeddings(gallery["id"], "Ada", [[1.0, 0.0]], thumbnails=[thumb])
+    second = service.enroll_embeddings(
+        gallery["id"], "Ada", [[0.0, 1.0]], thumbnails=[newer_thumb]
+    )
+    assert first["samples"][0]["thumbnail"].startswith("data:image/jpeg;base64,")
+
+    restarted = FaceEnrollmentService(service.root)
+    details = restarted.snapshot(gallery["id"])["identities"][0]
+    assert details["thumbnail"] == second["samples"][0]["thumbnail"]
+    assert details["samples"] == [
+        {"id": first["samples"][0]["id"], "thumbnail": first["samples"][0]["thumbnail"]},
+        {"id": second["samples"][0]["id"], "thumbnail": details["thumbnail"]},
+    ]
+    listed = restarted.list_galleries()["galleries"][0]
+    assert listed["thumbnail"] == details["thumbnail"]
+    assert "thumbnail" not in restarted.descriptor(gallery["id"])
+    assert "thumbnail" not in json.dumps(restarted.export_gallery(gallery["id"]))
+
+    restarted.delete_sample(gallery["id"], details["id"], second["samples"][0]["id"])
+    fallback = restarted.list_identities(gallery["id"])["identities"][0]
+    assert fallback["thumbnail"] == first["samples"][0]["thumbnail"]
+    assert restarted.list_galleries()["galleries"][0]["thumbnail"] == fallback["thumbnail"]
+
+
+def test_thumbnail_validation_rejects_bad_data_and_legacy_catalog_without_thumbnails(
+    tmp_path, monkeypatch
+):
+    service, gallery, _, _, _ = _setup(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="thumbnail is invalid"):
+        service.enroll_embeddings(
+            gallery["id"], "Ada", [[1.0, 0.0]], thumbnails=["data:image/jpeg;base64,YQ=="]
+        )
+    service.enroll_embeddings(gallery["id"], "Ada", [[1.0, 0.0]])
+    old = FaceEnrollmentService(service.root)
+    assert "thumbnail" not in old.list_identities(gallery["id"])["identities"][0]
+    catalog = json.loads((service.root / gallery["id"] / "catalog.json").read_text())
+    catalog["identities"][0]["samples"][0]["thumbnail"] = "data:image/jpeg;base64,YQ=="
+    (service.root / gallery["id"] / "catalog.json").write_text(json.dumps(catalog))
+    old._catalog_cache.pop(gallery["id"], None)
+    with pytest.raises(ValueError, match="JPEG data URI|thumbnail"):
+        old.snapshot(gallery["id"])
 
 
 def test_corrupt_catalog_does_not_hide_healthy_galleries_or_allow_model_deletion(
