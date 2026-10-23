@@ -133,6 +133,7 @@ class FaceEnrollmentService:
     def __init__(self, storage_dir: str | Path) -> None:
         self._lock = threading.RLock()
         self._enrollment_slots = threading.BoundedSemaphore(1)
+        self._verified_models: dict[str, tuple[int, int, int, int, int, str]] = {}
         self._catalog_cache: dict[str, tuple[int, int, int, int, int, dict[str, Any]]] = {}
         self.root = Path(storage_dir).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -314,16 +315,26 @@ class FaceEnrollmentService:
         }
 
     @_serialized
-    def list_galleries(self) -> dict[str, list[dict[str, Any]]]:
+    def list_galleries(self) -> dict[str, Any]:
         result = []
+        errors = []
         for path in sorted(self.root.iterdir()):
             if (
                 path.is_dir()
                 and re.fullmatch(r"[a-f0-9]{32}", path.name)
                 and (path / "catalog.json").is_file()
             ):
-                result.append(self._metadata(self._load(path.name)))
-        return {"galleries": result}
+                try:
+                    result.append(self._metadata(self._load(path.name)))
+                except ValueError:
+                    errors.append(
+                        {"gallery_id": path.name, "error": "Gallery catalog is invalid"}
+                    )
+        response: dict[str, Any] = {"galleries": result}
+        if errors:
+            response["error"] = "One or more face galleries could not be loaded"
+            response["errors"] = errors
+        return response
 
     @_serialized
     def get_gallery(self, gallery_id: str) -> dict[str, Any]:
@@ -391,13 +402,39 @@ class FaceEnrollmentService:
             except OSError:
                 pass
             raise
+        self._remember_model(detector, detector_hash)
+        self._remember_model(recognition, recognition_hash)
         return self._metadata(catalog)
 
-    def _verify_model(self, path: Path, expected: str) -> bool:
+    @staticmethod
+    def _model_fingerprint(path: Path) -> tuple[int, int, int, int, int]:
+        stat = path.stat()
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+
+    def _remember_model(self, path: Path, digest: str) -> None:
+        self._verified_models[str(path.resolve())] = (*self._model_fingerprint(path), digest)
+
+    def _verify_model(self, path: Path, expected: str, *, force: bool = False) -> bool:
+        resolved = str(path.resolve())
         try:
-            return _sha256(path) == expected
+            fingerprint = self._model_fingerprint(path)
         except OSError:
             return False
+        cached = self._verified_models.get(resolved)
+        if not force and cached is not None and cached[:5] == fingerprint:
+            return cached[5] == expected
+        try:
+            digest = _sha256(path)
+        except OSError:
+            return False
+        self._verified_models[resolved] = (*fingerprint, digest)
+        return digest == expected
 
     @_serialized
     def rename_gallery(self, gallery_id: str, name: str) -> dict[str, Any]:
@@ -420,17 +457,19 @@ class FaceEnrollmentService:
         self._load(gallery_id)
         return self._dir(gallery_id) / "gallery-v1.json"
 
-    @_serialized
-    def config(self, gallery_id: str) -> dict[str, str | None]:
-        """Return trusted, local paths for workflow recognition configuration."""
+    def _config(self, gallery_id: str, *, verify_models: bool) -> dict[str, str | None]:
         catalog = self._load(gallery_id)
         detector = Path(catalog["detector"]["path"])
         recognition = Path(catalog["recognition"]["path"])
         if (
             not detector.is_file()
             or not recognition.is_file()
-            or not self._verify_model(detector, catalog["detector"]["sha256"])
-            or not self._verify_model(recognition, catalog["recognition"]["sha256"])
+            or not self._verify_model(
+                detector, catalog["detector"]["sha256"], force=verify_models
+            )
+            or not self._verify_model(
+                recognition, catalog["recognition"]["sha256"], force=verify_models
+            )
         ):
             raise VisionUnavailable(
                 "model_missing", "A model linked to this gallery changed or is unavailable."
@@ -443,12 +482,20 @@ class FaceEnrollmentService:
         }
 
     @_serialized
+    def config(self, gallery_id: str, *, verify_models: bool = False) -> dict[str, str | None]:
+        """Return local paths, optionally hashing model files despite cached fingerprints."""
+        return self._config(gallery_id, verify_models=verify_models)
+
+    @_serialized
     def model_references(self, model_id: str | None) -> list[dict[str, str]]:
         if model_id is None:
             return []
+        galleries = self.list_galleries()
+        if galleries.get("errors"):
+            raise RuntimeError("Cannot verify model references: unreadable face gallery")
         return [
             {"gallery_id": item["id"], "gallery_name": item["name"]}
-            for item in self.list_galleries()["galleries"]
+            for item in galleries["galleries"]
             if model_id in (item["detector_model_id"], item["recognition_model_id"])
         ]
 
@@ -457,6 +504,23 @@ class FaceEnrollmentService:
         catalog = self._load(gallery_id)
         return {
             "gallery_id": gallery_id,
+            "identities": [
+                {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "sample_count": len(item["samples"]),
+                    "samples": [{"id": sample["id"]} for sample in item["samples"]],
+                }
+                for item in catalog["identities"]
+            ],
+        }
+
+    @_serialized
+    def snapshot(self, gallery_id: str) -> dict[str, Any]:
+        """Return gallery metadata and identity details from one catalog read."""
+        catalog = self._load(gallery_id)
+        return {
+            "gallery": self._metadata(catalog),
             "identities": [
                 {
                     "id": item["id"],
