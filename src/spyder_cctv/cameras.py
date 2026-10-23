@@ -724,8 +724,10 @@ class CameraWorker:
                         self._analysis_runtime = analysis
                         self._analysis_applied = revision
                 vision_process = pipeline_name != "vision" or vision_demanded
-                pipeline_may_annotate = pipeline is not None and vision_process and not (
-                    self._uses_default_pipeline and pipeline_name == "none"
+                pipeline_may_annotate = (
+                    pipeline is not None
+                    and vision_process
+                    and not (self._uses_default_pipeline and pipeline_name == "none")
                 )
                 clean_jpeg = (
                     self._encoder(frame) if analysis is not None or pipeline_may_annotate else None
@@ -777,7 +779,9 @@ class CameraWorker:
                         )
                         jpeg = self._encoder(frame)
                     self._jpeg, self._recording_jpeg, self._metadata = (
-                        jpeg, clean_jpeg, copy.deepcopy(metadata)
+                        jpeg,
+                        clean_jpeg,
+                        copy.deepcopy(metadata),
                     )
                     self._updated = time.monotonic()
                     self._frames += 1
