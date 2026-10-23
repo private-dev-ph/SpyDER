@@ -16,7 +16,8 @@ No models, face samples, or camera credentials are sent to the showcase server.
 2. Open **Vision Lab → Face galleries**. Existing galleries load automatically.
    Choose **Create gallery** to add a collection. Give the
    gallery a name and select its detector and recognition models.
-3. Select the gallery and choose **Review enrollment**. The enrollment studio
+3. Select the gallery and choose **Enroll someone**. All enrollment controls are
+   inside the enrollment studio, including the identity name and media source. It
    accepts a running camera, a JPEG/PNG image, or a browser-supported video.
    A camera preview uses the existing capture worker; it does not start or stop
    the camera. Keep the camera running while inspecting it.

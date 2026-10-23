@@ -255,18 +255,7 @@
       p.innerHTML =
         '<header class="dt-detail-head"><h3>' +
         esc(desc.name) +
-        '</h3><div class="dt-actions"><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><form class="dt-enroll" data-enroll><h4>Enroll face</h4><label>Identity name<input name="identity_name" maxlength="128"></label><label>Camera frame<select name="camera_id"><option value="">Choose camera</option>' +
-        (window.spyder?.cameras?.() || [])
-          .map(
-            (c) =>
-              '<option value="' +
-              esc(c.id) +
-              '">' +
-              esc(c.name || c.id) +
-              "</option>",
-          )
-          .join("") +
-        '</select></label><label>Or choose image / video<input name="image" type="file" accept="image/jpeg,image/png,video/*"></label><button class="dt-button dt-primary">Review enrollment</button><p>Preview the source, choose a focus area, and review detected faces before saving.</p><div data-choice></div></form><section class="dt-identities"><h4>Identities</h4></section>';
+        '</h3><div class="dt-actions"><button type="button" class="dt-button dt-primary" data-enroll-open aria-haspopup="dialog">Enroll someone</button><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><section class="dt-identities"><h4>Identities</h4></section>';
       p.querySelector(".dt-identities").innerHTML = identitiesMarkup();
       p.dataset.renderedGid = gid;
       p._renderedDesc = desc;
@@ -547,11 +536,10 @@
         delete b.dataset.actionBusy;
       }
     });
-    h.addEventListener("submit", async (e) => {
-      if (!e.target.matches("[data-enroll]") || blocked) return;
-      e.preventDefault();
-      const form = e.target,
-        enrollmentGallery = gid,
+    h.addEventListener("click", async (e) => {
+      const opener = e.target.closest("[data-enroll-open]");
+      if (!opener || blocked) return;
+      const enrollmentGallery = gid,
         enrollmentGeneration = galleryGeneration;
       try {
         if (!window.spyderFaceEnrollment)
@@ -561,10 +549,7 @@
         await window.spyderFaceEnrollment.open({
           galleryId: enrollmentGallery,
           galleryName: desc.name,
-          identityName: form.elements.identity_name.value.trim(),
-          cameraId: form.elements.camera_id.value,
-          file: form.elements.image.files[0],
-          opener: form.querySelector("button"),
+          opener,
           onSaved: async () => {
             if (
               enrollmentGeneration !== galleryGeneration ||

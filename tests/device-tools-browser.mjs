@@ -207,10 +207,17 @@ try {
     "!document.querySelector('.dt-dialog') && calls.some(x=>x.path==='/api/faces/galleries' && x.method==='POST')",
   );
   await until(
-    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
+    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll someone')",
+  );
+  assert.equal(
+    await evaluate(
+      "!!document.querySelector('#face-gallery-tools [data-detail] input, #face-gallery-tools [data-detail] select')",
+    ),
+    false,
+    "Gallery detail has no duplicate enrollment inputs",
   );
   await evaluate(`(() => {
-    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='';form.elements.camera_id.value='cam-1';form.querySelector('button').click();
+    document.querySelector('[data-enroll-open]').click();
   })()`);
   await until("!!document.querySelector('dialog.fe-studio[open]')");
   assert.equal(
@@ -233,7 +240,7 @@ try {
     "Opening studio never analyzes or saves automatically",
   );
   await evaluate(
-    "document.querySelector('dialog.fe-studio [data-fe-camera]').dispatchEvent(new Event('change',{bubbles:true}))",
+    "(()=>{const camera=document.querySelector('dialog.fe-studio [data-fe-camera]');camera.value='cam-1';camera.dispatchEvent(new Event('change',{bubbles:true}))})()",
   );
   await evaluate(
     "(()=>{const s=document.querySelector('dialog.fe-studio [data-fe-source]');s.value='image';s.dispatchEvent(new Event('change',{bubbles:true}))})()",
@@ -324,7 +331,7 @@ try {
   );
   await until("!document.querySelector('dialog.fe-studio')");
   await evaluate(
-    "(()=>{window.holdAnalyze=true;window.analyzeStarted=false;const f=document.querySelector('[data-enroll]');f.elements.camera_id.value='cam-1';f.querySelector('button').click()})()",
+    "(()=>{window.holdAnalyze=true;window.analyzeStarted=false;document.querySelector('[data-enroll-open]').click()})()",
   );
   await until("!!document.querySelector('dialog.fe-studio[open]')");
   await evaluate(
@@ -357,7 +364,7 @@ try {
     "Late analysis response after close cannot commit another identity",
   );
   await evaluate(
-    "(()=>{const f=document.querySelector('[data-enroll]');f.elements.camera_id.value='cam-1';f.querySelector('button').click()})()",
+    "(()=>{document.querySelector('[data-enroll-open]').click()})()",
   );
   await until("!!document.querySelector('dialog.fe-studio[open]')");
   await evaluate(
@@ -591,10 +598,7 @@ try {
       const themeAudit = await evaluate(`(() => {
         const dialog=document.querySelector('.dt-dialog'), select=dialog.querySelector('select'), input=dialog.querySelector('input');
         const close=dialog.querySelector('.dt-dialog-close'), b=close.getBoundingClientRect(), i=close.querySelector('svg').getBoundingClientRect();
-        const file=document.querySelector('[name=image]');
         return {appearance:getComputedStyle(select).appearance, background:getComputedStyle(input).backgroundColor,
-          fileBackground:getComputedStyle(file,'::file-selector-button').backgroundColor,
-          fileColor:getComputedStyle(file,'::file-selector-button').color,
           closeCentered:Math.abs(b.x+b.width/2-i.x-i.width/2)<1 && Math.abs(b.y+b.height/2-i.y-i.height/2)<1};
       })()`);
       assert.equal(themeAudit.appearance, "none");
@@ -602,8 +606,6 @@ try {
         themeAudit.background,
         theme === "light" ? "rgb(255, 254, 250)" : "rgb(30, 28, 27)",
       );
-      assert.equal(themeAudit.fileBackground, "rgb(190, 26, 26)");
-      assert.equal(themeAudit.fileColor, "rgb(255, 255, 255)");
       assert.equal(themeAudit.closeCentered, true);
       const fits = await evaluate(
         "(()=>{let d=document.querySelector('.dt-dialog'),r=d.getBoundingClientRect();let ok=r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;d.close();return ok})()",
@@ -615,9 +617,16 @@ try {
       );
       await until("!document.querySelector('.dt-dialog')");
       await evaluate(
-        "(()=>{const f=document.querySelector('[data-enroll]');f.elements.camera_id.value='cam-1';f.querySelector('button').click()})()",
+        "(()=>{document.querySelector('[data-enroll-open]').click()})()",
       );
       await until("!!document.querySelector('dialog.fe-studio[open]')");
+      const fileTheme = await evaluate(`(() => {
+        const input = document.querySelector('dialog.fe-studio [data-fe-file]');
+        return {background:getComputedStyle(input,'::file-selector-button').backgroundColor,
+          color:getComputedStyle(input,'::file-selector-button').color};
+      })()`);
+      assert.equal(fileTheme.background, "rgb(190, 26, 26)");
+      assert.equal(fileTheme.color, "rgb(255, 255, 255)");
       const studioFits = await evaluate(
         "(()=>{const d=document.querySelector('dialog.fe-studio'),r=d.getBoundingClientRect();return {fits:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,scrollWidth:document.documentElement.scrollWidth,clientWidth:document.documentElement.clientWidth}})()",
       );
