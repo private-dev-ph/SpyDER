@@ -180,3 +180,104 @@ def test_recording_and_pre_event_frames_stay_clean_when_pipeline_annotates_in_pl
         assert buffer.snapshot("front", 3) == ()
     finally:
         manager.close()
+
+
+def test_camera_publishes_size_matched_detection_annotations_atomically():
+    import numpy as np
+
+    buffer = PreEventBuffer()
+    buffer.configure({"front": 3})
+
+    class AnnotationPipeline:
+        def process(self, frame):
+            width, height = frame.shape[1], frame.shape[0]
+            return frame, {
+                "cv": {
+                    "state": "ready",
+                    "result_age_seconds": 0.1,
+                    "frame_size": [width, height],
+                    "detections": [
+                        {
+                            "label": "person",
+                            "bbox": [-2, 1, width + 5, height - 1],
+                            "confidence": 0.9,
+                            "identity": "alice",
+                            "embedding": [1, 2, 3],
+                        }
+                    ],
+                }
+            }
+
+    class ArrayCapture(FakeCapture):
+        def read(self):
+            return True, np.zeros((4, 8, 3), dtype=np.uint8)
+
+    manager = CameraManager(
+        [CameraConfig("front", 1, fps=60)],
+        pre_event_buffer=buffer,
+        capture_factory=ArrayCapture,
+        pipeline_factory=lambda name: AnnotationPipeline(),
+        encoder=lambda frame: b"clean-jpeg",
+    )
+    worker = manager.workers["front"]
+    try:
+        worker.start()
+        wait_for(lambda: worker.recording_sample() is not None and buffer.snapshot("front", 3))
+        sample = worker.recording_sample()
+        buffered = buffer.snapshot("front", 3)[-1]
+        assert sample is not None
+        expected = ({
+            "bbox": [0.0, 0.25, 1.0, 0.5],
+            "label": "person",
+            "kind": "detection",
+            "confidence": 0.9,
+            "identity": "alice",
+        },)
+        assert sample.annotations == expected
+        assert buffered.annotations == expected
+        assert sample.jpeg == buffered.jpeg == b"clean-jpeg"
+        assert sample.timestamp == buffered.timestamp
+        assert sample.capture_session == buffered.capture_session
+        sample.annotations[0]["bbox"][0] = 77
+        buffered.annotations[0]["label"] = "changed"
+        assert worker.recording_sample().annotations == expected
+        assert buffer.snapshot("front", 3)[-1].annotations == expected
+    finally:
+        manager.close()
+
+
+def test_annotation_normalizer_handles_motion_tracks_stale_and_malformed_results():
+    import numpy as np
+
+    from spyder_cctv.recording_detection_metadata import normalize_detection_metadata
+
+    frame = np.zeros((10, 20, 3), dtype=np.uint8)
+    metadata = {
+        "cv": {
+            "state": "ready",
+            "result_age_seconds": 1.9,
+            "frame_size": [20, 10],
+            "detections": [
+                {"label": "car", "bbox": [18, 8, 25, 15], "confidence": float("nan")},
+                {"label": "bad", "bbox": [0, 0, float("inf"), 1]},
+            ],
+        },
+        "analysis": {
+            "state": "ready",
+            "result_age_seconds": 0.2,
+            "frame_size": [20, 10],
+            "regions": [{"bbox": [-2, 2, 5, 8]}],
+            "tracks": [{"id": 7, "bbox": [4, 3, 5, 4]}],
+        },
+    }
+    annotations = normalize_detection_metadata(metadata, frame)
+    assert [item["kind"] for item in annotations] == ["detection", "motion", "track"]
+    assert annotations[0]["bbox"] == [0.9, 0.8, 0.1, 0.2]
+    assert "confidence" not in annotations[0]
+    assert annotations[1]["bbox"] == [0.0, 0.2, 0.15, 0.8]
+    assert annotations[1]["label"] == "motion"
+    assert annotations[2]["track_id"] == 7
+    assert annotations[2]["bbox"] == [0.2, 0.3, 0.25, 0.4]
+    metadata["cv"]["result_age_seconds"] = 2.1
+    metadata["analysis"]["frame_size"] = [19, 10]
+    assert normalize_detection_metadata(metadata, frame) == ()
