@@ -28,7 +28,8 @@
       generation = 0,
       cleanup = () => {},
       current = null,
-      video = null;
+      video = null,
+      overlays = null;
     let seconds = 0,
       duration = 0,
       rate = 1,
@@ -53,7 +54,12 @@
     status.setAttribute("role", "status");
     player.append(surface, status);
     container.append(player);
-    const notifyTime = () => options.onTime?.(seconds);
+    const notifyTime = () => { overlays?.update(seconds); options.onTime?.(seconds); };
+    function attachOverlays(media) {
+      overlays?.destroy(); overlays = null;
+      if (window.spyderRecordingOverlays?.attach)
+        overlays = window.spyderRecordingOverlays.attach(surface, { item: current, media, time: () => seconds, demo });
+    }
     function state(value) {
       if (playing !== value) {
         playing = value;
@@ -190,6 +196,7 @@
       image = document.createElement("img");
       image.alt = "Recorded video frame";
       surface.append(image);
+      attachOverlays(image);
       status.textContent =
         "Compatibility playback · local decoded frames, up to 5 frames/s. The original retains its full frame rate. No audio.";
       if (resume) play();
@@ -205,6 +212,7 @@
       const token = generation;
       cleanup();
       cleanup = () => {};
+      overlays?.destroy(); overlays = null;
       releaseImage();
       surface.replaceChildren();
       current = item;
@@ -228,6 +236,7 @@
         item.name || item.filename || "Recorded footage",
       );
       surface.append(video);
+      attachOverlays(video);
       const listeners = [];
       const listen = (name, fn) => {
         const guarded = () => {
@@ -337,6 +346,7 @@
         disposed = true;
         generation++;
         cleanup();
+        overlays?.destroy(); overlays = null;
         if (video) {
           video.removeAttribute("src");
           video.load();
