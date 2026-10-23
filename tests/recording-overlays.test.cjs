@@ -109,6 +109,9 @@ test("showcase mode never calls local APIs and invalid metadata paints no boxes"
   try {
     bad.toggle.checked = true; bad.toggle.dispatch("change"); await flush();
     assert.match(bad.status.textContent, /invalid/);
+    await bad.controller.update(2); await flush();
+    assert.equal(bad.requests(), 1, "invalid chunks are not retried on every frame");
+    assert.match(bad.status.textContent, /invalid/);
     assert.equal(bad.surface.children.find((child) => child.className === "recording-overlay-canvas").context.drawn || 0, 0);
   } finally { bad.restore(); }
   const aspect = harness({ fetcher: () => ({ ok: true, text: async () => JSON.stringify({ ...sample(0), height: 480 }) }) });
@@ -122,4 +125,32 @@ test("showcase mode never calls local APIs and invalid metadata paints no boxes"
     scaled.toggle.checked = true; scaled.toggle.dispatch("change"); await flush();
     assert.equal(scaled.surface.children.find((child) => child.className === "recording-overlay-canvas").context.drawn, 1, "aspect-preserving transcode remains valid");
   } finally { scaled.restore(); }
+});
+
+
+test("missing detection download never produces an invalid JSON file", async () => {
+  const create = URL.createObjectURL; let downloads = 0;
+  URL.createObjectURL = () => { downloads++; return "blob:test"; };
+  const h = harness({ fetcher: () => ({ ok: true, text: async () => JSON.stringify({ available: false }) }) });
+  try {
+    h.download.dispatch("click"); await flush();
+    assert.equal(downloads, 0);
+    assert.match(h.status.textContent, /No saved detections/);
+  } finally { h.restore(); URL.createObjectURL = create; }
+});
+
+
+test("seeking across a day keeps only three decoded windows", async () => {
+  const h = harness();
+  try {
+    h.toggle.checked = true; h.toggle.dispatch("change"); await flush();
+    for (let index = 1; index < 100; index++) await h.controller.update(index * 30 + 2);
+    assert.equal(h.requests(), 100);
+    for (const index of [97, 98, 99]) await h.controller.update(index * 30 + 2);
+    assert.equal(h.requests(), 100, "three recent windows stay cached");
+    await h.controller.update(2);
+    assert.equal(h.requests(), 101, "old windows were evicted");
+    await h.controller.update(86399);
+    assert.equal(h.requests(), 102, "end of a day loads one window, not the whole history");
+  } finally { h.restore(); }
 });

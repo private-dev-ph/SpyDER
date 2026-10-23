@@ -45,4 +45,8 @@ In the installed app, the playback controls can download the current detection w
 
 Version 1 uses `version`, `chunk_seconds`, `index`, `width`, `height`, `fps`, and `samples`. Each sample contains clip-relative `time` and a `boxes` list. Each box has normalized `[left, top, width, height]` coordinates, a label, a kind, and a camera ID; identity, confidence, and track ID may also be present.
 
+Each chunk accepts at most 1,800 state changes, 128 boxes per state, and 2 MiB of decoded JSON. Playback retains at most three decoded chunks. At a limit, the affected chunk is marked incomplete and clears its boxes; the clean video continues. These are safety bounds, not a guarantee that every detection in a crowded scene will be retained.
+
+The static showcase can replay metadata imported from the installed app. It does not generate Python/OpenCV detection metadata for browser recordings. Matching sidecar IDs prevent mixing chunks from different recordings; they do not cryptographically prove that a selected video is the original matching video.
+
 The format is portable JSON rather than a server database. The native API decompresses one requested chunk; the static browser reads a user-selected file. The player validates finite coordinates and supported format versions before drawing. Missing windows, malformed data, and geometry mismatches clear the overlay instead of reusing unrelated detections.

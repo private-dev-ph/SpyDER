@@ -59,7 +59,7 @@
   function attach(surface, options) {
     const { item, media, time, demo = !!root.spyderShowcase } = options;
     let active = true, enabled = false, currentChunk = -1, frameHandle = 0, observer, resize;
-    let files = new Map(), cache = new Map(), pending = new Map(), overlayData = null, status = "", metadata = null, displayedTime = Number(time()) || 0;
+    let files = new Map(), cache = new Map(), cacheMessages = new Map(), pending = new Map(), overlayData = null, status = "", metadata = null, displayedTime = Number(time()) || 0;
     const doc = surface.ownerDocument || document;
     const canvas = doc.createElement("canvas"); canvas.className = "recording-overlay-canvas"; canvas.setAttribute("aria-hidden", "true");
     const controls = doc.createElement("div"); controls.className = "recording-overlay-controls";
@@ -103,7 +103,10 @@
         if (text) { const tw = ctx.measureText(text).width + 8; ctx.fillStyle = "rgba(0,0,0,.78)"; ctx.fillRect(px, Math.max(0, py - 18), tw, 18); ctx.fillStyle = "#fff"; ctx.fillText(text, px + 4, Math.max(0, py - 16)); }
       }
     }
-    function remember(index, data) { cache.delete(index); cache.set(index, data); while (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value); }
+    function remember(index, data, message = "") {
+      cache.delete(index); cache.set(index, data); cacheMessages.set(index, message);
+      while (cache.size > MAX_CACHE) { const oldest = cache.keys().next().value; cache.delete(oldest); cacheMessages.delete(oldest); }
+    }
     async function parseFile(file, index, filenameClipId) {
       if (!file || file.size > MAX_JSON) throw Error("Detection file exceeds 2 MiB limit.");
       let bytes = await file.arrayBuffer();
@@ -129,7 +132,7 @@
       }
       if (clipIds.size > 1 || (clipIds.size && !demo && !clipIds.has(String(item.id || "")))) throw Error("Detection files must match this clip ID.");
       requestController?.abort(); requestController = null; requestChunk = -1; pending.clear(); currentChunk = -1; overlayData = null; metadata = null; clear();
-      files = mapped; cache.clear();
+      files = mapped; cache.clear(); cacheMessages.clear();
     }
     importButton.addEventListener("click", () => picker.click());
     picker.addEventListener("change", () => { try { cacheFileSet([...picker.files]); setStatus("Imported files stay on this device."); update(Number(time())); } catch (error) { setStatus(error.message); } });
@@ -149,18 +152,25 @@
           if (files.size && !files.has(index)) { remember(index, NO_DATA); setStatus("No saved detections for this chunk."); return NO_DATA; }
           else if (files.has(index)) { const entry = files.get(index); data = await parseFile(entry.file, index, entry.clipId); }
           else if (item.overlayChunks && Object.prototype.hasOwnProperty.call(item.overlayChunks, index)) data = validate(item.overlayChunks[index], index, String(item.id || ""));
-          else if (demo) { setStatus("No saved detections. Import detection files to view overlays."); return null; }
+          else if (demo) { const message = "No saved detections. Import detection files to view overlays."; remember(index, NO_DATA, message); setStatus(message); return NO_DATA; }
           else if (idPattern.test(String(item.id || ""))) {
             const response = await fetch("/api/media/" + item.id + "/overlays?chunk=" + index, { signal: token.signal, cache: "no-store" });
             if (!response.ok) throw Error("Detection metadata could not be loaded.");
             const raw = await boundedText(response);
             const body = JSON.parse(raw);
+            if (!active || token.signal.aborted || currentChunk !== index) return null;
             if (body.unavailable || body.available === false) { remember(index, NO_DATA); setStatus("No saved detections for this chunk."); return NO_DATA; }
             data = validate(body, index, String(item.id || ""));
           } else { setStatus("No saved detections. Import detection files to view overlays."); return null; }
           if (!active || token.signal.aborted || currentChunk !== index) return null;
           remember(index, data); return data;
-        } catch (error) { if (active && !token.signal.aborted && currentChunk === index) setStatus(error.message || "Detection metadata could not be loaded."); return null; }
+        } catch (error) {
+          if (active && !token.signal.aborted && currentChunk === index) {
+            const message = error.message || "Detection metadata could not be loaded.";
+            remember(index, NO_DATA, message); setStatus(message);
+          }
+          return null;
+        }
         finally { if (pending.get(index) === promise) pending.delete(index); }
       })(); pending.set(index, promise); return promise;
     }
@@ -172,7 +182,7 @@
       if (!enabled) { clear(); return; }
       if (cache.has(index)) {
         overlayData = cache.get(index); metadata = overlayData === NO_DATA ? null : overlayData;
-        if (overlayData === NO_DATA) { setStatus("No saved detections for this chunk."); clear(); } else draw();
+        if (overlayData === NO_DATA) { setStatus(cacheMessages.get(index) || "No saved detections for this chunk."); clear(); } else { setStatus(overlayData.truncated ? "Detections loaded; chunk is truncated." : "Detections loaded."); draw(); }
         return;
       }
       if (requestController && requestChunk === index && pending.has(index)) return;
@@ -191,7 +201,7 @@
         if (index !== currentChunk) { currentChunk = index; requestController?.abort(); pending.clear(); overlayData = null; metadata = null; clear(); }
         requestController = new AbortController(); requestChunk = index;
         const data = cache.get(index) || await loadChunk(index, requestController);
-        if (!data) return;
+        if (!active || !data || data === NO_DATA) return;
         const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
         if (blob.size > MAX_JSON) throw Error("Detection metadata exceeds 2 MiB limit.");
         const url = URL.createObjectURL(blob), anchor = doc.createElement("a");
