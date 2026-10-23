@@ -385,10 +385,10 @@ def test_visual_review_stages_faces_and_enrolls_validated_batch_once(services, m
 
     fail_save = {"enabled": False}
 
-    def save_batch(gallery_id, name, embeddings):
+    def save_batch(gallery_id, name, embeddings, *, thumbnails=None):
         if fail_save["enabled"]:
             raise RuntimeError("mock atomic save failure")
-        writes.append((gallery_id, name, embeddings))
+        writes.append((gallery_id, name, embeddings, thumbnails))
         return {"saved": len(embeddings)}
 
     monkeypatch.setattr(
@@ -427,7 +427,14 @@ def test_visual_review_stages_faces_and_enrolls_validated_batch_once(services, m
         service.post(enroll, {"identity_name": "Ada", "selections": refs})
     fail_save["enabled"] = False
     assert service.post(enroll, {"identity_name": "Ada", "selections": refs}) == {"saved": 2}
-    assert writes == [(gid, "Ada", [[1.0, 0.0], [0.0, 1.0]])]
+    assert writes == [
+        (
+            gid,
+            "Ada",
+            [[1.0, 0.0], [0.0, 1.0]],
+            ["data:image/jpeg;base64,dGh1bWI=", "data:image/jpeg;base64,dGh1bWI="],
+        )
+    ]
     with pytest.raises(ValueError, match="expired"):
         service.post(enroll, {"identity_name": "Ada", "selections": refs})
 
@@ -775,7 +782,9 @@ def test_reviewed_face_api_over_http_stages_then_enrolls(tmp_path, monkeypatch):
     monkeypatch.setattr(
         FaceEnrollmentService,
         "enroll_embeddings",
-        lambda self, gid, name, vectors: saved.append((gid, name, vectors)) or {"saved": True},
+        lambda self, gid, name, vectors, *, thumbnails=None: (
+            saved.append((gid, name, vectors, thumbnails)) or {"saved": True}
+        ),
     )
     manager = CameraManager([], config_path=tmp_path / "http-config.json")
     server = create_server(manager, 0)
@@ -824,7 +833,7 @@ def test_reviewed_face_api_over_http_stages_then_enrolls(tmp_path, monkeypatch):
             },
         )
         assert result == {"saved": True}
-        assert saved == [(gallery["id"], "Ada", [[1.0, 0.0]])]
+        assert saved == [(gallery["id"], "Ada", [[1.0, 0.0]], ["data:image/jpeg;base64,dA=="])]
     finally:
         server.shutdown()
         server.server_close()

@@ -16,12 +16,15 @@ No models, face samples, or camera credentials are sent to the showcase server.
 2. Open **Vision Lab → Face galleries**. Existing galleries load automatically.
    Choose **Create gallery** to add a collection. Give the
    gallery a name and select its detector and recognition models.
-3. Select the gallery and choose **Review enrollment**. The enrollment studio
+3. Select the gallery and choose **Enroll someone**. All enrollment controls are
+   inside the enrollment studio, including the identity name and media source. It
    accepts a running camera, a JPEG/PNG image, or a browser-supported video.
    A camera preview uses the existing capture worker; it does not start or stop
    the camera. Keep the camera running while inspecting it.
 4. Drag a focus rectangle over the person you want to enroll. The focus fields
-   also accept percentages for keyboard control. Choose **Analyze current frame**
+   also accept percentages for keyboard control. Dragging freezes a live camera
+   preview or pauses video playback so the picture stays still while you focus.
+   Choose **Analyze current frame**
    to freeze and inspect the exact frame used by the detector. Face boxes and
    cropped sample cards show what was found. No samples are selected automatically.
 5. For video, choose a 5–10 second range using the start slider. **Play selected
@@ -47,16 +50,26 @@ Check the resulting crops and exclude other people before saving. Each submitted
 frame is independently detected and aligned, and the reviewed batch is validated
 before a single gallery update is published.
 
-Enrollment stores normalized embeddings, model fingerprints, and identity names.
-It does not save source photographs. Source previews stay in the browser until
+Enrollment stores normalized embeddings, model fingerprints, identity names,
+and small cropped JPEG portraits on this computer. Portraits are bounded to
+160 pixels on the longest side and 32 KiB each. Full source photographs and
+videos are not retained. Source previews stay in the browser until
 the review is cleared or the viewer closes. Reviewed face embeddings expire from
 local server memory after five minutes. The older single-image API retains a pending multi-face
 selection in RAM for up to 60 seconds. Keep enrollment images below
 8 MiB; decoded JPEG/PNG images are limited to 24 megapixels.
 
 Search galleries and identities, rename entries, remove individual samples, or
-remove identities from the gallery panel. Removing the final sample removes its
-identity. Export downloads a version 1 JSON gallery containing one normalized
+remove identities from the gallery panel. Gallery cards, identities, and sample
+rows display their saved portraits. The latest sample with a portrait represents
+an identity; removing it falls back to another saved sample. Removing the final
+sample removes its identity and its portrait.
+
+Profiles enrolled before portrait storage show a placeholder. Choose **Add sample**
+on that identity to open the studio with its name already selected, then enroll
+one new sample to add a portrait. Old embeddings cannot reconstruct the original
+face photograph. Recognition exports contain no portrait images.
+Export downloads a version 1 JSON gallery containing one normalized
 centroid per identity; this export contains biometric data and identity names.
 Gallery export is a recognition interchange format, not a full sample backup.
 
