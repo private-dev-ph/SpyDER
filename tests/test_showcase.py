@@ -13,6 +13,8 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         == 0
     )
     assert {p.name for p in output.iterdir()} == {
+        "face-enrollment-viewer.js",
+        "face-enrollment-viewer.css",
         "device-tools.js",
         "device-tools.css",
         "index.html",
