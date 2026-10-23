@@ -12,7 +12,7 @@ const source = fs.readFileSync(
 );
 function harness(showcase = false) {
   const listeners = {};
-  let fetches = 0;
+  const requests = [];
   const buttons = [{ disabled: false }, { disabled: false }];
   function host() {
     return {
@@ -50,6 +50,7 @@ function harness(showcase = false) {
       readyState: "complete",
       documentElement: {},
       getElementById: (id) => hosts[id],
+      querySelectorAll: () => [],
       addEventListener() {},
       createElement: () => ({
         className: "",
@@ -67,9 +68,13 @@ function harness(showcase = false) {
         this.fn();
       }
     },
-    fetch: () => {
-      fetches++;
-      throw Error("unexpected network");
+    fetch: (path, options = {}) => {
+      requests.push({ path, method: options.method || "GET" });
+      return Promise.resolve({
+        ok: true,
+        headers: { get: () => "application/json" },
+        json: async () => ({ galleries: [] }),
+      });
     },
     CustomEvent: class {},
     URL,
@@ -82,25 +87,27 @@ function harness(showcase = false) {
   return {
     hosts,
     buttons,
-    get fetches() {
-      return fetches;
-    },
+    requests,
   };
 }
 
-test("mounts face and ONVIF panels without making API requests", () => {
+test("native face panel loads galleries on mount", async () => {
   const app = harness(false);
   assert.match(app.hosts["face-gallery-tools"].innerHTML, /Face enrollment/);
   assert.match(
     app.hosts["onvif-camera-tools"].innerHTML,
     /ONVIF discovery and PTZ/,
   );
-  assert.equal(app.fetches, 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(app.requests, [
+    { path: "/api/faces/galleries", method: "GET" },
+  ]);
 });
 
-test("showcase mode disables actions and never contacts APIs", () => {
+test("showcase mode disables actions and never contacts APIs", async () => {
   const app = harness(true);
-  assert.equal(app.fetches, 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.requests.length, 0);
   assert.ok(app.buttons.every((button) => button.disabled));
   assert.match(app.hosts["face-gallery-tools"].innerHTML, /no network calls/i);
   assert.match(app.hosts["onvif-camera-tools"].innerHTML, /no network calls/i);
