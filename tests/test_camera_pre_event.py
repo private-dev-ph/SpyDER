@@ -226,13 +226,15 @@ def test_camera_publishes_size_matched_detection_annotations_atomically():
         sample = worker.recording_sample()
         buffered = buffer.snapshot("front", 3)[-1]
         assert sample is not None
-        expected = ({
-            "bbox": [0.0, 0.25, 1.0, 0.5],
-            "label": "person",
-            "kind": "detection",
-            "confidence": 0.9,
-            "identity": "alice",
-        },)
+        expected = (
+            {
+                "bbox": [0.0, 0.25, 1.0, 0.5],
+                "label": "person",
+                "kind": "detection",
+                "confidence": 0.9,
+                "identity": "alice",
+            },
+        )
         assert sample.annotations == expected
         assert buffered.annotations == expected
         assert sample.jpeg == buffered.jpeg == b"clean-jpeg"

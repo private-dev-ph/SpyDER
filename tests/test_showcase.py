@@ -29,6 +29,8 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "event-library.js",
         "event-library.css",
         "recording-library.js",
+        "recording-overlays.js",
+        "recording-overlays.css",
         "recording-player.js",
         "recording-player.css",
         "recording-timeline.js",

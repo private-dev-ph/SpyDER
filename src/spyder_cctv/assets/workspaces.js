@@ -286,6 +286,36 @@
       find("#recording-description").textContent = window.spyderShowcase
         ? "Record locally in this browser. Keep this tab visible. Recordings stop when hidden or at the 128 MiB memory limit. Download before closing this tab."
         : "Recorded on this computer, even while the browser is away. Clips save automatically as you record. Stop recording to save the final clip. Saved files remain available after restarting.";
+      if (window.spyderShowcase && window.spyderBrowserMedia?.importVideo) {
+        const openVideo = document.createElement("button");
+        openVideo.type = "button";
+        openVideo.className = "button secondary";
+        openVideo.textContent = "Open local video";
+        const picker = document.createElement("input");
+        picker.type = "file";
+        picker.accept = "video/*,.mkv,.avi";
+        picker.hidden = true;
+        openVideo.addEventListener("click", () => picker.click());
+        picker.addEventListener("change", async () => {
+          const file = picker.files?.[0];
+          if (!file) return;
+          openVideo.disabled = true;
+          try {
+            await window.spyderBrowserMedia.importVideo(file);
+            media = await readStatus();
+            update();
+            tell(
+              "Local video opened in this tab. Open it from the library, then import its detection files. Nothing was uploaded.",
+            );
+          } catch (error) {
+            tell(error.message);
+          } finally {
+            openVideo.disabled = false;
+            picker.value = "";
+          }
+        });
+        find(".recording-view-tabs").append(openVideo, picker);
+      }
       find("#library-note").textContent = window.spyderShowcase
         ? "Files stay in this tab until downloaded. Nothing is uploaded."
         : "Files are stored in your local media folder. Download a copy here; find the folder in System.";

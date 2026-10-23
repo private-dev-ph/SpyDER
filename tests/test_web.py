@@ -309,6 +309,18 @@ def test_record_capture_and_download_routes(server, tmp_path):
     assert image.shape[1] == 320
     with urlopen(thumbnail_url, timeout=4) as response:
         assert response.read() == thumbnail
+    with urlopen(url + f"/api/media/{video['id']}/overlays?chunk=0", timeout=4) as response:
+        chunk = json.load(response)
+    assert chunk["version"] == 1 and chunk["index"] == 0
+    assert chunk["samples"] and chunk["samples"][0]["time"] == 0
+    assert chunk["samples"][0]["boxes"] == []
+    with urlopen(url + f"/api/media/{video['id']}/overlays?chunk=2000", timeout=4) as response:
+        missing = json.load(response)
+    assert missing["available"] is False and missing["samples"] == []
+    for bad_chunk in ("-1", "2881", "1.5", "0&chunk=1"):
+        with pytest.raises(HTTPError) as invalid:
+            urlopen(url + f"/api/media/{video['id']}/overlays?chunk={bad_chunk}", timeout=4)
+        assert invalid.value.code == 400
     with urlopen(url + f"/api/media/{video['id']}/info", timeout=4) as response:
         info = json.load(response)
     assert info["duration_seconds"] > 0

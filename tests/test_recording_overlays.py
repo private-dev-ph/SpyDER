@@ -113,10 +113,18 @@ def test_corrupt_and_gzip_bomb_chunks_fail_safely(tmp_path):
     with pytest.raises(ValueError):
         read_chunk(tmp_path, MEDIA_ID, 0)
 
-    payload = json.dumps({
-        "version": 1, "chunk_seconds": 30, "index": 0, "width": 1, "height": 1,
-        "fps": 1.0, "samples": [{"time": 0.0, "boxes": []}], "truncated": False,
-    }).encode() + b" " * (MAX_DECODED_CHUNK_BYTES + 1)
+    payload = json.dumps(
+        {
+            "version": 1,
+            "chunk_seconds": 30,
+            "index": 0,
+            "width": 1,
+            "height": 1,
+            "fps": 1.0,
+            "samples": [{"time": 0.0, "boxes": []}],
+            "truncated": False,
+        }
+    ).encode() + b" " * (MAX_DECODED_CHUNK_BYTES + 1)
     with gzip.open(path, "wb") as stream:
         stream.write(payload)
     with pytest.raises(ValueError):
@@ -133,7 +141,9 @@ def test_failed_atomic_replace_preserves_previous_chunk(tmp_path, monkeypatch):
     previous = destination.read_bytes()
 
     writer.append(1, [box(0.4)])
-    monkeypatch.setattr(overlays.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace failed")))
+    monkeypatch.setattr(
+        overlays.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace failed"))
+    )
     with pytest.raises(OSError):
         writer.checkpoint()
     assert destination.read_bytes() == previous
@@ -155,3 +165,51 @@ def test_writer_checkpoints_atomically_and_byte_accounting_includes_temporary(tm
     remove_sidecars(tmp_path, MEDIA_ID)
     assert sidecar_paths(tmp_path, MEDIA_ID) == []
     assert temp_path.exists() is False
+
+
+def test_encoded_byte_budget_remains_readable_and_clears_last_state(tmp_path, monkeypatch):
+    import spyder_cctv.recording_overlays as overlays
+
+    monkeypatch.setattr(overlays, "MAX_DECODED_CHUNK_BYTES", 1024)
+    writer = OverlayWriter(tmp_path, MEDIA_ID, 640, 360, 15)
+    for index in range(40):
+        writer.append(index / 15, [box(x=index / 100, label="long label " * 8)])
+    writer.close()
+    raw = gzip.decompress((tmp_path / f"{MEDIA_ID}.overlays-000000.json.gz").read_bytes())
+    assert len(raw) <= 1024
+    chunk = read_chunk(tmp_path, MEDIA_ID, 0)
+    assert chunk["truncated"] and chunk["samples"][-1]["boxes"] == []
+
+
+def test_quota_and_cleanup_do_not_skip_sidecars_after_many_other_directory_entries(
+    tmp_path, monkeypatch
+):
+    writer = OverlayWriter(tmp_path, MEDIA_ID, 640, 360, 8)
+    writer.append(0, [])
+    writer.close()
+    actual = list(tmp_path.iterdir())
+    original = Path.iterdir
+
+    def entries(directory):
+        if directory == tmp_path:
+            yield from (tmp_path / f"unrelated-{i}.txt" for i in range(6000))
+            yield from actual
+        else:
+            yield from original(directory)
+
+    monkeypatch.setattr(Path, "iterdir", entries)
+    assert used_sidecar_bytes(tmp_path) == sum(p.stat().st_size for p in actual)
+    assert len(sidecar_paths(tmp_path, MEDIA_ID)) == 1
+    remove_sidecars(tmp_path, MEDIA_ID)
+    assert not actual[0].exists()
+
+
+def test_deep_json_and_backward_time_are_rejected(tmp_path):
+    path = tmp_path / f"{MEDIA_ID}.overlays-000000.json.gz"
+    path.write_bytes(gzip.compress(("[" * 2000 + "0" + "]" * 2000).encode()))
+    with pytest.raises(ValueError):
+        read_chunk(tmp_path, MEDIA_ID, 0)
+    writer = OverlayWriter(tmp_path, MEDIA_ID, 640, 360, 8)
+    writer.append(2, [box()])
+    with pytest.raises(ValueError):
+        writer.append(1, [box()])
