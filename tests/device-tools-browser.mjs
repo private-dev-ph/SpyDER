@@ -147,6 +147,28 @@ try {
   );
   await click("#face-gallery-tools [data-create]");
   await until("!!document.querySelector('.dt-dialog[open]')");
+  assert.equal(
+    await evaluate("document.querySelector('.dt-dialog select').required"),
+    true,
+  );
+  await evaluate("document.querySelector('.dt-dialog [value=cancel]').click()");
+  await until("!document.querySelector('.dt-dialog')");
+  assert.equal(
+    await evaluate(
+      "calls.some(x=>x.path==='/api/faces/galleries' && x.method==='POST')",
+    ),
+    false,
+    "Cancel must bypass required fields without saving",
+  );
+  assert.equal(
+    await evaluate(
+      "document.activeElement === document.querySelector('#face-gallery-tools [data-create]')",
+    ),
+    true,
+    "Closing create restores focus",
+  );
+  await click("#face-gallery-tools [data-create]");
+  await until("!!document.querySelector('.dt-dialog[open]')");
   await evaluate(
     "(()=>{const d=document.querySelector('.dt-dialog');d.querySelector('[name=name]').value='New gallery';d.querySelector('[name=detector_model_id]').value='det-1';d.querySelector('[name=recognition_model_id]').value='rec-1';d.querySelector('[value=create]').click()})()",
   );
@@ -177,6 +199,54 @@ try {
     enrollment_token: "token-1",
     face_index: 0,
   });
+  for (const selector of ["[data-rg]", "[data-ri]", "[data-xg]", "[data-xi]"]) {
+    const before = await evaluate("calls.length");
+    await click("#face-gallery-tools " + selector);
+    await until("!!document.querySelector('.dt-dialog[open]')");
+    assert.equal(
+      await evaluate(
+        "document.querySelector('.dt-dialog [value=confirm]').classList.contains('dt-button')",
+      ),
+      true,
+    );
+    await click(".dt-dialog-close");
+    await until("!document.querySelector('.dt-dialog')");
+    assert.equal(
+      await evaluate("calls.length"),
+      before,
+      "Cancel rename/delete must not call an API",
+    );
+  }
+  await click("#face-gallery-tools [data-ri]");
+  await until("!!document.querySelector('.dt-dialog[open]')");
+  await evaluate(
+    "(()=>{const i=document.querySelector('.dt-dialog input');i.value='Renamed Ada';i.focus()})()",
+  );
+  await command(
+    "Input.dispatchKeyEvent",
+    {
+      type: "keyDown",
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      text: "\r",
+      unmodifiedText: "\r",
+    },
+    sid,
+  );
+  await command(
+    "Input.dispatchKeyEvent",
+    { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
+    sid,
+  );
+  await until("!document.querySelector('.dt-dialog')");
+  assert.equal(
+    await evaluate(
+      "calls.some(x=>x.path.endsWith('/identities/i1/rename') && x.body?.name==='Renamed Ada')",
+    ),
+    true,
+    "Enter submits the rename rather than canceling it",
+  );
   await click("#onvif-camera-tools [data-discover]");
   await until("document.querySelector('[data-devices]').options.length>1");
   await evaluate(
@@ -246,6 +316,23 @@ try {
       );
       await click("#face-gallery-tools [data-create]");
       await until("!!document.querySelector('.dt-dialog[open]')");
+      const themeAudit = await evaluate(`(() => {
+        const dialog=document.querySelector('.dt-dialog'), select=dialog.querySelector('select'), input=dialog.querySelector('input');
+        const close=dialog.querySelector('.dt-dialog-close'), b=close.getBoundingClientRect(), i=close.querySelector('svg').getBoundingClientRect();
+        const file=document.querySelector('[name=image]');
+        return {appearance:getComputedStyle(select).appearance, background:getComputedStyle(input).backgroundColor,
+          fileBackground:getComputedStyle(file,'::file-selector-button').backgroundColor,
+          fileColor:getComputedStyle(file,'::file-selector-button').color,
+          closeCentered:Math.abs(b.x+b.width/2-i.x-i.width/2)<1 && Math.abs(b.y+b.height/2-i.y-i.height/2)<1};
+      })()`);
+      assert.equal(themeAudit.appearance, "none");
+      assert.equal(
+        themeAudit.background,
+        theme === "light" ? "rgb(255, 254, 250)" : "rgb(30, 28, 27)",
+      );
+      assert.equal(themeAudit.fileBackground, "rgb(190, 26, 26)");
+      assert.equal(themeAudit.fileColor, "rgb(255, 255, 255)");
+      assert.equal(themeAudit.closeCentered, true);
       const fits = await evaluate(
         "(()=>{let d=document.querySelector('.dt-dialog'),r=d.getBoundingClientRect();let ok=r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;d.close();return ok})()",
       );
