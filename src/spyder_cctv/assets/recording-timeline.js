@@ -141,7 +141,7 @@
   }
 
   function recordingEnrollmentAvailable(item, showcase = false) {
-    return !showcase && item?.kind === "recording" && /^[a-f0-9]{32}$/i.test(String(item.id || ""));
+    return !showcase && item?.kind === "recording" && /^[a-f0-9]{32}$/.test(String(item.id || ""));
   }
 
   function coverageBins(items, range, count = MAX_BINS) {
