@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from spyder_cctv.cv.engines import _load_identity_gallery
+from spyder_cctv.cv.contracts import VisionUnavailable
 from spyder_cctv.face_gallery import FaceEnrollmentService
 
 
@@ -96,6 +97,7 @@ def test_gallery_crud_exports_centroid_and_metadata_hides_vectors(tmp_path, monk
     assert service.export_gallery(gallery["id"]) == {"version": 1, "identities": []}
     assert _load_identity_gallery(service.gallery_path(gallery["id"])) == []
     service.delete_gallery(gallery["id"])
+    assert gallery["id"] not in service._catalog_cache
     assert service.list_galleries() == {"galleries": []}
 
 
@@ -107,6 +109,20 @@ def test_gallery_rejects_changed_models_and_bad_images(tmp_path, monkeypatch):
     detector.write_bytes(b"detector weights")
     with pytest.raises(ValueError, match="valid JPEG or PNG image"):
         service.enroll(gallery["id"], "Ada", b"bad", detector, recognition, face_index=0)
+
+
+def test_gallery_rejects_same_size_model_replacement_with_preserved_mtime(tmp_path, monkeypatch):
+    import os
+
+    service, gallery, detector, _, _ = _setup(tmp_path, monkeypatch)
+    original_stat = detector.stat()
+    detector.write_bytes(b"changed detector")
+    assert detector.stat().st_size == original_stat.st_size
+    os.utime(detector, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    with pytest.raises(VisionUnavailable) as error:
+        service.config(gallery["id"])
+    assert getattr(error.value, "code", None) == "model_missing"
 
 
 def test_gallery_reload_uses_changed_atomic_export(tmp_path, monkeypatch):
@@ -155,7 +171,7 @@ def test_engine_hot_reloads_empty_gallery_as_unknown(tmp_path):
         norm_crop=lambda *args, **kwargs: np.zeros((112, 112, 3), np.uint8)
     )
     engine.gallery_path = path
-    engine._gallery_mtime_ns = path.stat().st_mtime_ns
+    engine._gallery_fingerprint = engine._gallery_stat_fingerprint(path)
     engine.gallery = _load_identity_gallery(path)
     engine.identity_stabilizer = IdentityStabilizer(confirmations=1, switch_confirmations=1)
     frame = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -164,10 +180,53 @@ def test_engine_hot_reloads_empty_gallery_as_unknown(tmp_path):
     assert known.identity == "Ada" and known.identity_status == "known"
 
     path.write_text(json.dumps({"version": 1, "identities": []}), encoding="utf-8")
-    os.utime(path, ns=(path.stat().st_atime_ns, engine._gallery_mtime_ns + 2_000_000_000))
+    os.utime(path, ns=(path.stat().st_atime_ns, engine._gallery_fingerprint[3] + 2_000_000_000))
     unknown = engine.infer(frame)[0]
     assert engine.gallery == []
     assert unknown.identity is None and unknown.identity_status == "unknown"
+
+
+def test_engine_reloads_same_size_gallery_replacement_with_unchanged_mtime(tmp_path):
+    import os
+    from types import SimpleNamespace
+
+    from spyder_cctv.cv.engines import InsightFaceEngine
+    from spyder_cctv.cv.identity_stability import IdentityStabilizer
+
+    path = tmp_path / "gallery.json"
+    original = json.dumps(
+        {"version": 1, "identities": [{"name": "Ada", "embedding": [1.0, 0.0]}]},
+        separators=(",", ":"),
+    )
+    replacement = original.replace("Ada", "Eve")
+    path.write_text(original, encoding="utf-8")
+
+    class Detector:
+        def detect(self, frame, max_num):
+            return (
+                np.asarray([[1, 2, 20, 24, 0.98]], dtype=np.float32),
+                np.asarray([[[3, 5], [15, 5], [9, 12], [5, 19], [14, 19]]], dtype=np.float32),
+            )
+
+    engine = InsightFaceEngine.__new__(InsightFaceEngine)
+    engine.config = SimpleNamespace(max_detections=100, recognition_threshold=0.5)
+    engine.model = Detector()
+    engine.recognizer = SimpleNamespace(get_feat=lambda _: np.asarray([[1.0, 0.0]]))
+    engine.classifier = None
+    engine.align = SimpleNamespace(norm_crop=lambda *args, **kwargs: np.zeros((112, 112, 3), np.uint8))
+    engine.gallery_path = path
+    engine._gallery_fingerprint = engine._gallery_stat_fingerprint(path)
+    engine.gallery = _load_identity_gallery(path)
+    engine.identity_stabilizer = IdentityStabilizer(confirmations=1, switch_confirmations=1)
+
+    replacement_path = tmp_path / "replacement.json"
+    replacement_path.write_text(replacement, encoding="utf-8")
+    os.utime(replacement_path, ns=(path.stat().st_atime_ns, engine._gallery_fingerprint[3]))
+    os.replace(replacement_path, path)
+
+    result = engine.infer(np.zeros((32, 32, 3), dtype=np.uint8))[0]
+    assert engine.gallery[0][0] == "Eve"
+    assert result.identity == "Eve"
 
 
 def test_oversized_png_is_rejected_from_header_before_decode(tmp_path, monkeypatch):
@@ -183,7 +242,7 @@ def test_oversized_png_is_rejected_from_header_before_decode(tmp_path, monkeypat
         service.enroll(gallery["id"], "Ada", oversized, detector, recognition, face_index=0)
 
 
-def test_catalog_read_repairs_interrupted_export_publication(tmp_path, monkeypatch):
+def test_failed_export_publication_does_not_commit_catalog_mutation(tmp_path, monkeypatch):
     import spyder_cctv.face_gallery as module
 
     service, gallery, _, _, _ = _setup(tmp_path, monkeypatch)
@@ -199,7 +258,7 @@ def test_catalog_read_repairs_interrupted_export_publication(tmp_path, monkeypat
         service.rename_gallery(gallery["id"], "Renamed")
     monkeypatch.setattr(module, "_atomic_json", original_atomic_json)
 
-    assert service.get_gallery(gallery["id"])["name"] == "Renamed"
+    assert service.get_gallery(gallery["id"])["name"] == "Office"
     assert service.export_gallery(gallery["id"]) == {"version": 1, "identities": []}
     assert json.loads(service.gallery_path(gallery["id"]).read_text(encoding="utf-8")) == {
         "version": 1,

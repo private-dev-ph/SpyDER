@@ -133,8 +133,7 @@ class FaceEnrollmentService:
     def __init__(self, storage_dir: str | Path) -> None:
         self._lock = threading.RLock()
         self._enrollment_slots = threading.BoundedSemaphore(1)
-        self._verified_models: dict[str, tuple[int, int, str]] = {}
-        self._catalog_cache: dict[str, tuple[int, int, dict[str, Any]]] = {}
+        self._catalog_cache: dict[str, tuple[int, int, int, int, int, dict[str, Any]]] = {}
         self.root = Path(storage_dir).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -154,8 +153,15 @@ class FaceEnrollmentService:
             if stat.st_size > _MAX_CATALOG_BYTES:
                 raise ValueError("Gallery catalog too large")
             cached = self._catalog_cache.get(gallery_id)
-            if cached is not None and cached[:2] == (stat.st_size, stat.st_mtime_ns):
-                return copy.deepcopy(cached[2]) if copy_data else cached[2]
+            fingerprint = (
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ctime_ns,
+            )
+            if cached is not None and cached[:5] == fingerprint:
+                return copy.deepcopy(cached[5]) if copy_data else cached[5]
             with path.open("r", encoding="utf-8") as stream:
                 data = json.load(
                     stream,
@@ -176,8 +182,11 @@ class FaceEnrollmentService:
                 _atomic_json(exported_path, expected)
             stat = path.stat()
             self._catalog_cache[gallery_id] = (
+                stat.st_dev,
+                stat.st_ino,
                 stat.st_size,
                 stat.st_mtime_ns,
+                stat.st_ctime_ns,
                 copy.deepcopy(data),
             )
             return data
@@ -261,12 +270,15 @@ class FaceEnrollmentService:
         self._validate_catalog(catalog, gallery_id)
         exported = self._v1(catalog)
         directory = self._dir(gallery_id)
-        _atomic_json(directory / "catalog.json", catalog)
         _atomic_json(directory / "gallery-v1.json", exported)
+        _atomic_json(directory / "catalog.json", catalog)
         stat = (directory / "catalog.json").stat()
         self._catalog_cache[gallery_id] = (
+            stat.st_dev,
+            stat.st_ino,
             stat.st_size,
             stat.st_mtime_ns,
+            stat.st_ctime_ns,
             copy.deepcopy(catalog),
         )
 
@@ -379,27 +391,13 @@ class FaceEnrollmentService:
             except OSError:
                 pass
             raise
-        self._remember_model(detector, detector_hash)
-        self._remember_model(recognition, recognition_hash)
         return self._metadata(catalog)
 
-    def _remember_model(self, path: Path, digest: str) -> None:
-        stat = path.stat()
-        self._verified_models[str(path.resolve())] = (stat.st_size, stat.st_mtime_ns, digest)
-
     def _verify_model(self, path: Path, expected: str) -> bool:
-        resolved = str(path.resolve())
         try:
-            stat = path.stat()
+            return _sha256(path) == expected
         except OSError:
             return False
-        cached = self._verified_models.get(resolved)
-        fingerprint = (stat.st_size, stat.st_mtime_ns)
-        if cached is not None and cached[:2] == fingerprint:
-            return cached[2] == expected
-        digest = _sha256(path)
-        self._verified_models[resolved] = (stat.st_size, stat.st_mtime_ns, digest)
-        return digest == expected
 
     @_serialized
     def rename_gallery(self, gallery_id: str, name: str) -> dict[str, Any]:
@@ -414,6 +412,7 @@ class FaceEnrollmentService:
         for name in ("catalog.json", "gallery-v1.json"):
             (directory / name).unlink(missing_ok=True)
         directory.rmdir()
+        self._catalog_cache.pop(gallery_id, None)
 
     @_serialized
     def gallery_path(self, gallery_id: str) -> Path:
