@@ -162,6 +162,7 @@ class FaceEnrollmentService:
                 stat.st_ctime_ns,
             )
             if cached is not None and cached[:5] == fingerprint:
+                self._repair_export(directory, cached[5])
                 return copy.deepcopy(cached[5]) if copy_data else cached[5]
             with path.open("r", encoding="utf-8") as stream:
                 data = json.load(
@@ -169,18 +170,7 @@ class FaceEnrollmentService:
                     parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
                 )
             self._validate_catalog(data, gallery_id)
-            exported_path = directory / "gallery-v1.json"
-            try:
-                with exported_path.open("r", encoding="utf-8") as stream:
-                    exported = json.load(
-                        stream,
-                        parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
-                    )
-            except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-                exported = None
-            expected = self._v1(data)
-            if exported != expected:
-                _atomic_json(exported_path, expected)
+            self._repair_export(directory, data)
             stat = path.stat()
             self._catalog_cache[gallery_id] = (
                 stat.st_dev,
@@ -193,6 +183,21 @@ class FaceEnrollmentService:
             return data
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, OverflowError) as error:
             raise ValueError("Gallery catalog is invalid") from error
+
+    @classmethod
+    def _repair_export(cls, directory: Path, catalog: dict[str, Any]) -> None:
+        exported_path = directory / "gallery-v1.json"
+        try:
+            with exported_path.open("r", encoding="utf-8") as stream:
+                exported = json.load(
+                    stream,
+                    parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+                )
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            exported = None
+        expected = cls._v1(catalog)
+        if exported != expected:
+            _atomic_json(exported_path, expected)
 
     @staticmethod
     def _validate_catalog(data: Any, gallery_id: str) -> None:
@@ -271,8 +276,18 @@ class FaceEnrollmentService:
         self._validate_catalog(catalog, gallery_id)
         exported = self._v1(catalog)
         directory = self._dir(gallery_id)
+        previous = self._catalog_cache.get(gallery_id)
         _atomic_json(directory / "gallery-v1.json", exported)
-        _atomic_json(directory / "catalog.json", catalog)
+        try:
+            _atomic_json(directory / "catalog.json", catalog)
+        except BaseException:
+            self._catalog_cache.pop(gallery_id, None)
+            if previous is not None:
+                try:
+                    self._repair_export(directory, previous[5])
+                except BaseException:
+                    pass
+            raise
         stat = (directory / "catalog.json").stat()
         self._catalog_cache[gallery_id] = (
             stat.st_dev,
