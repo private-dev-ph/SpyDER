@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 import pytest
 
-from spyder_cctv.cv.engines import _load_identity_gallery
 from spyder_cctv.cv.contracts import VisionUnavailable
+from spyder_cctv.cv.engines import _load_identity_gallery
 from spyder_cctv.face_gallery import FaceEnrollmentService
 
 
@@ -189,9 +189,7 @@ def test_corrupt_catalog_does_not_hide_healthy_galleries_or_allow_model_deletion
 
     assert [item["id"] for item in result["galleries"]] == [healthy["id"]]
     assert result["error"] == "One or more face galleries could not be loaded"
-    assert result["errors"] == [
-        {"gallery_id": corrupt_id, "error": "Gallery catalog is invalid"}
-    ]
+    assert result["errors"] == [{"gallery_id": corrupt_id, "error": "Gallery catalog is invalid"}]
     assert corrupt_catalog.read_bytes() == corrupt_bytes
     with pytest.raises(RuntimeError, match="unreadable face gallery"):
         service.model_references("d1")
@@ -285,7 +283,9 @@ def test_engine_reloads_same_size_gallery_replacement_with_unchanged_mtime(tmp_p
     engine.model = Detector()
     engine.recognizer = SimpleNamespace(get_feat=lambda _: np.asarray([[1.0, 0.0]]))
     engine.classifier = None
-    engine.align = SimpleNamespace(norm_crop=lambda *args, **kwargs: np.zeros((112, 112, 3), np.uint8))
+    engine.align = SimpleNamespace(
+        norm_crop=lambda *args, **kwargs: np.zeros((112, 112, 3), np.uint8)
+    )
     engine.gallery_path = path
     engine._gallery_fingerprint = engine._gallery_stat_fingerprint(path)
     engine.gallery = _load_identity_gallery(path)
@@ -393,9 +393,7 @@ def test_cached_catalog_read_repairs_modified_managed_export(tmp_path, monkeypat
     }
 
 
-def test_repeated_catalog_reads_skip_export_parsing_and_centroid_rebuild(
-    tmp_path, monkeypatch
-):
+def test_repeated_catalog_reads_skip_export_parsing_and_centroid_rebuild(tmp_path, monkeypatch):
     import spyder_cctv.face_gallery as module
 
     service, gallery, _, _, image = _setup(tmp_path, monkeypatch)

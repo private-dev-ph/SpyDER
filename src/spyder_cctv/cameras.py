@@ -60,6 +60,7 @@ class CameraWorker:
         self._encoder = encoder
         self._pre_event_buffer = pre_event_buffer
         self._lock = threading.Lock()
+        self._preview_ready = threading.Condition(self._lock)
         self._lifecycle = threading.Lock()
         self._closed = False
         self._capture_release_failed = False
@@ -385,6 +386,7 @@ class CameraWorker:
             if final:
                 self._closed = True
             self._stop.set()
+            self._preview_ready.notify_all()
             if self._pre_event_buffer is not None:
                 self._pre_event_buffer.clear(self.config.id)
             if self._thread is not None and self._thread.is_alive():
@@ -465,14 +467,38 @@ class CameraWorker:
                 },
             }
 
-    def raw_frame(self) -> Any:
-        """Lease a bounded raw preview buffer without opening another capture."""
-        with self._lock:
+    def raw_frame(self, *, timeout: float = 0.0) -> Any:
+        """Lease raw pixels and optionally wait for the capture owner to publish them.
+
+        A cold preview lease has no retained pixels yet. Waiting releases the state
+        lock; it never opens a capture or enables inference. Stop or reconnect
+        invalidates the request instead of returning a frame from another session.
+        """
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or not 0 <= timeout <= 5
+        ):
+            raise ValueError("Raw preview wait must be between 0 and 5 seconds")
+        with self._preview_ready:
             now = time.monotonic()
-            self._raw_preview_requested_until = max(self._raw_preview_requested_until, now + 5)
-            if self._state != "running" or now - self._preview_updated > 1:
-                return None
-            return None if self._preview_raw is None else self._preview_raw.copy()
+            deadline = now + timeout
+            session = self._capture_session
+            self._raw_preview_requested_until = max(
+                self._raw_preview_requested_until, now + 5, deadline + 0.25
+            )
+            while self._state == "running" and not self._stop.is_set():
+                if session != self._capture_session:
+                    return None
+                now = time.monotonic()
+                if self._preview_raw is not None and now - self._preview_updated <= 1:
+                    return self._preview_raw.copy()
+                remaining = deadline - now
+                if remaining <= 0:
+                    return None
+                self._preview_ready.wait(remaining)
+            return None
 
     def jpeg(self) -> bytes | None:
         with self._lock:
@@ -671,6 +697,7 @@ class CameraWorker:
                 with self._lock:
                     self._preview_raw = raw
                     self._preview_updated = time.monotonic()
+                    self._preview_ready.notify_all()
                 with self._lock:
                     revision, analysis_config = self._analysis_revision, self.config.analysis
                 if self._retiring_analysis is not None and not self._retiring_analysis.is_alive:
@@ -778,12 +805,14 @@ class CameraWorker:
                     self._preview_raw = None
                     self._analysis_runtime = None
                     self._metadata = {}
+                    self._preview_ready.notify_all()
             logger.warning("Capture unavailable for camera %s", self.config.id)
         except Exception:
             # Backend exceptions may contain camera credentials. Do not expose their text.
             logger.warning("Capture or processing failed for camera %s", self.config.id)
             with self._lock:
                 self._state, self._error = "error", "Capture or processing failed"
+                self._preview_ready.notify_all()
                 if self._pre_event_buffer is not None:
                     self._pre_event_buffer.clear(self.config.id)
         finally:
@@ -795,6 +824,7 @@ class CameraWorker:
             with self._lock:
                 self._analysis_runtime = None
                 self._preview_raw = None
+                self._preview_ready.notify_all()
                 self._pipeline = None
                 self._pipeline_activity_applied = None
             if pipeline is not None and hasattr(pipeline, "close"):
