@@ -118,5 +118,5 @@ test("face gallery refresh, explicit enrollment, and ONVIF actions stay click dr
   assert.match(source, /\/api\/onvif\/discover/);
   assert.match(source, /duration_ms:\s*250/);
   assert.match(source, /spyder:face-galleries-changed/);
-  assert.match(source, /image_base64/);
+  assert.match(source, /spyderFaceEnrollment\.open/);
 });

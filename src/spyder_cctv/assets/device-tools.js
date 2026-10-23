@@ -255,7 +255,7 @@
       p.innerHTML =
         '<header class="dt-detail-head"><h3>' +
         esc(desc.name) +
-        '</h3><div class="dt-actions"><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><form class="dt-enroll" data-enroll><h4>Enroll face</h4><label>Identity name<input name="identity_name" required maxlength="128"></label><label>Camera frame<select name="camera_id"><option value="">Choose camera</option>' +
+        '</h3><div class="dt-actions"><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><form class="dt-enroll" data-enroll><h4>Enroll face</h4><label>Identity name<input name="identity_name" maxlength="128"></label><label>Camera frame<select name="camera_id"><option value="">Choose camera</option>' +
         (window.spyder?.cameras?.() || [])
           .map(
             (c) =>
@@ -266,7 +266,7 @@
               "</option>",
           )
           .join("") +
-        '</select></label><label>Or upload image<input name="image" type="file" accept="image/*"></label><button class="dt-button dt-primary">Process enrollment</button><p>Image used for this request only.</p><div data-choice></div></form><section class="dt-identities"><h4>Identities</h4></section>';
+        '</select></label><label>Or choose image / video<input name="image" type="file" accept="image/jpeg,image/png,video/*"></label><button class="dt-button dt-primary">Review enrollment</button><p>Preview the source, choose a focus area, and review detected faces before saving.</p><div data-choice></div></form><section class="dt-identities"><h4>Identities</h4></section>';
       p.querySelector(".dt-identities").innerHTML = identitiesMarkup();
       p.dataset.renderedGid = gid;
       p._renderedDesc = desc;
@@ -550,164 +550,37 @@
     h.addEventListener("submit", async (e) => {
       if (!e.target.matches("[data-enroll]") || blocked) return;
       e.preventDefault();
-      let f = e.target,
-        submit = f.querySelector("button");
-      if (f._enrolling) return;
-      f._enrolling = true;
-      if (submit) submit.disabled = true;
-      const enrollmentGallery = gid,
-        enrollmentGeneration = galleryGeneration,
-        file = f.elements.image.files[0],
-        cameraId = f.elements.camera_id.value,
-        b = { identity_name: f.elements.identity_name.value.trim() };
+      const form = e.target,
+        enrollmentGallery = gid,
+        enrollmentGeneration = galleryGeneration;
       try {
-        if (file) {
-          if (file.size > 8 * 1024 * 1024)
-            throw Error("Choose an image smaller than 8 MiB.");
-          let u = await new Promise((ok, no) => {
-            let r = new FileReader();
-            r.onload = () => ok(r.result);
-            r.onerror = no;
-            r.readAsDataURL(file);
-          });
-          if (
-            enrollmentGeneration !== galleryGeneration ||
-            enrollmentGallery !== gid
-          )
-            return;
-          b.image_base64 = String(u).split(",")[1];
-        } else if (cameraId) {
-          b.camera_id = cameraId;
-        } else throw Error("Choose camera frame or image.");
-        let d = await api(
-          "/api/faces/galleries/" +
-            encodeURIComponent(enrollmentGallery) +
-            "/enroll",
-          b,
-        );
-        if (
-          enrollmentGeneration !== galleryGeneration ||
-          enrollmentGallery !== gid
-        )
-          return;
-        if (d.requires_selection) {
-          f.querySelector("[data-choice]").innerHTML =
-            (d.preview?.startsWith("data:image/jpeg;base64,")
-              ? '<img class="dt-face-selection" alt="Captured faces with numbered selection boxes" src="' +
-                esc(d.preview) +
-                '">'
-              : "") +
-            "<label>Select face<select data-face-index>" +
-            d.faces
-              .map(
-                (x) =>
-                  '<option value="' +
-                  esc(x.index) +
-                  '">Face ' +
-                  (Number(x.index) + 1) +
-                  (x.bbox
-                    ? " · " +
-                      x.bbox.map((v) => Math.round(Number(v))).join(", ")
-                    : "") +
-                  (Number.isFinite(x.confidence)
-                    ? " · " + Math.round(x.confidence * 100) + "%"
-                    : "") +
-                  "</option>",
-              )
-              .join("") +
-            '</select></label><button type="button" class="dt-button dt-primary" data-confirm-face>Enroll selected face</button>';
-          h._pending = {
-            identity_name: b.identity_name,
-            enrollment_token: d.enrollment_token,
-            gallery_id: enrollmentGallery,
-            gallery_generation: enrollmentGeneration,
-          };
-          say(h, "Select one detected face.");
-          return;
-        }
-        f.reset();
-        await load();
-        if (
-          enrollmentGeneration !== galleryGeneration ||
-          enrollmentGallery !== gid
-        )
-          return;
-        await refresh();
-        if (
-          enrollmentGeneration !== galleryGeneration ||
-          enrollmentGallery !== gid
-        )
-          return;
-        say(h, "Face enrolled. Image not retained.");
-        window.dispatchEvent(new CustomEvent("spyder:face-galleries-changed"));
-      } catch (x) {
-        if (
-          enrollmentGeneration === galleryGeneration &&
-          enrollmentGallery === gid
-        )
-          say(h, x.message, true);
-      } finally {
-        f._enrolling = false;
-        if (submit?.isConnected) submit.disabled = false;
-      }
-    });
-    h.addEventListener("click", async (e) => {
-      const confirm = e.target.closest("[data-confirm-face]");
-      if (!confirm || blocked) return;
-      const form = confirm.closest("[data-enroll]");
-      if (form._enrolling) return;
-      form._enrolling = true;
-      confirm.disabled = true;
-      const pending = h._pending,
-        enrollmentGallery = pending?.gallery_id,
-        enrollmentGeneration = pending?.gallery_generation;
-      try {
-        if (
-          !pending ||
-          enrollmentGallery !== gid ||
-          enrollmentGeneration !== galleryGeneration
-        )
-          throw Error("Start enrollment again for this gallery.");
-        const faceIndex = Number(form.querySelector("[data-face-index]").value);
-        await api(
-          "/api/faces/galleries/" +
-            encodeURIComponent(enrollmentGallery) +
-            "/enroll",
-          {
-            identity_name: pending.identity_name,
-            enrollment_token: pending.enrollment_token,
-            face_index: faceIndex,
+        if (!window.spyderFaceEnrollment)
+          throw Error(
+            "Enrollment viewer did not load. Reload the page and try again.",
+          );
+        await window.spyderFaceEnrollment.open({
+          galleryId: enrollmentGallery,
+          galleryName: desc.name,
+          identityName: form.elements.identity_name.value.trim(),
+          cameraId: form.elements.camera_id.value,
+          file: form.elements.image.files[0],
+          opener: form.querySelector("button"),
+          onSaved: async () => {
+            if (
+              enrollmentGeneration !== galleryGeneration ||
+              enrollmentGallery !== gid
+            )
+              return;
+            await load();
+            await refresh();
+            say(h, "Face enrolled. Source media was not retained.");
+            window.dispatchEvent(
+              new CustomEvent("spyder:face-galleries-changed"),
+            );
           },
-        );
-        if (
-          enrollmentGeneration !== galleryGeneration ||
-          enrollmentGallery !== gid
-        )
-          return;
-        delete h._pending;
-        await load();
-        if (
-          enrollmentGeneration !== galleryGeneration ||
-          enrollmentGallery !== gid
-        )
-          return;
-        await refresh();
-        if (
-          enrollmentGeneration !== galleryGeneration ||
-          enrollmentGallery !== gid
-        )
-          return;
-        say(h, "Face enrolled. Image not retained.");
-        window.dispatchEvent(new CustomEvent("spyder:face-galleries-changed"));
-      } catch (x) {
-        if (
-          enrollmentGeneration === galleryGeneration &&
-          enrollmentGallery === gid
-        )
-          say(h, x.message, true);
-      } finally {
-        form._enrolling = false;
-        if (confirm.isConnected) confirm.disabled = false;
+        });
+      } catch (error) {
+        say(h, error.message, true);
       }
     });
     if (!blocked) refresh();
