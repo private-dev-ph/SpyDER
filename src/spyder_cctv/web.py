@@ -320,6 +320,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/event-library.js",
                 "/event-library.css",
                 "/recording-library.js",
+                "/recording-overlays.js",
+                "/recording-overlays.css",
                 "/recording-player.js",
                 "/recording-player.css",
                 "/recording-timeline.js",
@@ -655,6 +657,32 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 )
             elif path == "/api/system":
                 self.json(200, system_snapshot())
+            elif re.fullmatch(r"/api/media/[0-9a-f]{32}/overlays", path):
+                try:
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    values = query.get("chunk", ["0"])
+                    if len(values) != 1 or not re.fullmatch(r"[0-9]{1,4}", values[0]):
+                        raise ValueError("Invalid detection chunk")
+                    index = int(values[0])
+                    if index > 2880:
+                        raise ValueError("Detection chunk is outside the recording limit")
+                    self.json(200, recorder.overlay_chunk(path.split("/")[-2], index))
+                except (KeyError, FileNotFoundError):
+                    self.json(404, {"error": "Unknown recording"})
+                except ValueError as error:
+                    self.json(400, {"error": str(error)})
+                except OSError:
+                    self.json(
+                        200,
+                        {
+                            "version": 1,
+                            "chunk_seconds": 30,
+                            "index": index,
+                            "samples": [],
+                            "available": False,
+                            "error": "Detection metadata is unavailable",
+                        },
+                    )
             elif re.fullmatch(r"/api/media/[0-9a-f]{32}/(info|frame|thumbnail)", path):
                 media_id, action = path.split("/")[-2:]
                 capture = None

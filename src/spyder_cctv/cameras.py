@@ -26,6 +26,7 @@ from spyder_cctv.motion_config import AnalysisConfig
 from spyder_cctv.pre_event import BufferedFrame, PreEventBuffer
 from spyder_cctv.preferences import Preferences
 from spyder_cctv.presence import PresenceLeases
+from spyder_cctv.recording_detection_metadata import normalize_detection_metadata
 from spyder_cctv.storage import StorageSettings
 from spyder_cctv.vision import Pipeline, create_pipeline
 
@@ -77,6 +78,7 @@ class CameraWorker:
         self._error: str | None = None
         self._jpeg: bytes | None = None
         self._recording_jpeg: bytes | None = None
+        self._recording_annotations: tuple[dict[str, Any], ...] = ()
         self._preview_raw: Any = None
         self._preview_updated = 0.0
         self._vision_preview_requested_until = 0.0
@@ -366,6 +368,7 @@ class CameraWorker:
             self._state, self._error = "starting", None
             self._jpeg, self._updated = None, None
             self._recording_jpeg = None
+            self._recording_annotations = ()
             self._metadata, self._frames = {}, 0
             if self._workflow_vision_required is not None:
                 self._vision_active = self._vision_demanded_locked()
@@ -395,6 +398,7 @@ class CameraWorker:
                 self._state = "stopping"
             self._jpeg, self._updated = None, None
             self._recording_jpeg = None
+            self._recording_annotations = ()
             self._metadata = {}
             self._preview_raw = None
             self._analysis_runtime = None
@@ -521,7 +525,12 @@ class CameraWorker:
                 or time.monotonic() - self._updated > max(2.0, 2.0 / self.config.fps)
             ):
                 return None
-            return BufferedFrame(self._updated, self._recording_jpeg, self._capture_session)
+            return BufferedFrame(
+                self._updated,
+                self._recording_jpeg,
+                self._capture_session,
+                self._recording_annotations,
+            )
 
     def _can_reconnect(self) -> bool:
         source = self.config.source
@@ -778,19 +787,23 @@ class CameraWorker:
                             else {"state": "scheduled", "detections": []}
                         )
                         jpeg = self._encoder(frame)
+                    published_at = time.monotonic()
+                    annotations = normalize_detection_metadata(metadata, original_frame)
                     self._jpeg, self._recording_jpeg, self._metadata = (
                         jpeg,
                         clean_jpeg,
                         copy.deepcopy(metadata),
                     )
-                    self._updated = time.monotonic()
+                    self._updated = published_at
+                    self._recording_annotations = annotations
                     self._frames += 1
                     if self._pre_event_buffer is not None:
                         self._pre_event_buffer.push(
                             self.config.id,
                             clean_jpeg,
-                            self._updated,
+                            published_at,
                             self._capture_session,
+                            annotations=annotations,
                         )
                     if self._state != "running":
                         if self._reconnect_attempts:
@@ -820,6 +833,7 @@ class CameraWorker:
                         self._pre_event_buffer.clear(self.config.id)
                     self._jpeg, self._updated = None, None
                     self._recording_jpeg = None
+                    self._recording_annotations = ()
                     self._preview_raw = None
                     self._analysis_runtime = None
                     self._metadata = {}
@@ -831,6 +845,7 @@ class CameraWorker:
             with self._lock:
                 self._state, self._error = "error", "Capture or processing failed"
                 self._jpeg, self._recording_jpeg, self._updated = None, None, None
+                self._recording_annotations = ()
                 self._preview_ready.notify_all()
                 if self._pre_event_buffer is not None:
                     self._pre_event_buffer.clear(self.config.id)

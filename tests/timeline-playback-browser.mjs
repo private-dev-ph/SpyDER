@@ -135,6 +135,20 @@ try {
   await until(
     "!!window.spyderRecordingTimeline && !!window.spyderRecordingPlayer && !!window.spyderBrowserMedia",
   );
+  await evaluate(`(async()=>{
+    const bytes=Uint8Array.from(atob(${JSON.stringify(fixture)}),c=>c.charCodeAt(0));
+    window.importedLocalVideo=await spyderBrowserMedia.importVideo(new File([bytes],'local-original.mp4',{type:'video/mp4'}));
+  })()`);
+  assert.equal(
+    await evaluate("importedLocalVideo.local_file"),
+    true,
+    "Showcase opens file-backed local video without uploading it",
+  );
+  assert.equal(
+    await evaluate("importedLocalVideo.url.startsWith('blob:')"),
+    true,
+  );
+  assert.ok(await evaluate("importedLocalVideo.duration_seconds>=5"));
   await evaluate(`(()=>{
     window.timelineErrors=[];window.addEventListener('error',e=>timelineErrors.push(e.message));
     navigator.mediaDevices.getUserMedia=()=>{throw Error('Unexpected camera access')};
