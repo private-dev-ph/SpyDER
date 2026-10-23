@@ -1,6 +1,7 @@
 """Tests for local face gallery storage and enrollment."""
 
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -121,8 +122,79 @@ def test_gallery_rejects_same_size_model_replacement_with_preserved_mtime(tmp_pa
     os.utime(detector, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
 
     with pytest.raises(VisionUnavailable) as error:
-        service.config(gallery["id"])
+        service.config(gallery["id"], verify_models=True)
     assert getattr(error.value, "code", None) == "model_missing"
+
+
+def test_gallery_config_reuses_model_hashes_until_forced_verification(tmp_path, monkeypatch):
+    import os
+
+    import spyder_cctv.face_gallery as module
+
+    service, gallery, detector, _, _ = _setup(tmp_path, monkeypatch)
+    service = FaceEnrollmentService(service.root)
+    original_hash = module._sha256
+    calls = []
+
+    def count_hashes(path):
+        calls.append(Path(path).name)
+        return original_hash(path)
+
+    monkeypatch.setattr(module, "_sha256", count_hashes)
+    service.config(gallery["id"])
+    service.config(gallery["id"])
+    assert len(calls) == 2
+
+    before = detector.stat()
+    detector.write_bytes(b"changed detector")
+    os.utime(detector, ns=(before.st_atime_ns, before.st_mtime_ns))
+    with pytest.raises(VisionUnavailable) as error:
+        service.config(gallery["id"], verify_models=True)
+    assert error.value.code == "model_missing"
+
+
+def test_gallery_snapshot_returns_metadata_and_identity_samples_without_vectors(
+    tmp_path, monkeypatch
+):
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    enrolled = service.enroll(gallery["id"], "Ada", image, face_index=0)
+
+    snapshot = service.snapshot(gallery["id"])
+
+    assert snapshot["gallery"]["id"] == gallery["id"]
+    assert snapshot["gallery"]["identity_count"] == 1
+    assert snapshot["identities"] == [
+        {
+            "id": enrolled["identity"]["id"],
+            "name": "Ada",
+            "sample_count": 1,
+            "samples": [{"id": enrolled["sample"]["id"]}],
+        }
+    ]
+    assert "embedding" not in json.dumps(snapshot)
+
+
+def test_corrupt_catalog_does_not_hide_healthy_galleries_or_allow_model_deletion(
+    tmp_path, monkeypatch
+):
+    service, healthy, _, _, _ = _setup(tmp_path, monkeypatch)
+    corrupt_id = "a" * 32
+    corrupt_dir = service.root / corrupt_id
+    corrupt_dir.mkdir()
+    corrupt_catalog = corrupt_dir / "catalog.json"
+    corrupt_bytes = b'{"version":1,"id":"wrong","identities":[]}'
+    corrupt_catalog.write_bytes(corrupt_bytes)
+
+    result = service.list_galleries()
+
+    assert [item["id"] for item in result["galleries"]] == [healthy["id"]]
+    assert result["error"] == "One or more face galleries could not be loaded"
+    assert result["errors"] == [
+        {"gallery_id": corrupt_id, "error": "Gallery catalog is invalid"}
+    ]
+    assert corrupt_catalog.read_bytes() == corrupt_bytes
+    with pytest.raises(RuntimeError, match="unreadable face gallery"):
+        service.model_references("d1")
 
 
 def test_gallery_reload_uses_changed_atomic_export(tmp_path, monkeypatch):
