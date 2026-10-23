@@ -3,14 +3,18 @@
 import base64
 import json
 import threading
+import time
 from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import cv2
+import numpy as np
 import pytest
 
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import CameraConfig
+from spyder_cctv.cv.contracts import VisionUnavailable
 from spyder_cctv.device_services import DeviceServices
 from spyder_cctv.face_gallery import FaceEnrollmentService
 from spyder_cctv.web import create_server
@@ -253,6 +257,18 @@ def test_gallery_workflow_prepares_recognition_and_matches_runtime(services):
     assert options["identity_gallery"] == str(service.galleries.gallery_path(gid))
     assert options["recognition_threshold"] == 0.65
     assert "classifier_model" not in options
+    # Even an in-place replacement with preserved timestamps must be rehashed
+    # at workflow preparation, without adding hashing to every frame evaluation.
+    import os
+    from pathlib import Path
+
+    recognizer = Path(service.models.paths["recognizer"])
+    original_stat = recognizer.stat()
+    recognizer.write_bytes(b"newweights")
+    assert recognizer.stat().st_size == original_stat.st_size
+    os.utime(recognizer, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    with pytest.raises(VisionUnavailable, match="changed or is unavailable"):
+        service.workflows._prepare_model_bindings(graph)
 
 
 def test_face_api_requires_control_header_and_serves_bundled_assets(tmp_path):
@@ -326,3 +342,214 @@ def test_device_actions_reject_non_text_ids_without_request_failure(services):
         service.post(
             ["api", "faces", "galleries", gid, "enroll"], {"identity_name": "Ada", "camera_id": []}
         )
+
+
+def test_running_camera_enrollment_waits_for_first_raw_preview_frame(services, monkeypatch):
+    service, _ = services
+    gid = create_gallery(service)["id"]
+    captures = []
+
+    class LiveCapture:
+        def __init__(self, source):
+            captures.append(self)
+
+        def read(self):
+            return True, np.full((32, 48, 3), (0, 200, 0), dtype=np.uint8)
+
+        def close(self):
+            pass
+
+    service.manager._worker_options["capture_factory"] = LiveCapture
+    service.manager.add(CameraConfig("front", 0, fps=30, pipeline="none"))
+    worker = service.manager.get_worker("front")
+    worker.start()
+    deadline = time.monotonic() + 2
+    while worker.jpeg() is None and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert worker.status()["state"] == "running"
+    assert worker.jpeg() is not None
+    calls = []
+
+    def enroll(gallery_id, identity_name, image_bytes, *, face_index=None):
+        decoded = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        assert decoded is not None
+        assert abs(float(decoded[:, :, 1].mean()) - 200) < 3
+        calls.append(gallery_id)
+        return {"identity_id": "enrolled"}
+
+    monkeypatch.setattr(service.galleries, "enroll", enroll)
+    parts = ["api", "faces", "galleries", gid, "enroll"]
+    result = service.post(parts, {"identity_name": "Ada", "camera_id": "front"})
+    assert result["identity_id"] == "enrolled"
+    assert calls == [gid]
+    assert len(captures) == 1
+    # A later enrollment must warm an expired preview lease as well.
+    with worker._lock:
+        worker._raw_preview_requested_until = 0
+        worker._preview_raw = None
+    result = service.post(parts, {"identity_name": "Ada", "camera_id": "front"})
+    assert result["identity_id"] == "enrolled"
+    assert len(captures) == 1
+    worker.stop()
+    with pytest.raises(ValueError, match="Start the selected camera"):
+        service.post(parts, {"identity_name": "Ada", "camera_id": "front"})
+    assert len(captures) == 1
+    assert calls == [gid, gid]
+
+
+@pytest.mark.parametrize(
+    "failure", [ValueError("Invalid face index"), RuntimeError("Enrollment is busy")]
+)
+def test_face_selection_can_retry_after_validation_or_busy_failure(services, monkeypatch, failure):
+    service, _ = services
+    gid = create_gallery(service)["id"]
+    count = 0
+
+    def enroll(gallery_id, name, image, *, face_index=None):
+        nonlocal count
+        count += 1
+        if count == 1:
+            return {"needs_face_selection": True, "candidates": [{"index": 0}]}
+        if count == 2:
+            raise failure
+        assert image == b"original"
+        return {"identity_id": "saved"}
+
+    monkeypatch.setattr(service.galleries, "enroll", enroll)
+    parts = ["api", "faces", "galleries", gid, "enroll"]
+    first = service.post(
+        parts, {"identity_name": "Ada", "image_base64": base64.b64encode(b"original").decode()}
+    )
+    retry = {"identity_name": "Ada", "enrollment_token": first["enrollment_token"], "face_index": 0}
+    with pytest.raises(type(failure), match=str(failure)):
+        service.post(parts, retry)
+    assert service.post(parts, retry)["identity_id"] == "saved"
+
+
+def test_wrong_gallery_does_not_consume_another_gallery_face_selection(services, monkeypatch):
+    service, _ = services
+    gid = create_gallery(service)["id"]
+    other_gid = create_gallery(service)["id"]
+
+    def enroll(gallery_id, name, image, *, face_index=None):
+        if face_index is None:
+            return {"needs_face_selection": True, "candidates": [{"index": 0}]}
+        return {"identity_id": "saved"}
+
+    monkeypatch.setattr(service.galleries, "enroll", enroll)
+    parts = ["api", "faces", "galleries", gid, "enroll"]
+    first = service.post(
+        parts, {"identity_name": "Ada", "image_base64": base64.b64encode(b"original").decode()}
+    )
+    retry = {"identity_name": "Ada", "enrollment_token": first["enrollment_token"], "face_index": 0}
+    with pytest.raises(ValueError, match="selection"):
+        service.post(["api", "faces", "galleries", other_gid, "enroll"], retry)
+    assert service.post(parts, retry)["identity_id"] == "saved"
+
+
+def test_face_selection_has_one_concurrent_owner(services, monkeypatch):
+    service, _ = services
+    gid = create_gallery(service)["id"]
+    entered, release = threading.Event(), threading.Event()
+    writes = []
+
+    def enroll(gallery_id, name, image, *, face_index=None):
+        if face_index is None:
+            return {"needs_face_selection": True, "candidates": [{"index": 0}]}
+        entered.set()
+        assert release.wait(2)
+        writes.append(name)
+        return {"identity_id": "saved"}
+
+    monkeypatch.setattr(service.galleries, "enroll", enroll)
+    parts = ["api", "faces", "galleries", gid, "enroll"]
+    first = service.post(
+        parts, {"identity_name": "Ada", "image_base64": base64.b64encode(b"original").decode()}
+    )
+    retry = {"identity_name": "Ada", "enrollment_token": first["enrollment_token"], "face_index": 0}
+    results = []
+    owner = threading.Thread(target=lambda: results.append(service.post(parts, retry)))
+    owner.start()
+    try:
+        assert entered.wait(1)
+        with pytest.raises(RuntimeError, match="already being processed"):
+            service.post(parts, retry)
+    finally:
+        release.set()
+        owner.join(2)
+    assert not owner.is_alive()
+    assert results == [{"identity_id": "saved"}]
+    assert writes == ["Ada"]
+    with pytest.raises(ValueError, match="selection"):
+        service.post(parts, retry)
+
+
+def test_first_camera_enrollment_over_http_uses_shared_capture(tmp_path, monkeypatch):
+    import spyder_cctv.web as web
+
+    captures = []
+
+    class LiveCapture:
+        def __init__(self, source):
+            captures.append(self)
+
+        def read(self):
+            return True, np.full((32, 48, 3), (0, 200, 0), dtype=np.uint8)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(web, "ModelLibrary", lambda _: Models(tmp_path))
+    received = []
+
+    def enroll(self, gallery_id, name, image, *, face_index=None):
+        decoded = cv2.imdecode(np.frombuffer(image, dtype=np.uint8), cv2.IMREAD_COLOR)
+        assert decoded is not None and decoded.shape == (32, 48, 3)
+        received.append(name)
+        return {"identity_id": "saved"}
+
+    monkeypatch.setattr(FaceEnrollmentService, "enroll", enroll)
+    manager = CameraManager(
+        [CameraConfig("front", 0, fps=30, pipeline="none")],
+        config_path=tmp_path / "config.json",
+        capture_factory=LiveCapture,
+    )
+    server = create_server(manager, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = "http://127.0.0.1:" + str(server.server_port)
+
+    def post(path, data):
+        request = Request(
+            url + path,
+            data=json.dumps(data).encode(),
+            headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+        )
+        with urlopen(request, timeout=5) as response:
+            return json.load(response)
+
+    try:
+        manager.get_worker("front").start()
+        deadline = time.monotonic() + 2
+        while manager.get_worker("front").jpeg() is None and time.monotonic() < deadline:
+            time.sleep(0.005)
+        gallery = post(
+            "/api/faces/galleries",
+            {
+                "name": "Fixture",
+                "detector_model_id": "detector",
+                "recognition_model_id": "recognizer",
+            },
+        )
+        result = post(
+            "/api/faces/galleries/" + gallery["id"] + "/enroll",
+            {"identity_name": "Ada", "camera_id": "front"},
+        )
+        assert result == {"identity_id": "saved"}
+        assert received == ["Ada"]
+        assert len(captures) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        manager.close()
+        thread.join(2)

@@ -538,11 +538,7 @@ def test_raw_preview_lease_keeps_frames_fresh_without_vision_demand():
         wait_for(lambda: worker.status()["frames"] >= 3)
         assert pipelines == []
         assert worker.vision_snapshot()["runtime"]["state"] == "idle"
-        deadline = time.monotonic() + 0.15
-        raw = None
-        while time.monotonic() < deadline and raw is None:
-            raw = worker.raw_frame()
-            time.sleep(0.005)
+        raw = worker.raw_frame(timeout=0.15)
         assert raw is not None
         initial_pixel = int(raw[0, 0, 0])
         time.sleep(0.04)
@@ -703,3 +699,42 @@ def test_rapid_pause_resume_serializes_runtime_activity_transitions():
     finally:
         release_pause.set()
         manager.close()
+
+
+@pytest.mark.parametrize("transition", ["stop", "session"])
+def test_raw_frame_wait_releases_lock_and_cancels_on_capture_transition(transition):
+    import numpy as np
+
+    worker = CameraWorker(CameraConfig("front", 0, pipeline="none"))
+    with worker._lock:
+        worker._state = "running"
+        worker._capture_session = "before"
+    result = []
+    waiter = threading.Thread(target=lambda: result.append(worker.raw_frame(timeout=2)))
+    waiter.start()
+    try:
+        wait_for(lambda: worker._raw_preview_requested_until > 0)
+        if transition == "stop":
+            worker.request_stop()
+        else:
+            with worker._preview_ready:
+                worker._capture_session = "after"
+                worker._preview_raw = np.ones((2, 2, 3), dtype=np.uint8)
+                worker._preview_updated = time.monotonic()
+                worker._preview_ready.notify_all()
+        waiter.join(0.5)
+        assert not waiter.is_alive()
+        assert result == [None]
+    finally:
+        worker.request_stop()
+        waiter.join(2)
+
+
+def test_raw_frame_wait_is_bounded_without_new_frames():
+    worker = CameraWorker(CameraConfig("front", 0, pipeline="none"))
+    with worker._lock:
+        worker._state = "running"
+    began = time.monotonic()
+    assert worker.raw_frame(timeout=0.05) is None
+    assert time.monotonic() - began < 0.5
+    worker.request_stop()
