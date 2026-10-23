@@ -100,6 +100,35 @@ def test_snapshot_frames_are_immutable_and_share_jpeg_bytes():
         frame.timestamp = 101
 
 
+def test_annotations_are_defensive_copies_and_count_toward_buffer_limits():
+    clock = FakeClock()
+    annotations = [{"bbox": [0.1, 0.2, 0.3, 0.4], "label": "person", "kind": "detection"}]
+    jpeg = b"jpeg"
+    annotation_size = len(b'{"bbox":[0.1,0.2,0.3,0.4],"label":"person","kind":"detection"}')
+    buffer = PreEventBuffer(
+        max_bytes=len(jpeg) + annotation_size - 1,
+        per_camera_bytes=len(jpeg) + annotation_size - 1,
+        clock=clock,
+    )
+    buffer.configure({"cam": 2})
+    assert not buffer.push("cam", jpeg, 100, "session", annotations=annotations)
+    assert buffer.status()["total_bytes"] == 0
+
+    buffer = PreEventBuffer(
+        max_bytes=len(jpeg) + annotation_size,
+        per_camera_bytes=len(jpeg) + annotation_size,
+        clock=clock,
+    )
+    buffer.configure({"cam": 2})
+    assert buffer.push("cam", jpeg, 100, "session", annotations=annotations)
+    annotations[0]["bbox"][0] = 99
+    frame = buffer.snapshot("cam", 2)[0]
+    assert frame.annotations[0]["bbox"] == [0.1, 0.2, 0.3, 0.4]
+    frame.annotations[0]["bbox"][0] = 88
+    assert buffer.snapshot("cam", 2)[0].annotations[0]["bbox"] == [0.1, 0.2, 0.3, 0.4]
+    assert buffer.status()["total_bytes"] == len(jpeg) + annotation_size
+
+
 def test_thread_safe_pushes_keep_byte_accounting_consistent():
     clock = FakeClock()
     buffer = PreEventBuffer(max_bytes=10_000, per_camera_bytes=10_000, clock=clock)
