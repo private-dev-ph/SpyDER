@@ -76,6 +76,7 @@ class CameraWorker:
         self._state = "stopped"
         self._error: str | None = None
         self._jpeg: bytes | None = None
+        self._recording_jpeg: bytes | None = None
         self._preview_raw: Any = None
         self._preview_updated = 0.0
         self._vision_preview_requested_until = 0.0
@@ -364,6 +365,7 @@ class CameraWorker:
                 self._pre_event_buffer.clear(self.config.id)
             self._state, self._error = "starting", None
             self._jpeg, self._updated = None, None
+            self._recording_jpeg = None
             self._metadata, self._frames = {}, 0
             if self._workflow_vision_required is not None:
                 self._vision_active = self._vision_demanded_locked()
@@ -392,6 +394,7 @@ class CameraWorker:
             if self._thread is not None and self._thread.is_alive():
                 self._state = "stopping"
             self._jpeg, self._updated = None, None
+            self._recording_jpeg = None
             self._metadata = {}
             self._preview_raw = None
             self._analysis_runtime = None
@@ -514,11 +517,11 @@ class CameraWorker:
             if (
                 self._state != "running"
                 or self._updated is None
-                or self._jpeg is None
+                or self._recording_jpeg is None
                 or time.monotonic() - self._updated > max(2.0, 2.0 / self.config.fps)
             ):
                 return None
-            return BufferedFrame(self._updated, self._jpeg, self._capture_session)
+            return BufferedFrame(self._updated, self._recording_jpeg, self._capture_session)
 
     def _can_reconnect(self) -> bool:
         source = self.config.source
@@ -720,6 +723,13 @@ class CameraWorker:
                     with self._lock:
                         self._analysis_runtime = analysis
                         self._analysis_applied = revision
+                vision_process = pipeline_name != "vision" or vision_demanded
+                pipeline_may_annotate = pipeline is not None and vision_process and not (
+                    self._uses_default_pipeline and pipeline_name == "none"
+                )
+                clean_jpeg = (
+                    self._encoder(frame) if analysis is not None or pipeline_may_annotate else None
+                )
                 analysis_result = (
                     analysis.process(frame)
                     if analysis is not None
@@ -731,7 +741,6 @@ class CameraWorker:
                     }
                 )
                 original_frame = frame
-                vision_process = pipeline_name != "vision" or vision_demanded
                 if pipeline is not None and vision_process:
                     frame, metadata = pipeline.process(frame)
                     if "cv" in metadata:
@@ -754,6 +763,8 @@ class CameraWorker:
                 if analysis_config.enabled or self._retiring_analysis is not None:
                     metadata["analysis"] = analysis_result
                 jpeg = self._encoder(frame)
+                if clean_jpeg is None:
+                    clean_jpeg = jpeg
                 with self._lock:
                     if self._stop.is_set():
                         break
@@ -765,13 +776,15 @@ class CameraWorker:
                             else {"state": "scheduled", "detections": []}
                         )
                         jpeg = self._encoder(frame)
-                    self._jpeg, self._metadata = jpeg, copy.deepcopy(metadata)
+                    self._jpeg, self._recording_jpeg, self._metadata = (
+                        jpeg, clean_jpeg, copy.deepcopy(metadata)
+                    )
                     self._updated = time.monotonic()
                     self._frames += 1
                     if self._pre_event_buffer is not None:
                         self._pre_event_buffer.push(
                             self.config.id,
-                            jpeg,
+                            clean_jpeg,
                             self._updated,
                             self._capture_session,
                         )
@@ -802,6 +815,7 @@ class CameraWorker:
                     if self._pre_event_buffer is not None:
                         self._pre_event_buffer.clear(self.config.id)
                     self._jpeg, self._updated = None, None
+                    self._recording_jpeg = None
                     self._preview_raw = None
                     self._analysis_runtime = None
                     self._metadata = {}
@@ -812,6 +826,7 @@ class CameraWorker:
             logger.warning("Capture or processing failed for camera %s", self.config.id)
             with self._lock:
                 self._state, self._error = "error", "Capture or processing failed"
+                self._jpeg, self._recording_jpeg, self._updated = None, None, None
                 self._preview_ready.notify_all()
                 if self._pre_event_buffer is not None:
                     self._pre_event_buffer.clear(self.config.id)
@@ -846,6 +861,7 @@ class CameraWorker:
                         self._state, self._error = "error", "Camera backend could not be released"
             with self._lock:
                 self._jpeg = None
+                self._recording_jpeg = None
                 if self._state not in ("error", "reconnecting"):
                     self._state = "stopped"
         with self._lock:

@@ -945,12 +945,15 @@ class RecordingService:
         for camera_id in ids:
             try:
                 worker = self.manager.get_worker(camera_id)
-                jpeg = worker.jpeg()
-                stamp = worker.status().get("frame_age_seconds")
+                # Live-view JPEGs can contain CV annotations. Recording samples
+                # carry clean pixels and their timestamp from the same capture.
+                sample = worker.recording_sample()
                 image = (
-                    cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR) if jpeg else None
+                    cv2.imdecode(np.frombuffer(sample.jpeg, np.uint8), cv2.IMREAD_COLOR)
+                    if sample is not None
+                    else None
                 )
-                if image is None or stamp is None or stamp > 2.0:
+                if sample is None or not 0 <= time.monotonic() - sample.timestamp <= 2.0:
                     image = None
             except (KeyError, RuntimeError, ValueError, cv2.error):
                 image = None
