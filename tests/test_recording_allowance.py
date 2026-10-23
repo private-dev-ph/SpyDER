@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import spyder_cctv.recording_allowance as allowance_module
+from spyder_cctv.pre_event import BufferedFrame
 from spyder_cctv.recording import RecordingService
 from spyder_cctv.recording_allowance import FINALIZE_RESERVE, MIN_ALLOWANCE, validate_policy
 from spyder_cctv.video_encoder import compress_recording
@@ -31,6 +32,9 @@ class Manager:
 
     def get_worker(self, camera_id):
         return self
+
+    def recording_sample(self):
+        return BufferedFrame(time.monotonic(), self.image, "storage-test-camera")
 
     def jpeg(self):
         return self.image
