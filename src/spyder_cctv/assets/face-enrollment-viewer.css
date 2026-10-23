@@ -283,3 +283,24 @@
     max-height: none;
   }
 }
+
+.fe-recording-picker {
+  width: min(620px, calc(100vw - 24px));
+  box-sizing: border-box;
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 24px;
+}
+.fe-recording-picker > label {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+}
+.fe-recording-picker select {
+  width: 100%;
+  min-width: 0;
+}
+.fe-recording-picker .fe-heading > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
