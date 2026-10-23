@@ -13,8 +13,9 @@ const html =
   '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/device-tools.css"><style>:root{--surface:#fffefa;--canvas:#f7f5ef;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--control-border:#8c8274;--focus:#830000;--accent:#be1a1a;--accent-hover:#830000;--danger:#bc0202;--gold-soft:#f8ebab}html[data-theme=dark]{--surface:#1e1c1b;--canvas:#141313;--ink:#f5efe4;--muted:#b0a69b;--border:#37312c;--focus:#f7d87f;--danger:#ff827b}</style></head><body><main><div id="face-gallery-tools"></div><div id="onvif-camera-tools"></div></main><script>' +
   'window.calls=[];window.runtimeErrors=[];window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;calls.push({path,method,body});let data={};' +
   'if(path==="/api/models")data={models:[{id:"det-1",name:"Detector",engine:"insightface",metadata:{model_type:"face_detection"}},{id:"rec-1",name:"Recognizer",engine:"insightface",metadata:{model_type:"face_recognition"}}]};' +
-  'else if(path==="/api/faces/galleries"&&method==="GET")data={galleries:[{id:"g1",name:"Lobby",identity_count:1,sample_count:1}]};' +
+  'else if(path==="/api/faces/galleries"&&method==="GET")data={galleries:[{id:"g1",name:"Lobby",identity_count:1,sample_count:1},{id:"g2",name:"Office",identity_count:0,sample_count:0}]};' +
   'else if(path==="/api/faces/galleries/g1"&&method==="GET")data={id:"g1",name:"Lobby",detector_model_id:"det-1",recognition_model_id:"rec-1",identities:[{id:"i1",name:"Ada",samples:[{id:"s1"}]}]};' +
+  'else if(path==="/api/faces/galleries/g2"&&method==="GET")data={id:"g2",name:"Office",identities:[]};' +
   'else if(path==="/api/faces/galleries"&&method==="POST")data={id:"g1"};else if(path.endsWith("/enroll")&&method==="POST")data=body.enrollment_token?{}:{requires_selection:true,enrollment_token:"token-1",faces:[{index:0,bbox:[1,2,30,40],confidence:.97},{index:1,bbox:[50,5,80,40],confidence:.82}]};' +
   'else if(path==="/api/onvif/discover")data={devices:[{endpoint:"http://192.168.1.8/onvif/device_service",name:"Mock cam"}]};else if(path==="/api/onvif/connect")data={session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true},{token:"p-2",name:"No PTZ",ptz:true,ptz_caps:{pan_tilt:false,zoom:false}}],ptz:{pan_tilt:true,zoom:false}};else if(path==="/api/onvif/sessions")data={sessions:[{session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true}],ptz:{pan_tilt:true,zoom:false}}]};else if(path==="/api/onvif/add")data={message:"Added"};return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}})};</script><script src="/device-tools.js"></script></body></html>';
 const server = http.createServer(async (req, res) => {
@@ -138,7 +139,17 @@ try {
     sid,
   );
   await until("!!document.querySelector('#onvif-camera-tools .dt-card')");
-  assert.equal(await evaluate("calls.length"), 0);
+  await until(
+    "calls.some(x=>x.path==='/api/faces/galleries' && x.method==='GET')",
+  );
+  await until("!!document.querySelector('#face-gallery-tools [data-gid=g1]')");
+  assert.equal(
+    await evaluate(
+      "calls.filter(x=>x.path==='/api/faces/galleries' && x.method==='GET').length",
+    ),
+    1,
+    "Native mode loads galleries on mount",
+  );
   await click("#face-gallery-tools [data-refresh]");
   await until("!!document.querySelector('#face-gallery-tools [data-gid=g1]')");
   await click("#face-gallery-tools [data-gid=g1]");
@@ -199,6 +210,22 @@ try {
     enrollment_token: "token-1",
     face_index: 0,
   });
+  await evaluate(
+    "document.querySelector('#face-gallery-tools')._pending={identity_name:'Bea',enrollment_token:'stale-token',gallery_id:'g1'}",
+  );
+  await click("#face-gallery-tools [data-gid=g2]");
+  await until(
+    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
+  );
+  assert.equal(
+    await evaluate("!!document.querySelector('[data-confirm-face]')"),
+    false,
+    "Switching galleries clears a pending face selection",
+  );
+  await click("#face-gallery-tools [data-gid=g1]");
+  await until(
+    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Ada')",
+  );
   for (const selector of ["[data-rg]", "[data-ri]", "[data-xg]", "[data-xi]"]) {
     const before = await evaluate("calls.length");
     await click("#face-gallery-tools " + selector);
