@@ -506,5 +506,9 @@ class UnavailableFaceGalleries:
         # Fail closed: unreadable galleries might still own either model.
         return [{"gallery_name": "storage unavailable; restore access before deleting models"}]
 
+    def close(self):
+        """Allow application shutdown while biometric storage remains unavailable."""
+        return None
+
     def __getattr__(self, name):
         raise RuntimeError("Face gallery storage is unavailable")
