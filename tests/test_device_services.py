@@ -4,6 +4,7 @@ import base64
 import json
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -15,7 +16,7 @@ import pytest
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import CameraConfig
 from spyder_cctv.cv.contracts import VisionUnavailable
-from spyder_cctv.device_services import DeviceServices
+from spyder_cctv.device_services import DeviceServices, UnavailableFaceGalleries
 from spyder_cctv.face_gallery import FaceEnrollmentService
 from spyder_cctv.web import create_server
 from spyder_cctv.workflow import WorkflowService
@@ -344,6 +345,191 @@ def test_device_actions_reject_non_text_ids_without_request_failure(services):
         )
 
 
+def test_visual_review_stages_faces_and_enrolls_validated_batch_once(services, monkeypatch):
+    service, _ = services
+    gid = create_gallery(service)["id"]
+    calls = []
+
+    def analyze(gallery_id, image, roi):
+        calls.append((gallery_id, image, roi))
+        return {
+            "preview": "data:image/jpeg;base64,cHJldmlldw==",
+            "width": 640,
+            "height": 480,
+            "_provenance": (
+                service.galleries.get_gallery(gallery_id)["detector_model_id"],
+                service.galleries.get_gallery(gallery_id)["recognition_model_id"],
+                service.galleries.get_gallery(gallery_id)["detector_sha256"],
+                service.galleries.get_gallery(gallery_id)["recognition_sha256"],
+            ),
+            "faces": [
+                {
+                    "index": 0,
+                    "bbox": [0.1, 0.2, 0.3, 0.4],
+                    "confidence": 0.9,
+                    "thumbnail": "data:image/jpeg;base64,dGh1bWI=",
+                    "embedding": [1.0, 0.0],
+                },
+                {
+                    "index": 1,
+                    "bbox": [0.5, 0.2, 0.7, 0.4],
+                    "confidence": 0.8,
+                    "thumbnail": "data:image/jpeg;base64,dGh1bWI=",
+                    "embedding": [0.0, 1.0],
+                },
+            ],
+        }
+
+    monkeypatch.setattr(service.galleries, "analyze", analyze)
+    writes = []
+
+    fail_save = {"enabled": False}
+
+    def save_batch(gallery_id, name, embeddings):
+        if fail_save["enabled"]:
+            raise RuntimeError("mock atomic save failure")
+        writes.append((gallery_id, name, embeddings))
+        return {"saved": len(embeddings)}
+
+    monkeypatch.setattr(
+        service.galleries,
+        "enroll_embeddings",
+        save_batch,
+    )
+    path = ["api", "faces", "galleries", gid, "analyze"]
+    reviewed = service.post(
+        path, {"image_base64": base64.b64encode(b"frame").decode(), "roi": [0.1, 0.2, 0.5, 0.6]}
+    )
+    assert calls == [(gid, b"frame", [0.1, 0.2, 0.5, 0.6])]
+    assert len(reviewed["faces"]) == 2
+    assert all("embedding" not in face for face in reviewed["faces"])
+    assert writes == []
+
+    refs = [
+        {"review_token": reviewed["review_token"], "face_index": 0},
+        {"review_token": reviewed["review_token"], "face_index": 1},
+    ]
+    enroll = ["api", "faces", "galleries", gid, "enroll-reviewed"]
+    too_many = [{"review_token": f"unused-{index}", "face_index": 0} for index in range(21)]
+    with pytest.raises(ValueError, match="1 and 20"):
+        service.post(enroll, {"identity_name": "Ada", "selections": too_many})
+    with pytest.raises(ValueError, match="Duplicate"):
+        service.post(enroll, {"identity_name": "Ada", "selections": [refs[0], refs[0]]})
+    assert writes == []
+    other_gid = create_gallery(service)["id"]
+    with pytest.raises(ValueError, match="another gallery"):
+        service.post(
+            ["api", "faces", "galleries", other_gid, "enroll-reviewed"],
+            {"identity_name": "Ada", "selections": refs[:1]},
+        )
+    fail_save["enabled"] = True
+    with pytest.raises(RuntimeError, match="atomic save failure"):
+        service.post(enroll, {"identity_name": "Ada", "selections": refs})
+    fail_save["enabled"] = False
+    assert service.post(enroll, {"identity_name": "Ada", "selections": refs}) == {"saved": 2}
+    assert writes == [(gid, "Ada", [[1.0, 0.0], [0.0, 1.0]])]
+    with pytest.raises(ValueError, match="expired"):
+        service.post(enroll, {"identity_name": "Ada", "selections": refs})
+
+    expiring = service.post(path, {"image_base64": base64.b64encode(b"frame").decode()})
+    service._reviews[expiring["review_token"]]["expires"] = time.monotonic() - 1
+    with pytest.raises(ValueError, match="expired"):
+        service.post(
+            enroll,
+            {
+                "identity_name": "Ada",
+                "selections": [{"review_token": expiring["review_token"], "face_index": 0}],
+            },
+        )
+    reviews = [
+        service.post(path, {"image_base64": base64.b64encode(b"frame").decode()})["review_token"]
+        for _ in range(65)
+    ]
+    assert len(service._reviews) == 64
+    evicted = next(token for token in reviews if token not in service._reviews)
+    with pytest.raises(ValueError, match="expired"):
+        service.post(
+            enroll,
+            {
+                "identity_name": "Ada",
+                "selections": [{"review_token": evicted, "face_index": 0}],
+            },
+        )
+
+
+def test_shutdown_succeeds_when_face_gallery_storage_is_unavailable(services):
+    service, _ = services
+    service.galleries = UnavailableFaceGalleries()
+    service.close()
+
+
+def test_review_token_survives_model_change_and_can_retry(services, monkeypatch):
+    service, _ = services
+    gallery = create_gallery(service)
+    gid = gallery["id"]
+    metadata = service.galleries.get_gallery(gid)
+
+    def analyze(gallery_id, image, roi):
+        return {
+            "preview": "data:image/jpeg;base64,cA==",
+            "width": 32,
+            "height": 24,
+            "_provenance": (
+                metadata["detector_model_id"],
+                metadata["recognition_model_id"],
+                metadata["detector_sha256"],
+                metadata["recognition_sha256"],
+            ),
+            "faces": [{"index": 0, "bbox": [0, 0, 1, 1], "embedding": [1.0, 0.0]}],
+        }
+
+    monkeypatch.setattr(service.galleries, "analyze", analyze)
+    review = service.post(
+        ["api", "faces", "galleries", gid, "analyze"],
+        {"image_base64": base64.b64encode(b"image").decode()},
+    )
+    detector = Path(service.models.paths["detector"])
+    original = detector.read_bytes()
+    detector.write_bytes(b"changed detector weights")
+    enroll = ["api", "faces", "galleries", gid, "enroll-reviewed"]
+    selection = [{"review_token": review["review_token"], "face_index": 0}]
+    with pytest.raises(VisionUnavailable, match="changed or is unavailable"):
+        service.post(enroll, {"identity_name": "Ada", "selections": selection})
+    assert review["review_token"] in service._reviews
+    detector.write_bytes(original)
+    result = service.post(enroll, {"identity_name": "Ada", "selections": selection})
+    assert result["identity"]["sample_count"] == 1
+    assert review["review_token"] not in service._reviews
+
+
+def test_empty_face_review_is_successful(services, monkeypatch):
+    service, _ = services
+    gid = create_gallery(service)["id"]
+    metadata = service.galleries.get_gallery(gid)
+    monkeypatch.setattr(
+        service.galleries,
+        "analyze",
+        lambda *_args: {
+            "preview": "data:image/jpeg;base64,cA==",
+            "width": 4,
+            "height": 3,
+            "_provenance": (
+                metadata["detector_model_id"],
+                metadata["recognition_model_id"],
+                metadata["detector_sha256"],
+                metadata["recognition_sha256"],
+            ),
+            "faces": [],
+        },
+    )
+    result = service.post(
+        ["api", "faces", "galleries", gid, "analyze"],
+        {"image_base64": base64.b64encode(b"image").decode()},
+    )
+    assert result["faces"] == []
+    assert result["review_token"] in service._reviews
+
+
 def test_running_camera_enrollment_waits_for_first_raw_preview_frame(services, monkeypatch):
     service, _ = services
     gid = create_gallery(service)["id"]
@@ -548,6 +734,97 @@ def test_first_camera_enrollment_over_http_uses_shared_capture(tmp_path, monkeyp
         assert result == {"identity_id": "saved"}
         assert received == ["Ada"]
         assert len(captures) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        manager.close()
+        thread.join(2)
+
+
+def test_reviewed_face_api_over_http_stages_then_enrolls(tmp_path, monkeypatch):
+    import spyder_cctv.web as web
+
+    monkeypatch.setattr(web, "ModelLibrary", lambda _: Models(tmp_path))
+    staged = []
+    saved = []
+
+    def analyze(self, gallery_id, image, roi=None):
+        staged.append((gallery_id, image, roi))
+        return {
+            "preview": "data:image/jpeg;base64,cA==",
+            "width": 32,
+            "height": 24,
+            "_provenance": (
+                self.get_gallery(gallery_id)["detector_model_id"],
+                self.get_gallery(gallery_id)["recognition_model_id"],
+                self.get_gallery(gallery_id)["detector_sha256"],
+                self.get_gallery(gallery_id)["recognition_sha256"],
+            ),
+            "faces": [
+                {
+                    "index": 0,
+                    "bbox": [0.1, 0.2, 0.8, 0.9],
+                    "confidence": 0.9,
+                    "thumbnail": "data:image/jpeg;base64,dA==",
+                    "embedding": [1.0, 0.0],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(FaceEnrollmentService, "analyze", analyze)
+    monkeypatch.setattr(
+        FaceEnrollmentService,
+        "enroll_embeddings",
+        lambda self, gid, name, vectors: saved.append((gid, name, vectors)) or {"saved": True},
+    )
+    manager = CameraManager([], config_path=tmp_path / "http-config.json")
+    server = create_server(manager, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = "http://127.0.0.1:" + str(server.server_port)
+
+    def post(path, data):
+        request = Request(
+            url + path,
+            data=json.dumps(data).encode(),
+            headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+        )
+        with urlopen(request, timeout=5) as response:
+            return json.load(response)
+
+    try:
+        gallery = post(
+            "/api/faces/galleries",
+            {
+                "name": "Fixture",
+                "detector_model_id": "detector",
+                "recognition_model_id": "recognizer",
+            },
+        )
+        path = "/api/faces/galleries/" + gallery["id"]
+        review = post(
+            path + "/analyze",
+            {"image_base64": base64.b64encode(b"image").decode(), "roi": [0.1, 0.2, 0.5, 0.6]},
+        )
+        assert review["faces"] == [
+            {
+                "index": 0,
+                "bbox": [0.1, 0.2, 0.8, 0.9],
+                "confidence": 0.9,
+                "thumbnail": "data:image/jpeg;base64,dA==",
+            }
+        ]
+        assert staged == [(gallery["id"], b"image", [0.1, 0.2, 0.5, 0.6])]
+        assert saved == []
+        result = post(
+            path + "/enroll-reviewed",
+            {
+                "identity_name": "Ada",
+                "selections": [{"review_token": review["review_token"], "face_index": 0}],
+            },
+        )
+        assert result == {"saved": True}
+        assert saved == [(gallery["id"], "Ada", [[1.0, 0.0]])]
     finally:
         server.shutdown()
         server.server_close()
