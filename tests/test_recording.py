@@ -806,7 +806,20 @@ def test_saved_clip_uses_clean_pixels_while_live_view_keeps_detection_box(tmp_pa
         def process(self, frame):
             # Deliberately mutate input pixels, as an annotation engine may do.
             frame[20:70, 40:120] = (0, 255, 0)
-            return frame, {"detections": [{"label": "person"}]}
+            return frame, {
+                "cv": {
+                    "state": "ready",
+                    "frame_size": [160, 90],
+                    "detections": [
+                        {
+                            "label": "person",
+                            "bbox": [40, 20, 120, 70],
+                            "confidence": 0.95,
+                            "identity": "Ada",
+                        }
+                    ],
+                }
+            }
 
     manager = CameraManager(
         [CameraConfig("red", 0, fps=15)],
@@ -831,8 +844,51 @@ def test_saved_clip_uses_clean_pixels_while_live_view_keeps_detection_box(tmp_pa
         center = recorded[height // 3 : height * 2 // 3, width // 3 : width * 2 // 3]
         assert center[:, :, 2].mean() > 200
         assert center[:, :, 1].mean() < 40
+        chunk = service.overlay_chunk(item["id"], 0)
+        assert chunk["samples"][0]["time"] == 0
+        boxes = chunk["samples"][0]["boxes"]
+        assert boxes[0]["identity"] == "Ada" and boxes[0]["camera_id"] == "red"
+        assert boxes[0]["bbox"] == pytest.approx([0.25, 20 / 90, 0.5, 50 / 90], abs=0.0001)
     finally:
         if capture is not None:
             capture.release()
         service.close()
         manager.close()
+
+
+def test_recording_detection_boxes_follow_encoded_tile_letterboxing_and_camera_order():
+    from spyder_cctv.recording import _FrameBatch
+
+    images = _FrameBatch()
+    images.extend([np.zeros((100, 100, 3), np.uint8), np.zeros((100, 200, 3), np.uint8)])
+    images.annotations = [
+        ({"bbox": [0.25, 0.25, 0.5, 0.5], "label": "person"},),
+        ({"bbox": [0, 0, 1, 1], "label": "face"},),
+    ]
+    boxes = RecordingService._composite_annotations(images, ["square", "wide"], 640, 360)
+    assert boxes[0]["camera_id"] == "square"
+    assert boxes[0]["bbox"] == pytest.approx([0.125, 100 / 360, 0.25, 160 / 360])
+    assert boxes[1]["camera_id"] == "wide"
+    assert boxes[1]["bbox"] == pytest.approx([0.5, 100 / 360, 0.5, 160 / 360])
+    images.append(None)
+    images.annotations.append(())
+    reshaped = RecordingService._composite_annotations(
+        images, ["square", "wide", "offline"], 640, 360
+    )
+    assert len(reshaped) == 2
+    assert reshaped[0]["bbox"] != boxes[0]["bbox"]
+    assert images.annotations[0][0]["bbox"] == [0.25, 0.25, 0.5, 0.5]
+
+
+def test_recording_detection_geometry_scales_to_64_cameras():
+    from spyder_cctv.recording import _FrameBatch
+
+    images = _FrameBatch()
+    images.extend([np.zeros((18, 32, 3), np.uint8) for _ in range(64)])
+    images.annotations = [({"bbox": [0, 0, 1, 1], "label": "person"},) for _ in range(64)]
+    boxes = RecordingService._composite_annotations(
+        images, [f"cam-{i}" for i in range(64)], 1920, 1080
+    )
+    assert len(boxes) == 64
+    assert boxes[-1]["camera_id"] == "cam-63"
+    assert boxes[-1]["bbox"] == pytest.approx([0.875, 0.875, 0.125, 0.125])
