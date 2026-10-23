@@ -16,7 +16,7 @@ import pytest
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import CameraConfig
 from spyder_cctv.cv.contracts import VisionUnavailable
-from spyder_cctv.device_services import DeviceServices
+from spyder_cctv.device_services import DeviceServices, UnavailableFaceGalleries
 from spyder_cctv.face_gallery import FaceEnrollmentService
 from spyder_cctv.web import create_server
 from spyder_cctv.workflow import WorkflowService
@@ -455,6 +455,12 @@ def test_visual_review_stages_faces_and_enrolls_validated_batch_once(services, m
                 "selections": [{"review_token": evicted, "face_index": 0}],
             },
         )
+
+
+def test_shutdown_succeeds_when_face_gallery_storage_is_unavailable(services):
+    service, _ = services
+    service.galleries = UnavailableFaceGalleries()
+    service.close()
 
 
 def test_review_token_survives_model_change_and_can_retry(services, monkeypatch):

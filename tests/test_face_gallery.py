@@ -120,6 +120,7 @@ def test_visual_analysis_offsets_roi_faces_and_batch_saves_once(tmp_path, monkey
     assert (reviewed["width"], reviewed["height"]) == (128, 128)
     assert len(reviewed["faces"]) == 2
     assert np.allclose(reviewed["faces"][0]["bbox"], [33 / 128, 34 / 128, 72 / 128, 80 / 128])
+    assert reviewed["faces"][1]["bbox"][2] == 0.75
     assert _Align.last_landmarks[0].tolist() == [55.0, 12.0]
     assert _Align.last_image_shape == (64, 64, 3)
     assert reviewed["faces"][0]["thumbnail"].startswith("data:image/jpeg;base64,")
