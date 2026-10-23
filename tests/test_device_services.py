@@ -782,9 +782,9 @@ def test_reviewed_face_api_over_http_stages_then_enrolls(tmp_path, monkeypatch):
     monkeypatch.setattr(
         FaceEnrollmentService,
         "enroll_embeddings",
-        lambda self, gid, name, vectors, *, thumbnails=None: saved.append(
-            (gid, name, vectors, thumbnails)
-        ) or {"saved": True},
+        lambda self, gid, name, vectors, *, thumbnails=None: (
+            saved.append((gid, name, vectors, thumbnails)) or {"saved": True}
+        ),
     )
     manager = CameraManager([], config_path=tmp_path / "http-config.json")
     server = create_server(manager, 0)
@@ -833,9 +833,7 @@ def test_reviewed_face_api_over_http_stages_then_enrolls(tmp_path, monkeypatch):
             },
         )
         assert result == {"saved": True}
-        assert saved == [
-            (gallery["id"], "Ada", [[1.0, 0.0]], ["data:image/jpeg;base64,dA=="])
-        ]
+        assert saved == [(gallery["id"], "Ada", [[1.0, 0.0]], ["data:image/jpeg;base64,dA=="])]
     finally:
         server.shutdown()
         server.server_close()
