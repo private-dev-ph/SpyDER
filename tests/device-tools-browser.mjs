@@ -1,37 +1,50 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-const root = path.resolve("src/spyder_cctv/assets");
+const root = path.resolve(
+  process.env.SPYDER_ASSET_ROOT || "src/spyder_cctv/assets",
+);
 const profile = await mkdtemp(
   path.join(os.tmpdir(), "spyder-device-tools-browser-"),
 );
+const screenshotDir = path.resolve(".pytest_cache/enrollment-studio");
 const html =
-  '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/device-tools.css"><style>:root{--surface:#fffefa;--canvas:#f7f5ef;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--control-border:#8c8274;--focus:#830000;--accent:#be1a1a;--accent-hover:#830000;--danger:#bc0202;--gold-soft:#f8ebab}html[data-theme=dark]{--surface:#1e1c1b;--canvas:#141313;--ink:#f5efe4;--muted:#b0a69b;--border:#37312c;--focus:#f7d87f;--danger:#ff827b}</style></head><body><main><div id="face-gallery-tools"></div><div id="onvif-camera-tools"></div></main><script>' +
-  'window.calls=[];window.runtimeErrors=[];window.galleryIdentityCount=1;window.gallerySampleCount=1;window.holdEnroll=false;window.enrollStarted=false;window.resolveEnroll=null;window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;calls.push({path,method,body});if(window.holdEnroll&&path.endsWith("/enroll")&&!body.enrollment_token)return await new Promise(resolve=>{window.enrollStarted=true;window.resolveEnroll=()=>{window.holdEnroll=false;window.resolveEnroll=null;resolve(new Response(JSON.stringify({requires_selection:true,enrollment_token:"late-token",faces:[{index:0}]}),{status:200,headers:{"Content-Type":"application/json"}}))}});let data={};' +
+  '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/device-tools.css"><link rel="stylesheet" href="/face-enrollment-viewer.css"><style>:root{--surface:#fffefa;--canvas:#f7f5ef;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--control-border:#8c8274;--focus:#830000;--accent:#be1a1a;--accent-hover:#830000;--danger:#bc0202;--gold-soft:#f8ebab}html[data-theme=dark]{--surface:#1e1c1b;--canvas:#141313;--ink:#f5efe4;--muted:#b0a69b;--border:#37312c;--focus:#f7d87f;--danger:#ff827b}</style></head><body><main><div id="face-gallery-tools"></div><div id="onvif-camera-tools"></div></main><script>' +
+  'window.testJpeg=(()=>{const c=document.createElement("canvas");c.width=32;c.height=32;c.getContext("2d").fillRect(0,0,32,32);return c.toDataURL("image/jpeg")})();const nativeFetch=window.fetch.bind(window);window.calls=[];window.runtimeErrors=[];window.galleryIdentityCount=1;window.gallerySampleCount=1;window.holdAnalyze=false;window.analyzeStarted=false;window.resolveAnalyze=null;window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;if(path==="/test-video.mp4")return nativeFetch(url,opts);calls.push({path,method,body});if(window.holdAnalyze&&path.endsWith("/analyze"))return await new Promise(resolve=>{window.analyzeStarted=true;window.resolveAnalyze=()=>{window.holdAnalyze=false;resolve(new Response(JSON.stringify({review_token:"late-review",preview:window.testJpeg,width:640,height:480,faces:[{index:0,bbox:[.1,.1,.4,.5],confidence:.97,thumbnail:window.testJpeg}]}),{status:200,headers:{"Content-Type":"application/json"}}))}});if(path.endsWith("/preview-frame"))return new Response(Uint8Array.from(atob(window.testJpeg.split(",")[1]),c=>c.charCodeAt(0)),{status:200,headers:{"Content-Type":"image/jpeg"}});let data={};' +
   'if(path==="/api/models")data={models:[{id:"det-1",name:"Detector",engine:"insightface",metadata:{model_type:"face_detection"}},{id:"rec-1",name:"Recognizer",engine:"insightface",metadata:{model_type:"face_recognition"}}]};' +
   'else if(path==="/api/faces/galleries"&&method==="GET")data={galleries:[{id:"g1",name:"Lobby",identity_count:window.galleryIdentityCount,sample_count:window.gallerySampleCount},{id:"g2",name:"Office",identity_count:0,sample_count:0}]};' +
   'else if(path.endsWith("/identities/i1/samples/s1/remove")){window.gallerySampleCount=0;data={};}' +
   'else if(path.endsWith("/identities/i1/remove")){window.galleryIdentityCount=0;window.gallerySampleCount=0;data={};}' +
   'else if(path==="/api/faces/galleries/g1"&&method==="GET")data={id:"g1",name:"Lobby",detector_model_id:"det-1",recognition_model_id:"rec-1",identities:window.galleryIdentityCount?[{id:"i1",name:"Ada",samples:window.gallerySampleCount?[{id:"s1"}]:[]}]:[]};' +
   'else if(path==="/api/faces/galleries/g2"&&method==="GET")data={id:"g2",name:"Office",identities:[]};' +
-  'else if(path==="/api/faces/galleries"&&method==="POST")data={id:"g1"};else if(path.endsWith("/enroll")&&method==="POST")data=body.enrollment_token?{}:{requires_selection:true,enrollment_token:"token-1",faces:[{index:0,bbox:[1,2,30,40],confidence:.97},{index:1,bbox:[50,5,80,40],confidence:.82}]};' +
-  'else if(path==="/api/onvif/discover")data={devices:[{endpoint:"http://192.168.1.8/onvif/device_service",name:"Mock cam"}]};else if(path==="/api/onvif/connect")data={session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true},{token:"p-2",name:"No PTZ",ptz:true,ptz_caps:{pan_tilt:false,zoom:false}}],ptz:{pan_tilt:true,zoom:false}};else if(path==="/api/onvif/sessions")data={sessions:[{session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true}],ptz:{pan_tilt:true,zoom:false}}]};else if(path==="/api/onvif/add")data={message:"Added"};return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}})};</script><script src="/device-tools.js"></script></body></html>';
+  'else if(path==="/api/faces/galleries"&&method==="POST")data={id:"g1"};else if(path.endsWith("/analyze")&&method==="POST")data={review_token:"review-1",preview:window.testJpeg,width:640,height:480,faces:[{index:0,bbox:[.1,.1,.4,.5],confidence:.97,thumbnail:window.testJpeg},{index:1,bbox:[.5,.1,.9,.5],confidence:.82,thumbnail:window.testJpeg}]};else if(path.endsWith("/enroll-reviewed")&&method==="POST")data={};' +
+  'else if(path==="/api/onvif/discover")data={devices:[{endpoint:"http://192.168.1.8/onvif/device_service",name:"Mock cam"}]};else if(path==="/api/onvif/connect")data={session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true},{token:"p-2",name:"No PTZ",ptz:true,ptz_caps:{pan_tilt:false,zoom:false}}],ptz:{pan_tilt:true,zoom:false}};else if(path==="/api/onvif/sessions")data={sessions:[{session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true}],ptz:{pan_tilt:true,zoom:false}}]};else if(path==="/api/onvif/add")data={message:"Added"};return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}})};</script><script src="/face-enrollment-viewer.js"></script><script src="/device-tools.js"></script></body></html>';
 const server = http.createServer(async (req, res) => {
   const name = new URL(req.url, "http://localhost").pathname;
+  if (name === "/test-video.mp4") {
+    res.setHeader("Content-Type", "video/mp4");
+    res.end(
+      await readFile(
+        path.resolve(root, "../../../tests/fixtures/enrollment-range.mp4"),
+      ),
+    );
+    return;
+  }
   if (name === "/") {
-    res.setHeader("Content-Type", "text/html");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(html);
     return;
   }
   const file =
-    name === "/device-tools.js"
-      ? "device-tools.js"
-      : name === "/device-tools.css"
-        ? "device-tools.css"
+    name === "/device-tools.js" || name === "/device-tools.css"
+      ? path.basename(name)
+      : name === "/face-enrollment-viewer.js" ||
+          name === "/face-enrollment-viewer.css"
+        ? path.basename(name)
         : null;
   if (!file) return res.writeHead(404).end();
   res.setHeader(
@@ -123,7 +136,9 @@ try {
         expr +
         "; " +
         JSON.stringify(
-          await evaluate("({text:document.body.innerText.slice(0,400),calls})"),
+          await evaluate(
+            "({text:document.body.innerText.slice(0,400),dialogs:Array.from(document.querySelectorAll('dialog')).map(d=>({className:d.className,open:d.open,html:d.innerHTML.slice(0,180)})),create:{busy:document.querySelector('#face-gallery-tools')?._creatingGallery,disabled:document.querySelector('#face-gallery-tools [data-create]')?.disabled},runtimeErrors,calls})",
+          ),
         ),
     );
   };
@@ -145,6 +160,9 @@ try {
     "calls.some(x=>x.path==='/api/faces/galleries' && x.method==='GET')",
   );
   await until("!!document.querySelector('#face-gallery-tools [data-gid=g1]')");
+  await evaluate(
+    "window.spyder.cameras=()=>[{id:'cam-1',name:'<img src=x onerror=window.pwned=1>'}]",
+  );
   assert.equal(
     await evaluate(
       "calls.filter(x=>x.path==='/api/faces/galleries' && x.method==='GET').length",
@@ -192,100 +210,223 @@ try {
     "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
   );
   await evaluate(`(() => {
-    window.holdEnroll=true;
-    FileReader.prototype.readAsDataURL=function(){window.fileReader=this;window.fileReadStarted=true};
-    const transfer=new DataTransfer();transfer.items.add(new File(['face'],'face.jpg',{type:'image/jpeg'}));
-    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='Before switch';form.elements.image.files=transfer.files;
-    form.querySelector('button').click();
+    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='';form.elements.camera_id.value='cam-1';form.querySelector('button').click();
   })()`);
-  await until("window.fileReadStarted === true");
-  await click("#face-gallery-tools [data-gid=g2]");
-  await until(
-    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
-  );
-  await evaluate(`(() => {
-    Object.defineProperty(window.fileReader,'result',{value:'data:image/jpeg;base64,ZmFrZQ=='});
-    window.fileReader.onload();
-  })()`);
-  await delay(100);
+  await until("!!document.querySelector('dialog.fe-studio[open]')");
   assert.equal(
-    await evaluate("calls.some(x=>x.body?.identity_name==='Before switch')"),
-    false,
-    "A file read completed after switching galleries is discarded before enrollment",
-  );
-  await evaluate("window.holdEnroll=false");
-  await click("#face-gallery-tools [data-gid=g1]");
-  await until(
-    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
-  );
-  await evaluate(`(() => {
-    window.holdEnroll=true;window.enrollStarted=false;
-    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='Late token';form.elements.camera_id.value='cam-1';form.querySelector('button').click();
-  })()`);
-  await until("window.enrollStarted === true");
-  await click("#face-gallery-tools [data-gid=g2]");
-  await until(
-    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
-  );
-  await evaluate("window.resolveEnroll()");
-  await delay(100);
-  assert.equal(
-    await evaluate("document.querySelector('#face-gallery-tools')._pending"),
-    undefined,
-    "Late face selections do not attach to the newly selected gallery",
-  );
-  await click("#face-gallery-tools [data-gid=g1]");
-  await until(
-    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
-  );
-  await evaluate(`(() => {
-    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='Draft name';form.elements.camera_id.value='cam-1';
-    const transfer=new DataTransfer();transfer.items.add(new File(['draft'],'draft.jpg',{type:'image/jpeg'}));form.elements.image.files=transfer.files;
-    const search=document.querySelector('[data-search]');search.value='Ada';search.dispatchEvent(new Event('input',{bubbles:true}));
-  })()`);
-  assert.deepEqual(
     await evaluate(
-      `(() => {const f=document.querySelector('[data-enroll]');return {name:f.elements.identity_name.value,camera:f.elements.camera_id.value,files:f.elements.image.files.length}})()`,
+      "!!document.querySelector('dialog.fe-studio img[onerror],dialog.fe-studio script')",
     ),
-    { name: "Draft name", camera: "cam-1", files: 1 },
-    "Searching preserves the enrollment draft and selected image",
-  );
-  await evaluate(
-    `(() => {const s=document.querySelector('[data-search]');s.value='';s.dispatchEvent(new Event('input',{bubbles:true}));const f=document.querySelector('[data-enroll]');f.reset()})()`,
-  );
-  await evaluate(
-    "(()=>{const f=document.querySelector('[data-enroll]');f.elements.identity_name.value='Bea';f.elements.camera_id.value='cam-1';f.querySelector('button[type=submit],button').click()})()",
-  );
-  await until("!!document.querySelector('[data-confirm-face]')");
-  const cand = await evaluate(
-    "document.querySelector('[data-choice]').innerText",
-  );
-  assert.match(cand, /97%/);
-  assert.match(cand, /1, 2, 30, 40/);
-  await click("#face-gallery-tools [data-confirm-face]");
-  await until(
-    "document.querySelector('.dt-status').textContent.includes('Face enrolled')",
-  );
-  const retry = await evaluate(
-    "calls.filter(x=>x.path.endsWith('/enroll')).at(-1).body",
-  );
-  assert.deepEqual(retry, {
-    identity_name: "Bea",
-    enrollment_token: "token-1",
-    face_index: 0,
-  });
-  await evaluate(
-    "document.querySelector('#face-gallery-tools')._pending={identity_name:'Bea',enrollment_token:'stale-token',gallery_id:'g1'}",
-  );
-  await click("#face-gallery-tools [data-gid=g2]");
-  await until(
-    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
+    false,
+    "Untrusted camera label renders as text, never markup",
   );
   assert.equal(
-    await evaluate("!!document.querySelector('[data-confirm-face]')"),
-    false,
-    "Switching galleries clears a pending face selection",
+    await evaluate("window.pwned"),
+    undefined,
+    "Untrusted camera label does not execute script",
   );
+  assert.equal(
+    await evaluate(
+      "calls.some(x=>x.path.endsWith('/analyze')||x.path.endsWith('/enroll-reviewed'))",
+    ),
+    false,
+    "Opening studio never analyzes or saves automatically",
+  );
+  await evaluate(
+    "document.querySelector('dialog.fe-studio [data-fe-camera]').dispatchEvent(new Event('change',{bubbles:true}))",
+  );
+  await evaluate(
+    "(()=>{const s=document.querySelector('dialog.fe-studio [data-fe-source]');s.value='image';s.dispatchEvent(new Event('change',{bubbles:true}))})()",
+  );
+  await evaluate(`(async()=>{
+    const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;canvas.getContext('2d').fillRect(0,0,32,32);
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg'));
+    const transfer=new DataTransfer();transfer.items.add(new File([blob],'face.jpg',{type:'image/jpeg'}));
+    const input=document.querySelector('dialog.fe-studio [data-fe-file]');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
+  await until(
+    "document.querySelector('dialog.fe-studio [data-fe-inspect]')?.disabled===false",
+  );
+  await evaluate(
+    "(()=>{const s=document.querySelector('dialog.fe-studio [data-fe-stage]'),r=s.getBoundingClientRect();s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;const p=(type,x,y)=>s.dispatchEvent(new PointerEvent(type,{pointerId:7,button:0,clientX:x,clientY:y,bubbles:true}));p('pointerdown',r.left+r.width*.1,r.top+r.height*.1);p('pointermove',r.right+20,r.bottom+20);p('pointerup',r.right+20,r.bottom+20)})()",
+  );
+  await click("dialog.fe-studio [data-fe-inspect]");
+  await until(
+    "!!document.querySelector('dialog.fe-studio [data-fe-candidate]')",
+  );
+  const analyzed = await evaluate("calls.find(x=>x.path.endsWith('/analyze'))");
+  assert.ok(
+    Array.isArray(analyzed.body.roi),
+    "ROI drag sends normalized crop to analyze API",
+  );
+  assert.ok(
+    analyzed.body.roi.every((n) => n >= 0 && n <= 1),
+    "ROI drag clamps crop coordinates to image bounds",
+  );
+  assert.ok(
+    analyzed.body.roi[0] < 0.2 &&
+      analyzed.body.roi[1] < 0.2 &&
+      analyzed.body.roi[2] > 0.75 &&
+      analyzed.body.roi[3] > 0.75,
+    "ROI drag uses normalized x, y, width, height values",
+  );
+  assert.equal(
+    await evaluate(
+      "Array.from(document.querySelectorAll('dialog.fe-studio [data-fe-candidate]')).some(b=>b.getAttribute('aria-pressed')==='true')",
+    ),
+    false,
+    "Review candidates start excluded",
+  );
+  assert.equal(
+    await evaluate("calls.some(x=>x.path.endsWith('/enroll-reviewed'))"),
+    false,
+    "Analysis never saves identity",
+  );
+  await evaluate(
+    "document.querySelector('dialog.fe-studio [data-fe-candidate]').click()",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('dialog.fe-studio [data-fe-candidate]').getAttribute('aria-pressed')",
+    ),
+    "true",
+    "Candidate toggle explicitly includes selected face",
+  );
+  await evaluate(
+    "document.querySelector('dialog.fe-studio [data-fe-name]').value=''",
+  );
+  await click("dialog.fe-studio [data-fe-save]");
+  await delay(100);
+  assert.equal(
+    await evaluate("calls.some(x=>x.path.endsWith('/enroll-reviewed'))"),
+    false,
+    "Save requires explicit identity name",
+  );
+  await evaluate(
+    "(()=>{const n=document.querySelector('dialog.fe-studio [data-fe-name]');n.value='Bea';n.dispatchEvent(new Event('input',{bubbles:true}))})()",
+  );
+  await click("dialog.fe-studio [data-fe-save]");
+  await until("calls.some(x=>x.path.endsWith('/enroll-reviewed'))");
+  const reviewed = await evaluate(
+    "calls.find(x=>x.path.endsWith('/enroll-reviewed'))",
+  );
+  assert.equal(reviewed.method, "POST");
+  assert.deepEqual(reviewed.body, {
+    identity_name: "Bea",
+    selections: [{ review_token: "review-1", face_index: 0 }],
+  });
+  assert.equal(
+    await evaluate(
+      "calls.some(x=>x.path.endsWith('/enroll')&&!x.path.endsWith('/enroll-reviewed'))",
+    ),
+    false,
+    "Legacy enroll endpoint is never used",
+  );
+  await until("!document.querySelector('dialog.fe-studio')");
+  await evaluate(
+    "(()=>{window.holdAnalyze=true;window.analyzeStarted=false;const f=document.querySelector('[data-enroll]');f.elements.camera_id.value='cam-1';f.querySelector('button').click()})()",
+  );
+  await until("!!document.querySelector('dialog.fe-studio[open]')");
+  await evaluate(
+    "(()=>{const s=document.querySelector('dialog.fe-studio [data-fe-source]');s.value='image';s.dispatchEvent(new Event('change',{bubbles:true}))})()",
+  );
+  await evaluate(
+    `(async()=>{const c=document.createElement('canvas');c.width=8;c.height=8;const b=await new Promise(r=>c.toBlob(r,'image/jpeg'));const t=new DataTransfer();t.items.add(new File([b],'late.jpg',{type:'image/jpeg'}));const f=document.querySelector('dialog.fe-studio [data-fe-file]');f.files=t.files;f.dispatchEvent(new Event('change',{bubbles:true}))})()`,
+  );
+  await until(
+    "document.querySelector('dialog.fe-studio [data-fe-inspect]')?.disabled===false",
+  );
+  await click("dialog.fe-studio [data-fe-inspect]");
+  await until("window.analyzeStarted===true");
+  await click("dialog.fe-studio [data-fe-close]");
+  await until("!document.querySelector('dialog.fe-studio')");
+  await evaluate("window.resolveAnalyze()");
+  await delay(100);
+  assert.equal(
+    await evaluate(
+      "!!document.querySelector('dialog.fe-studio [data-fe-candidate]')",
+    ),
+    false,
+    "Late analysis response after close cannot restore stale review candidates",
+  );
+  assert.equal(
+    await evaluate(
+      "calls.filter(x=>x.path.endsWith('/enroll-reviewed')).length",
+    ),
+    1,
+    "Late analysis response after close cannot commit another identity",
+  );
+  await evaluate(
+    "(()=>{const f=document.querySelector('[data-enroll]');f.elements.camera_id.value='cam-1';f.querySelector('button').click()})()",
+  );
+  await until("!!document.querySelector('dialog.fe-studio[open]')");
+  await evaluate(
+    "(()=>{const s=document.querySelector('dialog.fe-studio [data-fe-source]');s.value='video';s.dispatchEvent(new Event('change',{bubbles:true}))})()",
+  );
+  await evaluate(
+    `(async()=>{const response=await fetch('/test-video.mp4');const blob=await response.blob();const transfer=new DataTransfer();transfer.items.add(new File([blob],'enrollment-range.mp4',{type:'video/mp4'}));const input=document.querySelector('dialog.fe-studio [data-fe-file]');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}))})()`,
+  );
+  await until(
+    "document.querySelector('dialog.fe-studio [data-fe-sample-video]')?.disabled===false",
+  );
+  await evaluate(
+    "(()=>{const start=document.querySelector('dialog.fe-studio [data-fe-start]');start.value='1';start.dispatchEvent(new Event('input',{bubbles:true}));start.dispatchEvent(new Event('change',{bubbles:true}))})()",
+  );
+  await until(
+    "document.querySelector('dialog.fe-studio [data-fe-range]').textContent.includes('1.0s')",
+  );
+  const analyzesBeforeVideo = await evaluate(
+    "calls.filter(x=>x.path.endsWith('/analyze')).length",
+  );
+  const savesBeforeVideo = await evaluate(
+    "calls.filter(x=>x.path.endsWith('/enroll-reviewed')).length",
+  );
+  await click("dialog.fe-studio [data-fe-sample-video]");
+  await until(
+    "document.querySelectorAll('dialog.fe-studio [data-fe-candidate]').length===10",
+  );
+  const videoAnalyzes = await evaluate(
+    "calls.filter(x=>x.path.endsWith('/analyze')).slice(" +
+      analyzesBeforeVideo +
+      ")",
+  );
+  assert.equal(
+    videoAnalyzes.length,
+    5,
+    "Five-second selected range analyzes exactly five video frames",
+  );
+  assert.ok(
+    videoAnalyzes.every(
+      (x) =>
+        Object.keys(x.body).every((k) => k === "image_base64" || k === "roi") &&
+        typeof x.body.image_base64 === "string",
+    ),
+    "Video sends sampled JPEG frames, never the full video file",
+  );
+  const videoLabels = await evaluate(
+    "Array.from(document.querySelectorAll('dialog.fe-studio [data-fe-candidate] span')).map(e=>e.textContent)",
+  );
+  for (const stamp of ["1.0s", "2.0s", "3.0s", "4.0s", "5.0s"])
+    assert.ok(
+      videoLabels.some((label) => label.includes(stamp)),
+      "Video review includes sampled timestamp " + stamp,
+    );
+  assert.equal(
+    await evaluate(
+      "Array.from(document.querySelectorAll('dialog.fe-studio [data-fe-candidate]')).some(b=>b.getAttribute('aria-pressed')==='true')",
+    ),
+    false,
+    "Video samples remain unselected until user review",
+  );
+  assert.equal(
+    await evaluate(
+      "calls.filter(x=>x.path.endsWith('/enroll-reviewed')).length",
+    ),
+    savesBeforeVideo,
+    "Video inspection never saves before explicit confirmation",
+  );
+  await click("dialog.fe-studio [data-fe-close]");
+  await until("!document.querySelector('dialog.fe-studio')");
   await click("#face-gallery-tools [data-gid=g1]");
   await until(
     "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Ada')",
@@ -344,6 +485,7 @@ try {
   await until(
     `calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length>${readsBeforeRename}`,
   );
+  await until("!!document.querySelector('#face-gallery-tools [data-xs=s1]')");
   await click("#face-gallery-tools [data-xs=s1]");
   await until("!!document.querySelector('.dt-dialog[open]')");
   const readsBeforeSampleRemove = await evaluate(
@@ -418,12 +560,12 @@ try {
   );
   for (const v of [
     { width: 1280, height: 800 },
-    { width: 390, height: 700 },
+    { width: 390, height: 700, mobile: true },
     { width: 1100, height: 450 },
   ]) {
     await command(
       "Emulation.setDeviceMetricsOverride",
-      { ...v, deviceScaleFactor: 1, mobile: false },
+      { ...v, deviceScaleFactor: 1, mobile: v.mobile || false },
       sid,
     );
     for (const theme of ["light", "dark"]) {
@@ -440,6 +582,9 @@ try {
       assert.ok(
         box.left >= 0 && box.right <= v.width + 1,
         JSON.stringify(v) + "/" + theme + " panel outside viewport",
+      );
+      await until(
+        "!document.querySelector('dialog')&&!document.querySelector('#face-gallery-tools')._creatingGallery&&!document.querySelector('#face-gallery-tools [data-create]').disabled",
       );
       await click("#face-gallery-tools [data-create]");
       await until("!!document.querySelector('.dt-dialog[open]')");
@@ -469,11 +614,48 @@ try {
         JSON.stringify(v) + "/" + theme + " gallery dialog overflow",
       );
       await until("!document.querySelector('.dt-dialog')");
+      await evaluate(
+        "(()=>{const f=document.querySelector('[data-enroll]');f.elements.camera_id.value='cam-1';f.querySelector('button').click()})()",
+      );
+      await until("!!document.querySelector('dialog.fe-studio[open]')");
+      const studioFits = await evaluate(
+        "(()=>{const d=document.querySelector('dialog.fe-studio'),r=d.getBoundingClientRect();return {fits:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,scrollWidth:document.documentElement.scrollWidth,clientWidth:document.documentElement.clientWidth}})()",
+      );
+      assert.equal(
+        studioFits.fits,
+        true,
+        JSON.stringify(v) + "/" + theme + " enrollment studio outside viewport",
+      );
+      assert.ok(
+        studioFits.scrollWidth <= studioFits.clientWidth,
+        JSON.stringify(v) +
+          "/" +
+          theme +
+          " enrollment studio causes horizontal overflow",
+      );
+      if (theme === "light" && (v.width === 1280 || v.mobile)) {
+        await delay(250);
+        await mkdir(screenshotDir, { recursive: true });
+        const shot = await command(
+          "Page.captureScreenshot",
+          { format: "png" },
+          sid,
+        );
+        await writeFile(
+          path.join(screenshotDir, v.mobile ? "mobile.png" : "desktop.png"),
+          Buffer.from(shot.data, "base64"),
+        );
+      }
+      await click("dialog.fe-studio [data-fe-close]");
+      await until("!document.querySelector('dialog.fe-studio')");
     }
   }
   assert.equal(
-    await evaluate("calls.some(x=>x.path.startsWith('/api/cameras/'))"),
-    false,
+    await evaluate(
+      "calls.some(x=>x.path==='/api/cameras/cam-1/preview-frame'&&x.method==='GET')",
+    ),
+    true,
+    "Enrollment studio previews selected camera through mocked JPEG endpoint",
   );
   assert.deepEqual(await evaluate("runtimeErrors"), []);
   await command(
@@ -493,8 +675,15 @@ try {
     ),
     true,
   );
+  assert.equal(
+    await evaluate(
+      "calls.some(x=>x.path.includes('/analyze')||x.path.includes('/enroll-reviewed')||x.path.startsWith('/api/cameras/'))",
+    ),
+    false,
+    "Showcase enrollment preview and review make zero API calls",
+  );
   console.log(
-    "PASS: mocked gallery enrollment token flow, ONVIF discovery/connect/PTZ, six viewport/theme checks, showcase zero API calls",
+    "PASS: visual enrollment review, ROI, local video sampling, ONVIF controls, responsive themes, showcase zero API calls",
   );
 } finally {
   socket?.close();

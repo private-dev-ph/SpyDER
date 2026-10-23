@@ -16,21 +16,42 @@ No models, face samples, or camera credentials are sent to the showcase server.
 2. Open **Vision Lab → Face galleries**. Existing galleries load automatically.
    Choose **Create gallery** to add a collection. Give the
    gallery a name and select its detector and recognition models.
-3. Select the gallery, enter an identity name, and choose either a running camera
-   or a JPEG/PNG image. Choose **Process enrollment**. Keep the camera running:
-   SpyDER waits briefly for the next raw frame without opening another capture.
-   A paused camera cannot supply a frame.
-4. If several faces are detected, select the intended face. This uses the same
-   captured image, even if the live camera changes. Selection expires after
-   60 seconds. Validation or busy errors can be retried against that same image
-   until the selection expires. Changing the gallery or identity requires a new
-   enrollment request. The application never opens a second camera for enrollment.
-5. Repeat with the same name to add samples under different lighting or angles.
-   Identity names are unique within a gallery, ignoring capitalization.
+3. Select the gallery and choose **Review enrollment**. The enrollment studio
+   accepts a running camera, a JPEG/PNG image, or a browser-supported video.
+   A camera preview uses the existing capture worker; it does not start or stop
+   the camera. Keep the camera running while inspecting it.
+4. Drag a focus rectangle over the person you want to enroll. The focus fields
+   also accept percentages for keyboard control. Choose **Analyze current frame**
+   to freeze and inspect the exact frame used by the detector. Face boxes and
+   cropped sample cards show what was found. No samples are selected automatically.
+5. For video, choose a 5–10 second range using the start slider. **Play selected
+   range** previews that segment. **Inspect range** checks up to ten evenly spaced
+   frames within it. The browser decodes the original video and sends only those
+   JPEG frames to the local application, never the full video. Browser-extracted
+   frames are capped at 3,840 pixels on the longest side and 8 megapixels. Cancel inspection
+   to stop processing further frames. Supported formats depend on the browser;
+   MP4/H.264 and WebM are common choices. Videos must have a readable duration and
+   be at least five seconds long. The viewer accepts files up to 2 GiB.
+6. Select face boxes or sample cards belonging to the same person. Review the
+   crops across frames before using **Select all**. Enter the identity name and
+   choose **Save selected face samples** to save up to twenty samples together.
+   Nothing is enrolled merely by previewing or analyzing media. Reviews expire
+   after five minutes; inspect the source again if a review expires.
+7. Repeat with the same name to add samples under different lighting or angles.
+   Identity names are unique within a gallery, ignoring capitalization. Live
+   preview can be resumed to inspect another frame without closing the studio.
+
+The focus rectangle restricts where faces are detected; it does not track a person
+through the video. A different person entering that rectangle can also be detected.
+Check the resulting crops and exclude other people before saving. Each submitted
+frame is independently detected and aligned, and the reviewed batch is validated
+before a single gallery update is published.
 
 Enrollment stores normalized embeddings, model fingerprints, and identity names.
-It does not save source photographs. A pending multi-face selection temporarily
-holds its source image in RAM for up to 60 seconds. Keep enrollment images below
+It does not save source photographs. Source previews stay in the browser until
+the review is cleared or the viewer closes. Reviewed face embeddings expire from
+local server memory after five minutes. The older single-image API retains a pending multi-face
+selection in RAM for up to 60 seconds. Keep enrollment images below
 8 MiB; decoded JPEG/PNG images are limited to 24 megapixels.
 
 Search galleries and identities, rename entries, remove individual samples, or

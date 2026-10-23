@@ -289,6 +289,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     else "text/css; charset=utf-8",
                 )
             elif path in (
+                "/face-enrollment-viewer.js",
+                "/face-enrollment-viewer.css",
                 "/device-tools.js",
                 "/device-tools.css",
                 "/icons.svg",
