@@ -150,3 +150,11 @@ on discovery, connection, or adding a camera.
 
 Model licensing is separate from SpyDER's application license. Check the license
 of the weights you select before using or distributing them.
+
+### Enroll a person from a saved recording
+
+In **Recordings**, open a clip from the library or select it in **Timeline playback**. Seek to the person you want to enroll, then choose **Enroll someone**. SpyDER opens **Vision Lab - Face galleries** and asks which gallery should receive the profile. Choose a gallery and open the clip in Enrollment Studio. If you do not have a gallery yet, cancel the picker and create one on the Face galleries page first.
+
+The studio starts its selection at the playback position, adjusted near the end of a recording to keep a complete five-second range. Choose a range of 5-10 seconds, drag a focus area around one person, and use **Inspect range**. Review the detected face crops, select samples of the same person, enter their name, and save. Opening a recording never enrolls anyone automatically.
+
+Saved recordings use a sampled local preview, including formats your browser cannot play directly. The studio reads individual frames through the installed app rather than downloading the entire recording into browser memory. The original clip stays in the recording library; the gallery stores only the selected face vectors and small portrait crops. The Cloudflare showcase does not expose this native enrollment action or send recording frames to a cloud service. Clips must be at least five seconds long and remain available on disk.
