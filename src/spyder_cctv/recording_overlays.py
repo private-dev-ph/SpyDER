@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import gzip
-import itertools
 import json
 import math
 import os
 import re
 import tempfile
 import threading
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -55,9 +55,16 @@ def _clean_boxes(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ):
             raise ValueError("Invalid normalized bounding box")
         x, y, width, height = (float(value) for value in bbox)
-        if x < 0 or y < 0 or width < 0 or height < 0 or x + width > 1 or y + height > 1:
+        if (
+            x < 0
+            or y < 0
+            or width < 0
+            or height < 0
+            or x + width > 1 + 1e-9
+            or y + height > 1 + 1e-9
+        ):
             raise ValueError("Bounding box must be normalized xywh")
-        result: dict[str, Any] = {"bbox": [x, y, width, height]}
+        result: dict[str, Any] = {"bbox": [x, y, min(width, 1 - x), min(height, 1 - y)]}
         for key in ("camera_id", "kind", "label", "identity", "track_id"):
             value = box.get(key)
             if value is not None:
@@ -78,7 +85,7 @@ def _clean_boxes(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             raise ValueError("Label too long")
         confidence = box.get("confidence")
         if confidence is not None:
-            if not _finite_number(confidence):
+            if not _finite_number(confidence) or not 0 <= confidence <= 1:
                 raise ValueError("Invalid confidence")
             result["confidence"] = float(confidence)
         cleaned.append(result)
@@ -88,19 +95,37 @@ def _clean_boxes(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _validate_chunk(document: Any, expected_index: int) -> dict[str, Any] | None:
     if not isinstance(document, dict):
         raise ValueError("Invalid overlay chunk")
-    required = {"version", "media_id", "chunk_seconds", "index", "width", "height", "fps", "samples", "truncated"}
+    required = {
+        "version",
+        "media_id",
+        "chunk_seconds",
+        "index",
+        "width",
+        "height",
+        "fps",
+        "samples",
+        "truncated",
+    }
     if set(document) != required:
         raise ValueError("Invalid overlay chunk")
     if (
-        type(document["version"]) is not int or document["version"] != 1
-        or not isinstance(document["media_id"], str) or _MEDIA_ID.fullmatch(document["media_id"]) is None
-        or type(document["chunk_seconds"]) is not int or document["chunk_seconds"] != CHUNK_SECONDS
-        or type(document["index"]) is not int or document["index"] != expected_index
-        or type(document["width"]) is not int or document["width"] <= 0
-        or type(document["height"]) is not int or document["height"] <= 0
-        or not _finite_number(document["fps"]) or document["fps"] < 0
+        type(document["version"]) is not int
+        or document["version"] != 1
+        or not isinstance(document["media_id"], str)
+        or _MEDIA_ID.fullmatch(document["media_id"]) is None
+        or type(document["chunk_seconds"]) is not int
+        or document["chunk_seconds"] != CHUNK_SECONDS
+        or type(document["index"]) is not int
+        or document["index"] != expected_index
+        or type(document["width"]) is not int
+        or document["width"] <= 0
+        or type(document["height"]) is not int
+        or document["height"] <= 0
+        or not _finite_number(document["fps"])
+        or document["fps"] <= 0
         or type(document["truncated"]) is not bool
-        or not isinstance(document["samples"], list) or len(document["samples"]) > MAX_RECORDS
+        or not isinstance(document["samples"], list)
+        or len(document["samples"]) > MAX_RECORDS
     ):
         raise ValueError("Invalid overlay chunk")
     previous = -1.0
@@ -112,7 +137,12 @@ def _validate_chunk(document: Any, expected_index: int) -> dict[str, Any] | None
             timestamp = sample["time"]
             start = expected_index * CHUNK_SECONDS
             end = start + CHUNK_SECONDS
-            if not _finite_number(timestamp) or timestamp < start or timestamp >= end or timestamp < previous:
+            if (
+                not _finite_number(timestamp)
+                or timestamp < start
+                or timestamp >= end
+                or timestamp < previous
+            ):
                 raise ValueError("Invalid overlay timestamp")
             boxes = _clean_boxes(sample["boxes"])
             previous = float(timestamp)
@@ -120,15 +150,20 @@ def _validate_chunk(document: Any, expected_index: int) -> dict[str, Any] | None
     except (ValueError, OverflowError, TypeError):
         raise ValueError("Invalid overlay chunk") from None
     return {
-        "version": 1, "media_id": document["media_id"].lower(),
-        "chunk_seconds": CHUNK_SECONDS, "index": expected_index,
-        "width": document["width"], "height": document["height"], "fps": float(document["fps"]),
-        "samples": samples, "truncated": document["truncated"],
+        "version": 1,
+        "media_id": document["media_id"].lower(),
+        "chunk_seconds": CHUNK_SECONDS,
+        "index": expected_index,
+        "width": document["width"],
+        "height": document["height"],
+        "fps": float(document["fps"]),
+        "samples": samples,
+        "truncated": document["truncated"],
     }
 
 
 def read_chunk(directory: Path, media_id: str, index: int) -> dict[str, Any] | None:
-    """Read one validated chunk, returning None for missing or corrupt data."""
+    """Read one bounded chunk; missing files return None and corrupt files raise ValueError."""
     media_id = _valid_id(media_id)
     if type(index) is not int or not 0 <= index <= MAX_CHUNK_INDEX:
         raise ValueError("Invalid chunk index")
@@ -145,7 +180,16 @@ def read_chunk(directory: Path, media_id: str, index: int) -> dict[str, Any] | N
         document = json.loads(raw.decode("utf-8"))
     except FileNotFoundError:
         return None
-    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError, gzip.BadGzipFile, ValueError):
+    except (
+        OSError,
+        EOFError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        gzip.BadGzipFile,
+        zlib.error,
+        RecursionError,
+        ValueError,
+    ):
         raise ValueError("Invalid overlay chunk") from None
     validated = _validate_chunk(document, index)
     if validated is None:
@@ -163,9 +207,13 @@ def sidecar_paths(directory: Path, media_id: str) -> list[Path]:
     try:
         if _has_symlink_component(root):
             return []
-        for path in itertools.islice(root.iterdir(), (MAX_CHUNK_INDEX + 1) * 2):
+        for path in root.glob(f"{media_id}.overlays-*.json.gz"):
             match = _CHUNK_NAME.fullmatch(path.name)
-            if match and match.group(1).lower() == media_id and int(match.group(2)) <= MAX_CHUNK_INDEX:
+            if (
+                match
+                and match.group(1).lower() == media_id
+                and int(match.group(2)) <= MAX_CHUNK_INDEX
+            ):
                 result.append(path)
                 if len(result) >= MAX_CHUNK_INDEX + 1:
                     break
@@ -175,45 +223,39 @@ def sidecar_paths(directory: Path, media_id: str) -> list[Path]:
 
 
 def remove_sidecars(directory: Path, media_id: str) -> None:
-    """Remove only recognized sidecars and their temporary files for one media ID."""
+    """Remove only one clip's validated sidecars, without scanning into other paths."""
     media_id = _valid_id(media_id)
     root = Path(directory)
-    try:
-        if _has_symlink_component(root):
-            return
-        paths = list(itertools.islice(root.iterdir(), (MAX_CHUNK_INDEX + 1) * 2))
-    except OSError:
-        return
-    for path in paths[: MAX_CHUNK_INDEX * 2 + 2]:
-        match = _CHUNK_NAME.fullmatch(path.name)
-        temporary = _TEMP_NAME.fullmatch(path.name)
-        if (match and match.group(1).lower() == media_id and int(match.group(2)) <= MAX_CHUNK_INDEX) or (
-            temporary and temporary.group(1).lower() == media_id
-        ):
-            try:
-                path.unlink()
-            except OSError:
-                pass
+    if _has_symlink_component(root):
+        raise OSError("Overlay directory contains a symbolic link")
+    for pattern in (f"{media_id}.overlays-*.json.gz", f".{media_id}.overlays-*.tmp"):
+        for path in root.glob(pattern):
+            match = _CHUNK_NAME.fullmatch(path.name)
+            temporary = _TEMP_NAME.fullmatch(path.name)
+            if (match and int(match.group(2)) <= MAX_CHUNK_INDEX) or temporary:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
 
 
 def used_sidecar_bytes(directory: Path) -> int:
-    """Count actual size of recognized chunks and writer temporary files."""
+    """Stream every sidecar's on-disk size; a directory-size cutoff undercounts quotas."""
     total = 0
-    try:
-        root = Path(directory)
-        if _has_symlink_component(root):
-            return 0
-        paths = itertools.islice(root.iterdir(), (MAX_CHUNK_INDEX + 1) * 2)
-    except OSError:
+    root = Path(directory)
+    if _has_symlink_component(root):
         return 0
-    for path in paths:
-        if not (_CHUNK_NAME.fullmatch(path.name) or _TEMP_NAME.fullmatch(path.name)):
-            continue
-        try:
-            if not path.is_symlink() and path.is_file():
-                total += path.stat().st_size
-        except OSError:
-            continue
+    try:
+        for path in root.iterdir():
+            if not (_CHUNK_NAME.fullmatch(path.name) or _TEMP_NAME.fullmatch(path.name)):
+                continue
+            try:
+                if not path.is_symlink() and path.is_file():
+                    total += path.stat().st_size
+            except FileNotFoundError:
+                continue
+    except FileNotFoundError:
+        return 0
     return total
 
 
@@ -236,6 +278,7 @@ class OverlayWriter:
         self._truncated = False
         self._last_checkpoint = 0.0
         self._closed = False
+        self._last_time = -1.0
 
     def append(self, time_seconds: float, boxes: list[dict[str, Any]]) -> None:
         if not _finite_number(time_seconds) or time_seconds < 0:
@@ -245,6 +288,9 @@ class OverlayWriter:
             raise ValueError("Overlay timestamp exceeds supported duration")
         with self._lock:
             self._ensure_open()
+            if time_seconds < self._last_time:
+                raise ValueError("Overlay timestamps must be chronological")
+            self._last_time = float(time_seconds)
             rotated = False
             if self._index is None:
                 self._start_chunk(index)
@@ -294,46 +340,72 @@ class OverlayWriter:
             self._truncate(timestamp)
 
     def _sample_size(self, sample: dict[str, Any]) -> int:
-        return len(json.dumps(sample, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        return len(
+            json.dumps(sample, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
+                "utf-8"
+            )
+        )
 
     def _append_new_sample(self, sample: dict[str, Any]) -> None:
         self._encoded_samples_size += self._sample_size(sample) + (1 if self._samples else 0)
         self._samples.append(sample)
 
     def _replace_last_sample(self, sample: dict[str, Any]) -> None:
-        self._encoded_samples_size += self._sample_size(sample) - self._sample_size(self._samples[-1])
+        self._encoded_samples_size += self._sample_size(sample) - self._sample_size(
+            self._samples[-1]
+        )
         self._samples[-1] = sample
 
     def _within_budget(self) -> bool:
         header = {
-            "version": 1, "media_id": self.media_id, "chunk_seconds": CHUNK_SECONDS,
-            "index": self._index or 0, "width": self.width, "height": self.height,
-            "fps": self.fps, "samples": [], "truncated": self._truncated,
+            "version": 1,
+            "media_id": self.media_id,
+            "chunk_seconds": CHUNK_SECONDS,
+            "index": self._index or 0,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "samples": [],
+            "truncated": self._truncated,
         }
         overhead = len(json.dumps(header, separators=(",", ":")).encode("utf-8"))
         return overhead + self._encoded_samples_size <= MAX_DECODED_CHUNK_BYTES
 
+    def _pop_sample(self, index=-1) -> None:
+        removed = self._samples.pop(index)
+        self._encoded_samples_size -= self._sample_size(removed) + (1 if self._samples else 0)
+
     def _truncate(self, timestamp: float) -> None:
         self._truncated = True
         chunk_start = (self._index or 0) * CHUNK_SECONDS
-        clear_time = min(max(float(timestamp), float(chunk_start)), chunk_start + CHUNK_SECONDS - 1e-9)
-        if self._samples and clear_time < self._samples[-1]["time"]:
-            clear_time = self._samples[-1]["time"]
+        clear_time = min(
+            max(float(timestamp), float(chunk_start)), chunk_start + CHUNK_SECONDS - 1e-9
+        )
+        if self._samples:
+            clear_time = max(clear_time, self._samples[-1]["time"])
+        while self._samples and (len(self._samples) >= MAX_RECORDS or not self._within_budget()):
+            self._pop_sample()
         clear = {"time": clear_time, "boxes": []}
         if self._samples and clear_time == self._samples[-1]["time"]:
             self._replace_last_sample(clear)
-        elif len(self._samples) < MAX_RECORDS:
-            self._append_new_sample(clear)
         else:
-            self._replace_last_sample(clear)
+            self._append_new_sample(clear)
+        # Reserve room for the clearing event too; never publish an oversized chunk.
+        while len(self._samples) > 1 and not self._within_budget():
+            self._pop_sample(-2)
         self._current_boxes = []
 
     def _document(self) -> dict[str, Any]:
         return {
-            "version": 1, "media_id": self.media_id,
-            "chunk_seconds": CHUNK_SECONDS, "index": self._index or 0,
-            "width": self.width, "height": self.height, "fps": self.fps,
-            "samples": self._samples, "truncated": self._truncated,
+            "version": 1,
+            "media_id": self.media_id,
+            "chunk_seconds": CHUNK_SECONDS,
+            "index": self._index or 0,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "samples": self._samples,
+            "truncated": self._truncated,
         }
 
     def checkpoint(self) -> None:
@@ -342,20 +414,32 @@ class OverlayWriter:
             if self._index is None:
                 return
             document = self._document()
-            raw = json.dumps(document, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+            raw = json.dumps(
+                document, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
             if len(raw) > MAX_DECODED_CHUNK_BYTES:
                 self._truncate(self._samples[-1]["time"] if self._samples else 0.0)
-                raw = json.dumps(self._document(), ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+                raw = json.dumps(
+                    self._document(), ensure_ascii=False, separators=(",", ":"), allow_nan=False
+                ).encode("utf-8")
+            if len(raw) > MAX_DECODED_CHUNK_BYTES:
+                raise ValueError("Detection chunk cannot fit its safety budget")
+            if _has_symlink_component(self.directory):
+                raise OSError("Overlay directory contains a symbolic link")
             self.directory.mkdir(parents=True, exist_ok=True)
             if _has_symlink_component(self.directory):
                 raise OSError("Overlay directory contains a symbolic link")
             destination = self.directory / f"{self.media_id}.overlays-{self._index:06d}.json.gz"
             if destination.is_symlink():
                 raise OSError("Overlay destination is a symbolic link")
-            fd, temporary = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=self.directory)
+            fd, temporary = tempfile.mkstemp(
+                prefix=f".{destination.name}.", suffix=".tmp", dir=self.directory
+            )
             try:
                 with os.fdopen(fd, "wb") as raw_stream:
-                    with gzip.GzipFile(fileobj=raw_stream, mode="wb", compresslevel=3, mtime=0) as compressed:
+                    with gzip.GzipFile(
+                        fileobj=raw_stream, mode="wb", compresslevel=3, mtime=0
+                    ) as compressed:
                         compressed.write(raw)
                     raw_stream.flush()
                     os.fsync(raw_stream.fileno())

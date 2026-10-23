@@ -45,6 +45,8 @@ def export_showcase(output: Path) -> None:
         "event-library.js",
         "event-library.css",
         "recording-library.js",
+        "recording-overlays.js",
+        "recording-overlays.css",
         "recording-player.js",
         "recording-player.css",
         "recording-timeline.js",

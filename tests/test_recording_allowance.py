@@ -346,3 +346,24 @@ def test_quota_guard_interrupts_long_catchup_batch_and_saves_clip(service, monke
     wait(lambda: service.status()["state"] == "idle")
     assert service.status()["frames"] == 10
     assert len(service.status()["items"]) == 1
+
+
+def test_detection_chunks_count_toward_quota_and_follow_protection_and_deletion(service):
+    from spyder_cctv.recording_overlays import OverlayWriter, sidecar_paths
+
+    item = add_recording(service, size=1000)
+    writer = OverlayWriter(service.output_dir, item["id"], width=640, height=360, fps=8)
+    writer.append(0, [])
+    writer.close()
+    paths = sidecar_paths(service.output_dir, item["id"])
+    assert paths
+    service.allowance.invalidate_usage()
+    assert service.allowance.used_bytes() == 1000 + sum(path.stat().st_size for path in paths)
+    service.allowance.keep(item["id"], True)
+    with pytest.raises(RuntimeError, match="Protected"):
+        service.allowance.delete(item["id"])
+    assert all(path.exists() for path in paths)
+    service.allowance.keep(item["id"], False)
+    service.allowance.delete(item["id"])
+    assert not any(path.exists() for path in paths)
+    assert service.allowance.used_bytes() == 0

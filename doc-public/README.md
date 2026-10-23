@@ -16,6 +16,8 @@ Start with [Getting started](getting-started.md) for a working local installatio
 - [Layouts](layouts.md): saved walls, pins, activity priority, and simulated cameras.
 - [Recordings and storage](recording-storage.md): quality, long clips, recovery,
   storage allowances, and protected recordings.
+- [Detection replay](user-guide/recording-detection-replay.md): clean video, tiled overlays,
+  bounded metadata windows, and local file playback in the static showcase.
 - [Timeline playback](user-guide/timeline-playback.md): date/time seeking, camera
   filters, clip navigation, event markers, and playback compatibility.
 - [Recording schedules](user-guide/schedules.md): daily/weekly windows, overlapping

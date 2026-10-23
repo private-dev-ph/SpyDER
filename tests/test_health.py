@@ -68,3 +68,17 @@ def test_reconnecting_camera_is_a_warning_and_not_live():
     assert health["state"] == "warning" and health["running_cameras"] == 0
     assert health["issues"][0]["area"] == "camera"
     assert "reconnecting automatically" in health["issues"][0]["message"]
+
+
+def test_detection_sidecar_failures_are_visible_without_claiming_video_failed():
+    health = summarize_health(
+        [],
+        {
+            "state": "recording",
+            "recovery": {
+                "overlay_warning": "Detection metadata unavailable; clean video continues."
+            },
+        },
+        {},
+    )
+    assert "Detection metadata" in str(health)

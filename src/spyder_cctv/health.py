@@ -74,6 +74,8 @@ def summarize_health(cameras, recording, workflows, *, free_bytes=None, schedule
         )
     if recovery.get("durability_warning"):
         add("warning", "recovery", recovery["durability_warning"])
+    if recovery.get("overlay_warning"):
+        add("warning", "recording", recovery["overlay_warning"])
     if workflows.get("storage_error"):
         add("error", "workflow", workflows["storage_error"])
     if schedules and schedules.get("error"):

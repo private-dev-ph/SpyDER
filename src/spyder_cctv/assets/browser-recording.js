@@ -147,7 +147,10 @@
   }
   function storedBytes() {
     return state.items.reduce(
-      (sum, item) => sum + item.size_bytes + (item.thumbnail_size_bytes || 0),
+      (sum, item) =>
+        sum +
+        (item.local_file ? 0 : item.size_bytes) +
+        (item.thumbnail_size_bytes || 0),
       0,
     );
   }
@@ -578,6 +581,79 @@
     requestQueue = result.catch(() => {});
     return result;
   }
+  async function importVideo(file) {
+    if (
+      !file ||
+      !file.size ||
+      !file.name ||
+      !/\.(mp4|webm|mov|m4v|ogv|avi|mkv)$/i.test(file.name)
+    )
+      throw new Error("Choose a local video file.");
+    if (state.items.filter((item) => item.local_file).length >= 32)
+      throw new Error(
+        "Up to 32 local video references can be open. Reload the showcase to release them.",
+      );
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    const url = URL.createObjectURL(file);
+    let keep = false;
+    try {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(
+          () =>
+            finish(
+              new Error("Video metadata timed out. Try MP4/H.264 or WebM."),
+            ),
+          15000,
+        );
+        const finish = (error) => {
+          clearTimeout(timeout);
+          video.onloadedmetadata = null;
+          video.onerror = null;
+          error ? reject(error) : resolve();
+        };
+        video.onloadedmetadata = () => finish();
+        video.onerror = () =>
+          finish(
+            new Error(
+              "This browser cannot decode that file. Use a supported MP4 or WebM video.",
+            ),
+          );
+        video.src = url;
+        video.load();
+      });
+      if (
+        !Number.isFinite(video.duration) ||
+        video.duration <= 0 ||
+        video.duration > 86400 ||
+        !video.videoWidth ||
+        !video.videoHeight
+      )
+        throw new Error("Choose a readable video up to 24 hours long.");
+      const item = {
+        id: `recording-${crypto.randomUUID()}`,
+        kind: "recording",
+        filename: file.name,
+        created_at: new Date().toISOString(),
+        size_bytes: file.size,
+        url,
+        duration_seconds: video.duration,
+        camera_ids: [],
+        width: video.videoWidth,
+        height: video.videoHeight,
+        local_file: true,
+      };
+      state.items.push(item);
+      keep = true;
+      return { ...item };
+    } finally {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      if (!keep) URL.revokeObjectURL(url);
+    }
+  }
   function cleanup() {
     const releaseItems = () => {
       for (const item of state.items) {
@@ -599,5 +675,9 @@
   window.addEventListener("pagehide", (event) => {
     if (!event.persisted) cleanup();
   });
-  window.spyderBrowserMedia = { request, status: async () => snapshot() };
+  window.spyderBrowserMedia = {
+    request,
+    importVideo,
+    status: async () => snapshot(),
+  };
 })();

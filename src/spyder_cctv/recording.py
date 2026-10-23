@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 from .recording_allowance import RecordingAllowance
+from .recording_overlays import CHUNK_SECONDS, OverlayWriter, read_chunk
 from .recording_profiles import DEFAULT_SETTINGS, PROFILES, describe_settings, validate_settings
 from .recording_recovery import (
     RecordingLease,
@@ -59,6 +60,14 @@ def _retry_sharing_violation(operation: Callable[[], None]) -> None:
             if getattr(error, "winerror", None) not in (32, 33) or attempt == 7:
                 raise
             time.sleep(min(0.05 * 2**attempt, 0.8))
+
+
+class _FrameBatch(list):
+    """Pixels and annotations selected together, including historical samples."""
+
+    def __init__(self):
+        super().__init__()
+        self.annotations = []
 
 
 class RecordingService:
@@ -117,6 +126,7 @@ class RecordingService:
         self._lease = RecordingLease(self.output_dir)
         self._recovery = {"recovered": [], "pending": [], "durability_warning": None}
         self._active_metadata = None
+        self._overlay_writer = None
         self._last_checkpoint = 0.0
         self._requested_pre_event_seconds = 0
         self._pre_event_seconds = 0.0
@@ -520,7 +530,15 @@ class RecordingService:
                                 - max(timeline_start, target),
                             )
                         if not self._write_composite(
-                            composite, camera_ids=selected, pre_event_seconds=pre_seconds
+                            composite,
+                            camera_ids=selected,
+                            pre_event_seconds=pre_seconds,
+                            overlays=self._composite_annotations(
+                                event_images,
+                                selected,
+                                self._profile["width"],
+                                self._profile["height"],
+                            ),
                         ):
                             break
                         with self._lock:
@@ -571,9 +589,17 @@ class RecordingService:
                     - self._frames
                     + 1,
                 )
+                overlay_boxes = self._composite_annotations(
+                    samples, selected, self._profile["width"], self._profile["height"]
+                )
                 for _ in range(due):
+                    with self._lock:
+                        if self._state != "recording" or self._camera_ids != selected:
+                            break
                     if not self._recording_space_available() or not self._write_composite(
-                        composite, camera_ids=selected
+                        composite,
+                        camera_ids=selected,
+                        overlays=overlay_boxes,
                     ):
                         break
                 remaining = max(
@@ -609,7 +635,7 @@ class RecordingService:
         with self._lock:
             initial = self._pre_event_snapshot
             seconds = self._requested_pre_event_seconds
-        images: list[np.ndarray | None] = []
+        images = _FrameBatch()
         buffer = getattr(self.manager, "pre_event_buffer", None)
         for camera_id in camera_ids:
             freshness = self._freshness_window(camera_id)
@@ -631,8 +657,10 @@ class RecordingService:
                     newest = None
             if newest is None or newest.timestamp > target or target - newest.timestamp > freshness:
                 images.append(None)
+                images.annotations.append(())
             else:
                 images.append(self._decode_event_frame(camera_id, newest))
+                images.annotations.append(getattr(newest, "annotations", ()))
         return images
 
     def _decode_event_frame(self, camera_id: str, frame: Any) -> np.ndarray | None:
@@ -666,6 +694,7 @@ class RecordingService:
         *,
         camera_ids: list[str],
         pre_event_seconds: float = 0.0,
+        overlays: list[dict] | None = None,
     ) -> bool:
         if not self._recording_space_available():
             return False
@@ -674,6 +703,7 @@ class RecordingService:
         else:
             self._extend_active_camera_ids(camera_ids)
         self._writer.write(composite)
+        self._save_overlay_sample(self._segment_frames / self._profile["fps"], overlays or [])
         with self._lock:
             self._frames += 1
             self._segment_frames += 1
@@ -690,6 +720,11 @@ class RecordingService:
                         "Disk checkpoint failed; check drive permissions and health"
                     )
                     logger.warning("Recording durability checkpoint failed", exc_info=True)
+            if self._overlay_writer is not None:
+                try:
+                    self._overlay_writer.checkpoint()
+                except (OSError, ValueError):
+                    self._disable_overlays()
             self._last_checkpoint = time.monotonic()
         if self._segment_frames >= self._segment_frame_limit():
             self._finish_segment()
@@ -729,6 +764,47 @@ class RecordingService:
             )
             self._write_atomic(active, json.dumps(self._active_metadata).encode("utf-8"))
         self._last_checkpoint = time.monotonic()
+        try:
+            self._overlay_writer = OverlayWriter(
+                self.output_dir,
+                self._segment_id,
+                width=self._profile["width"],
+                height=self._profile["height"],
+                fps=self._profile["fps"],
+            )
+        except (OSError, ValueError):
+            self._disable_overlays()
+
+    def _disable_overlays(self) -> None:
+        self._overlay_writer = None
+        self._recovery["overlay_warning"] = (
+            "Detection metadata could not be saved. Clean video recording continues."
+        )
+        logger.warning("Recording detection metadata unavailable", exc_info=True)
+
+    def _save_overlay_sample(self, seconds: float, boxes: list[dict]) -> None:
+        if self._overlay_writer is not None:
+            try:
+                self._overlay_writer.append(seconds, boxes)
+            except (OSError, ValueError):
+                self._disable_overlays()
+
+    def overlay_chunk(self, item_id: str, index: int) -> dict:
+        path = self.media_path(item_id)
+        with self._lock:
+            item = self._items.get(item_id) or self._archive_items.get(item_id)
+            if item is None or item.get("kind") != "recording":
+                raise KeyError(item_id)
+            info = {key: item.get(key) for key in ("width", "height", "fps", "duration_seconds")}
+        chunk = read_chunk(path.parent, item_id, index)
+        return chunk or {
+            "version": 1,
+            "chunk_seconds": CHUNK_SECONDS,
+            "index": index,
+            "samples": [],
+            "available": False,
+            **info,
+        }
 
     def _extend_active_camera_ids(self, camera_ids: list[str]) -> None:
         """Persist newly included cameras before sending their frame to the encoder."""
@@ -744,6 +820,12 @@ class RecordingService:
         writer, self._writer = self._writer, None
         if writer is not None:
             writer.release()
+        overlays, self._overlay_writer = self._overlay_writer, None
+        if overlays is not None:
+            try:
+                overlays.close()
+            except (OSError, ValueError):
+                self._disable_overlays()
         temp_path = self._temp_path
         if self._segment_frames and temp_path is not None and temp_path.is_file():
             sync_file(temp_path)
@@ -941,8 +1023,9 @@ class RecordingService:
             self._lease.release()
 
     def _samples(self, ids: list[str]) -> list[np.ndarray | None]:
-        images = []
+        images = _FrameBatch()
         for camera_id in ids:
+            sample = None
             try:
                 worker = self.manager.get_worker(camera_id)
                 # Live-view JPEGs can contain CV annotations. Recording samples
@@ -958,6 +1041,9 @@ class RecordingService:
             except (KeyError, RuntimeError, ValueError, cv2.error):
                 image = None
             images.append(image)
+            images.annotations.append(
+                getattr(sample, "annotations", ()) if image is not None else ()
+            )
         return images
 
     @staticmethod
@@ -968,6 +1054,42 @@ class RecordingService:
         if not ok:
             raise RuntimeError("Cannot encode capture")
         return encoded.tobytes()
+
+    @staticmethod
+    def _composite_annotations(images, camera_ids, width, height) -> list[dict]:
+        """Use the exact integer letterboxing geometry of the encoded tile canvas."""
+        count = max(1, len(images))
+        columns = math.ceil(math.sqrt(count))
+        rows = math.ceil(count / columns)
+        cell_w, cell_h = width // columns, height // rows
+        annotations = getattr(images, "annotations", ())
+        output = []
+        for index, image in enumerate(images):
+            if image is None or index >= len(annotations):
+                continue
+            x, y = (index % columns) * cell_w, (index // columns) * cell_h
+            w = width - x if index % columns == columns - 1 else cell_w
+            h = height - y if index // columns == rows - 1 else cell_h
+            ih, iw = image.shape[:2]
+            scale = min(w / iw, h / ih)
+            rw, rh = max(1, round(iw * scale)), max(1, round(ih * scale))
+            left, top = (w - rw) // 2, (h - rh) // 2
+            for annotation in annotations[index]:
+                # One excess box lets the sidecar writer report truncation
+                # instead of silently hiding detections beyond its frame budget.
+                if len(output) >= 129:
+                    return output
+                box = dict(annotation)
+                bx, by, bw, bh = box["bbox"]
+                box["bbox"] = [
+                    (x + left + bx * rw) / width,
+                    (y + top + by * rh) / height,
+                    bw * rw / width,
+                    bh * rh / height,
+                ]
+                box["camera_id"] = camera_ids[index]
+                output.append(box)
+        return output
 
     @staticmethod
     def _compose(

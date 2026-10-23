@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from .recording_overlays import remove_sidecars, used_sidecar_bytes
 from .video_encoder import compress_recording
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class RecordingAllowance:
     def used_bytes(self) -> int:
         if self._usage_cache is not None and time.monotonic() - self._usage_time < 0.5:
             return self._usage_cache
-        total = 0
+        total = used_sidecar_bytes(self.recorder.output_dir)
         for path in self.recorder.output_dir.iterdir():
             if path.suffix.lower() not in (".mp4", ".avi", ".webm"):
                 continue
@@ -242,6 +243,7 @@ class RecordingAllowance:
         ):
             raise RuntimeError("Protected or current recording cannot be removed")
         path = self.recorder.media_path(item_id)
+        remove_sidecars(path.parent, item_id)
         path.unlink()
         del self.recorder._items[item_id]
         self.recorder._save_catalog()
