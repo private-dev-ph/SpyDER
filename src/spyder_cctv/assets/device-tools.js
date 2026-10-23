@@ -36,6 +36,7 @@
   const closeIcon =
     '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>';
   function showDialog(dialog, opener) {
+    dialog._opener = opener;
     const heading = dialog.querySelector("h3");
     heading.id = "dt-dialog-title-" + ++dialogSequence;
     dialog.setAttribute("aria-labelledby", heading.id);
@@ -109,6 +110,10 @@
   }
   function watch() {
     const scan = () => {
+      document.querySelectorAll(".dt-dialog[open]").forEach((dialog) => {
+        if (dialog._opener && !dialog._opener.isConnected)
+          dialog.close("cancel");
+      });
       for (const [id, k] of [
         ["face-gallery-tools", "face"],
         ["onvif-camera-tools", "onvif"],
@@ -131,7 +136,9 @@
       list = [],
       gid = "",
       desc = null,
-      q = "";
+      q = "",
+      selectionVersion = 0,
+      detailVersion = 0;
     h.classList.add("dt-host");
     h.innerHTML =
       '<section class="dt-card"><header class="dt-head"><div><p class="dt-eyebrow">LOCAL IDENTITY GALLERY</p><h2>Face enrollment</h2><p>Gallery matches stay separate from closed-set classifiers.</p></div><button class="dt-button dt-primary" data-create>Create gallery</button></header>' +
@@ -143,9 +150,17 @@
       h.querySelectorAll("button").forEach((b) => (b.disabled = true));
     async function refresh() {
       if (blocked) return;
+      const version = ++selectionVersion;
       try {
         const d = await api("/api/faces/galleries");
+        if (version !== selectionVersion) return;
         list = d.galleries || [];
+        if (gid && !list.some((g) => g.id === gid)) {
+          gid = "";
+          desc = null;
+          detailVersion++;
+          delete h._pending;
+        }
         paint();
         if (d.error) say(h, d.error, true);
       } catch (e) {
@@ -153,10 +168,22 @@
       }
     }
     async function load() {
-      desc = gid
-        ? await api("/api/faces/galleries/" + encodeURIComponent(gid))
-        : null;
+      const selected = gid,
+        version = ++detailVersion;
+      desc = null;
       paint();
+      if (!selected || blocked) return;
+      try {
+        const result = await api(
+          "/api/faces/galleries/" + encodeURIComponent(selected),
+        );
+        if (version !== detailVersion || selected !== gid) return;
+        desc = result;
+        paint();
+      } catch (e) {
+        if (version === detailVersion && selected === gid)
+          say(h, e.message, true);
+      }
     }
     function paint() {
       h.querySelector("[data-list]").innerHTML =
@@ -239,10 +266,17 @@
     h.addEventListener("click", async (e) => {
       let b = e.target.closest("button");
       if (!b || blocked) return;
+      if (b.dataset.actionBusy === "1") return;
+      b.dataset.actionBusy = "1";
       try {
-        if (b.hasAttribute("data-refresh")) return refresh();
+        if (b.hasAttribute("data-refresh")) return await refresh();
         if (b.dataset.gid) {
+          if (gid !== b.dataset.gid) {
+            delete h._pending;
+            h._enrolling = false;
+          }
           gid = b.dataset.gid;
+          paint();
           return await load();
         }
         if (b.hasAttribute("data-create")) {
@@ -490,13 +524,19 @@
         const create = h.querySelector("[data-create]");
         if (create) create.disabled = blocked;
         say(h, x.message, true);
+      } finally {
+        delete b.dataset.actionBusy;
       }
     });
     h.addEventListener("submit", async (e) => {
       if (!e.target.matches("[data-enroll]") || blocked) return;
       e.preventDefault();
+      if (h._enrolling) return;
+      h._enrolling = true;
       let f = e.target,
+        submit = f.querySelector("button"),
         b = { identity_name: f.elements.identity_name.value.trim() };
+      if (submit) submit.disabled = true;
       try {
         let file = f.elements.image.files[0];
         if (file) {
@@ -545,6 +585,7 @@
           h._pending = {
             identity_name: b.identity_name,
             enrollment_token: d.enrollment_token,
+            gallery_id: gid,
           };
           say(h, "Select one detected face.");
           return;
@@ -556,16 +597,29 @@
         window.dispatchEvent(new CustomEvent("spyder:face-galleries-changed"));
       } catch (x) {
         say(h, x.message, true);
+      } finally {
+        h._enrolling = false;
+        if (submit?.isConnected) submit.disabled = false;
       }
     });
     h.addEventListener("click", async (e) => {
       if (!e.target.closest("[data-confirm-face]") || blocked) return;
+      if (h._enrolling) return;
+      h._enrolling = true;
+      const confirm = e.target.closest("[data-confirm-face]");
+      confirm.disabled = true;
       try {
         let b = h._pending;
+        if (!b || b.gallery_id !== gid)
+          throw Error("Start enrollment again for this gallery.");
         b.face_index = Number(h.querySelector("[data-face-index]").value);
         await api(
           "/api/faces/galleries/" + encodeURIComponent(gid) + "/enroll",
-          b,
+          {
+            identity_name: b.identity_name,
+            enrollment_token: b.enrollment_token,
+            face_index: b.face_index,
+          },
         );
         delete h._pending;
         await load();
@@ -574,8 +628,12 @@
         window.dispatchEvent(new CustomEvent("spyder:face-galleries-changed"));
       } catch (x) {
         say(h, x.message, true);
+      } finally {
+        h._enrolling = false;
+        if (confirm.isConnected) confirm.disabled = false;
       }
     });
+    if (!blocked) refresh();
   }
   function onvif(h) {
     let blocked = demo(),
