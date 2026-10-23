@@ -769,3 +769,70 @@ def test_recording_keeps_session_during_camera_disconnect_and_recovery(tmp_path)
 @pytest.mark.parametrize("value", [[""], ["x" * 65], ["../camera"], ["cam", "cam"], [7]])
 def test_invalid_optional_camera_membership_is_ignored(value):
     assert RecordingService._validated_camera_ids(value) is None
+
+
+def test_captures_and_video_samples_never_fall_back_to_annotated_live_view(rig, monkeypatch):
+    from spyder_cctv.pre_event import BufferedFrame
+
+    manager, service, _folder = rig
+    clean = np.full((90, 160, 3), (20, 20, 230), dtype=np.uint8)
+    annotated = clean.copy()
+    annotated[20:70, 40:120] = (0, 255, 0)
+    clean_jpeg = service._jpeg(clean)
+    worker = manager.get_worker("red")
+    monkeypatch.setattr(worker, "jpeg", lambda: service._jpeg(annotated))
+    monkeypatch.setattr(
+        worker, "recording_sample", lambda: BufferedFrame(time.monotonic(), clean_jpeg, "session")
+    )
+    image = service._samples(["red"])[0]
+    assert image[30:60, 50:110, 2].mean() > 200
+    assert image[30:60, 50:110, 1].mean() < 40
+    item = service.capture(["red"])
+    saved = cv2.imread(str(service.media_path(item["id"])))
+    assert saved[30:60, 50:110, 2].mean() > 200
+    assert saved[30:60, 50:110, 1].mean() < 40
+    monkeypatch.setattr(worker, "recording_sample", lambda: None)
+    assert service._samples(["red"]) == [None]
+    with pytest.raises(RuntimeError, match="No fresh camera frames"):
+        service.capture(["red"])
+    monkeypatch.setattr(
+        worker, "recording_sample", lambda: BufferedFrame(time.monotonic() - 3, clean_jpeg, "old")
+    )
+    assert service._samples(["red"]) == [None]
+
+
+def test_saved_clip_uses_clean_pixels_while_live_view_keeps_detection_box(tmp_path):
+    class BoxPipeline:
+        def process(self, frame):
+            # Deliberately mutate input pixels, as an annotation engine may do.
+            frame[20:70, 40:120] = (0, 255, 0)
+            return frame, {"detections": [{"label": "person"}]}
+
+    manager = CameraManager(
+        [CameraConfig("red", 0, fps=15)],
+        capture_factory=ColorCapture,
+        pipeline_factory=lambda _name: BoxPipeline(),
+    )
+    service = RecordingService(manager, tmp_path)
+    capture = None
+    try:
+        worker = manager.get_worker("red")
+        worker.start()
+        wait_for(lambda: worker.jpeg() is not None)
+        live = cv2.imdecode(np.frombuffer(worker.jpeg(), np.uint8), cv2.IMREAD_COLOR)
+        assert live[30:60, 50:110, 1].mean() > 200
+        service.start(["red"])
+        wait_for(lambda: service.status()["frames"] >= 3)
+        item = service.stop(timeout=10)["items"][-1]
+        capture = cv2.VideoCapture(str(service.media_path(item["id"])))
+        ok, recorded = capture.read()
+        assert ok
+        height, width = recorded.shape[:2]
+        center = recorded[height // 3 : height * 2 // 3, width // 3 : width * 2 // 3]
+        assert center[:, :, 2].mean() > 200
+        assert center[:, :, 1].mean() < 40
+    finally:
+        if capture is not None:
+            capture.release()
+        service.close()
+        manager.close()

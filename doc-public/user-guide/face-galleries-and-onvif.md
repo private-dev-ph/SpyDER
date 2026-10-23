@@ -158,3 +158,11 @@ In **Recordings**, open a clip from the library or select it in **Timeline playb
 The studio starts its selection at the playback position, adjusted near the end of a recording to keep a complete five-second range. Choose a range of 5-10 seconds, drag a focus area around one person, and use **Inspect range**. Review the detected face crops, select samples of the same person, enter their name, and save. Opening a recording never enrolls anyone automatically.
 
 Saved recordings use a sampled local preview, including formats your browser cannot play directly. The studio reads individual frames through the installed app rather than downloading the entire recording into browser memory. The original clip stays in the recording library; the gallery stores only the selected face vectors and small portrait crops. The Cloudflare showcase does not expose this native enrollment action or send recording frames to a cloud service. Clips must be at least five seconds long and remain available on disk.
+
+### Clean footage for enrollment
+
+New local recordings and frame captures use camera pixels before SpyDER draws motion regions, detection boxes, tracks, or identity labels. Pre-event buffers use the same clean source. Live camera views continue to show their detection overlays. The recorder keeps one video rather than an additional clean copy, so this separation does not double recording storage. Camera labels and timestamps in tiled recordings remain part of the recording layout.
+
+Enrollment Studio draws its review boxes separately from the source image. Those review boxes and the focus-area shading are never submitted as face samples.
+
+This change applies to footage recorded after the update. Boxes already burned into an older recording, an imported clip, or a camera's own stream cannot be reliably removed: they may obscure real facial pixels. Use an original clean clip or take new clean footage where possible. SpyDER does not use image reconstruction to invent missing facial details for enrollment.
