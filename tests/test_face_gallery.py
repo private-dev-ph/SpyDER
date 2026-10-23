@@ -336,3 +336,58 @@ def test_failed_export_publication_does_not_commit_catalog_mutation(tmp_path, mo
         "version": 1,
         "identities": [],
     }
+
+
+def test_failed_catalog_publication_restores_export_and_repairs_after_restart(
+    tmp_path, monkeypatch
+):
+    import spyder_cctv.face_gallery as module
+
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    enrolled = service.enroll(gallery["id"], "Ada", image, face_index=0)
+    service.get_gallery(gallery["id"])
+    original_atomic_json = module._atomic_json
+    export_writes = 0
+
+    def fail_catalog(path, data):
+        if path.name == "catalog.json":
+            raise OSError("simulated catalog publication failure")
+        nonlocal export_writes
+        if path.name == "gallery-v1.json":
+            export_writes += 1
+            if export_writes == 2:
+                raise OSError("simulated export rollback failure")
+        return original_atomic_json(path, data)
+
+    monkeypatch.setattr(module, "_atomic_json", fail_catalog)
+    with pytest.raises(OSError, match="catalog publication failure"):
+        service.rename_identity(gallery["id"], enrolled["identity"]["id"], "Grace")
+    monkeypatch.setattr(module, "_atomic_json", original_atomic_json)
+    assert export_writes == 2
+    service.get_gallery(gallery["id"])
+
+    expected = {
+        "version": 1,
+        "identities": [{"name": "Ada", "embedding": [0.6, 0.8]}],
+    }
+    exported = service.gallery_path(gallery["id"]).read_text(encoding="utf-8")
+    assert json.loads(exported) == expected
+
+    restarted = FaceEnrollmentService(service.root)
+    restarted_path = restarted.gallery_path(gallery["id"])
+    assert json.loads(restarted_path.read_text(encoding="utf-8")) == expected
+
+
+def test_cached_catalog_read_repairs_modified_managed_export(tmp_path, monkeypatch):
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    service.enroll(gallery["id"], "Ada", image, face_index=0)
+    service.get_gallery(gallery["id"])
+    path = service.gallery_path(gallery["id"])
+    path.write_text('{"version":1,"identities":[]}', encoding="utf-8")
+
+    service.config(gallery["id"])
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "version": 1,
+        "identities": [{"name": "Ada", "embedding": [0.6, 0.8]}],
+    }
