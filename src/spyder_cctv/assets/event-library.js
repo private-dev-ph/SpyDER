@@ -34,6 +34,9 @@
     const url = String(item?.url || "");
     return /^\/api\/media\/[a-zA-Z0-9_-]+(?:\?.*)?$/.test(url) || /^blob:/.test(url) ? url : null;
   }
+  function enrollmentRecording(item, showcase = false) {
+    return !showcase && item?.kind === "recording" && /^[a-f0-9]{32}$/i.test(String(item.id || ""));
+  }
   let viewer;
   let viewerReturn;
   let viewerCleanup;
@@ -90,7 +93,18 @@
     });
     const download = element("a", "button secondary", "Download original");
     download.href = url; download.download = item.filename || "";
-    viewer.append(head, content, error, download);
+    const controls = [head, content, error, download];
+    if (enrollmentRecording(item, !!window.spyderShowcase)) {
+      controls.push(action("Enroll someone", () => {
+        const nativeTime = content.hidden ? NaN : Number(content.currentTime);
+        const fallbackTime = Number(viewer?.dataset.playbackTime);
+        const seconds = Number.isFinite(nativeTime) && nativeTime >= 0 ? nativeTime :
+          Number.isFinite(fallbackTime) && fallbackTime >= 0 ? fallbackTime : 0;
+        closeMedia();
+        window.spyderFaceEnrollment?.fromRecording?.(item, seconds);
+      }));
+    }
+    viewer.append(...controls);
     viewer.addEventListener("cancel", (event) => { event.preventDefault(); closeMedia(); });
     viewer.addEventListener("click", (event) => { if (event.target !== viewer) return; const r = viewer.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) closeMedia(); });
     document.body.append(viewer); viewer.showModal(); close.focus();
@@ -104,7 +118,7 @@
     const play = action("Play", () => { playing = !playing; play.textContent = playing ? "Pause" : "Play"; clearTimeout(timer); if (playing) tick(); });
     const seek = element("input"); seek.type = "range"; seek.min = "0"; seek.step = "0.2"; seek.value = "0"; seek.setAttribute("aria-label", "Recording playback position"); seek.style.flex = "1 1 160px";
     const note = element("output", "field-help");
-    function updateTime() { seek.value = String(time); note.textContent = time.toFixed(1) + " / " + duration.toFixed(1) + " s"; }
+    function updateTime() { seek.value = String(time); if (viewer) viewer.dataset.playbackTime = String(time); note.textContent = time.toFixed(1) + " / " + duration.toFixed(1) + " s"; }
     async function frame() {
       request?.abort(); request = new AbortController(); const current = request;
       try {
@@ -292,5 +306,5 @@
     render(); poll();
   }
   function unmount() { mounted?.(); mounted = null; closeMedia(); }
-  return { eventPage, groupKey, mediaUrl, mount, unmount, mediaButton, openMedia, closeMedia };
+  return { eventPage, groupKey, mediaUrl, enrollmentRecording, mount, unmount, mediaButton, openMedia, closeMedia };
 });
