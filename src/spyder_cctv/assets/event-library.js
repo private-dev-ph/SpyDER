@@ -40,6 +40,7 @@
   let viewer;
   let viewerReturn;
   let viewerCleanup;
+  let viewerOverlayCleanup;
   function glyph(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("icon"); svg.setAttribute("aria-hidden", "true");
@@ -60,6 +61,7 @@
     if (!viewer) return;
     viewer.dataset.closing = "true";
     viewerCleanup?.(); viewerCleanup = null;
+    viewerOverlayCleanup?.(); viewerOverlayCleanup = null;
     const video = viewer.querySelector("video");
     if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
     if (viewer.open) viewer.close();
@@ -76,10 +78,11 @@
     const title = element("h2", "", item.name || item.filename || "Saved media");
     const close = action("", closeMedia); close.append(glyph("close")); close.setAttribute("aria-label", "Close media viewer");
     head.append(title, close);
+    const stage = element("div", "media-viewer-stage");
     const content = element(item.kind === "capture" ? "img" : "video", "media-viewer-content");
     if (content.tagName === "VIDEO") { content.controls = true; content.preload = "metadata"; content.playsInline = true; }
     else content.alt = item.name || "Saved frame capture";
-    content.src = url;
+    content.src = url; stage.append(content);
     const error = element("p", "field-help"); error.setAttribute("role", "status");
     let fallbackStarted = false;
     content.addEventListener("error", () => {
@@ -88,12 +91,13 @@
       error.textContent = "This browser cannot play this file, or the file is unavailable. Use Download to open it with a local player.";
       if (content.tagName === "VIDEO" && !window.spyderShowcase && url.startsWith("/api/media/")) {
         fallbackStarted = true;
+        viewerOverlayCleanup?.(); viewerOverlayCleanup = null;
         viewerCleanup = fallbackPlayer(content, item, error);
       }
     });
     const download = element("a", "button secondary", "Download original");
     download.href = url; download.download = item.filename || "";
-    const controls = [head, content, error, download];
+    const controls = [head, stage, error, download];
     if (enrollmentRecording(item, !!window.spyderShowcase)) {
       controls.push(action("Enroll someone", () => {
         const nativeTime = content.hidden ? NaN : Number(content.currentTime);
@@ -105,6 +109,9 @@
       }));
     }
     viewer.append(...controls);
+    if (item.kind === "recording" && window.spyderRecordingOverlays?.attach) {
+      viewerOverlayCleanup = window.spyderRecordingOverlays.attach(stage, { item, media: content, time: () => Number(viewer?.dataset.playbackTime || content.currentTime || 0), demo: !!window.spyderShowcase });
+    }
     viewer.addEventListener("cancel", (event) => { event.preventDefault(); closeMedia(); });
     viewer.addEventListener("click", (event) => { if (event.target !== viewer) return; const r = viewer.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) closeMedia(); });
     document.body.append(viewer); viewer.showModal(); close.focus();
@@ -112,13 +119,14 @@
   function fallbackPlayer(video, item, status) {
     const dialog = video.closest("dialog");
     const image = element("img", "media-viewer-content"); image.alt = "Recording playback frame";
+    const stage = video.parentElement;
     const controls = element("div", "event-bulk");
     let disposed = false, playing = false, time = 0, duration = 0, timer, request, objectUrl;
     const base = "/api/media/" + encodeURIComponent(item.id);
     const play = action("Play", () => { playing = !playing; play.textContent = playing ? "Pause" : "Play"; clearTimeout(timer); if (playing) tick(); });
     const seek = element("input"); seek.type = "range"; seek.min = "0"; seek.step = "0.2"; seek.value = "0"; seek.setAttribute("aria-label", "Recording playback position"); seek.style.flex = "1 1 160px";
     const note = element("output", "field-help");
-    function updateTime() { seek.value = String(time); if (viewer) viewer.dataset.playbackTime = String(time); note.textContent = time.toFixed(1) + " / " + duration.toFixed(1) + " s"; }
+    function updateTime() { seek.value = String(time); if (viewer) viewer.dataset.playbackTime = String(time); note.textContent = time.toFixed(1) + " / " + duration.toFixed(1) + " s"; viewerOverlayCleanup?.update(time); }
     async function frame() {
       request?.abort(); request = new AbortController(); const current = request;
       try {
@@ -146,7 +154,8 @@
       duration = Number(info.duration_seconds || item.duration_seconds || 0);
       if (!Number.isFinite(duration) || duration <= 0) throw new Error("Recording has no playable frames");
       video.pause(); video.hidden = true; video.removeAttribute("src");
-      seek.max = String(duration); controls.append(play, seek, note); video.after(image, controls);
+      seek.max = String(duration); controls.append(play, seek, note); stage.append(image, controls);
+      if (window.spyderRecordingOverlays?.attach) viewerOverlayCleanup = window.spyderRecordingOverlays.attach(stage, { item, media: image, time: () => time, demo: false });
       status.textContent = "Compatibility player · local preview at up to 5 frames/s. The downloaded original keeps its full frame rate. No audio.";
       updateTime(); return frame();
     }).catch((error) => { if (!disposed && error.name !== "AbortError") status.textContent = error.message + ". Download the original to open it with a local player."; });
