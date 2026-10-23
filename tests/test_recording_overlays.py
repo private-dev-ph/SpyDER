@@ -155,4 +155,3 @@ def test_writer_checkpoints_atomically_and_byte_accounting_includes_temporary(tm
     remove_sidecars(tmp_path, MEDIA_ID)
     assert sidecar_paths(tmp_path, MEDIA_ID) == []
     assert temp_path.exists() is False
-
