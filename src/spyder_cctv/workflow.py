@@ -1387,6 +1387,12 @@ class WorkflowService:
             if classifier_edges:
                 classifier = nodes[classifier_edges[0]["from"]]["params"]
                 descriptor = self._model_descriptor(classifier["model_id"])
+                if descriptor.get("metadata", {}).get("model_type") == "face_gallery":
+                    # Activation is a trust boundary. Evaluation uses cached metadata,
+                    # but enabling a workflow must verify the model bytes again.
+                    self.face_galleries.config(
+                        classifier["model_id"].removeprefix("gallery-"), verify_models=True
+                    )
                 if (
                     descriptor["engine"] != "insightface"
                     or descriptor.get("metadata", {}).get("model_type")

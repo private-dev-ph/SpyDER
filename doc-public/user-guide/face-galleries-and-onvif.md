@@ -13,13 +13,18 @@ No models, face samples, or camera credentials are sent to the showcase server.
    enrollment detector chooser; downloading weights remains an explicit action
    in the Model node. Install the application's `insightface` optional
    dependencies in the same Python environment if they are missing.
-2. Open **Vision Lab → Face galleries** and choose **Create gallery**. Give the
+2. Open **Vision Lab → Face galleries**. Existing galleries load automatically.
+   Choose **Create gallery** to add a collection. Give the
    gallery a name and select its detector and recognition models.
 3. Select the gallery, enter an identity name, and choose either a running camera
-   or a JPEG/PNG image. Choose **Process enrollment**.
+   or a JPEG/PNG image. Choose **Process enrollment**. Keep the camera running:
+   SpyDER waits briefly for the next raw frame without opening another capture.
+   A paused camera cannot supply a frame.
 4. If several faces are detected, select the intended face. This uses the same
    captured image, even if the live camera changes. Selection expires after
-   60 seconds. The application never opens a second camera for enrollment.
+   60 seconds. Validation or busy errors can be retried against that same image
+   until the selection expires. Changing the gallery or identity requires a new
+   enrollment request. The application never opens a second camera for enrollment.
 5. Repeat with the same name to add samples under different lighting or angles.
    Identity names are unique within a gallery, ignoring capitalization.
 

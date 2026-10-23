@@ -389,9 +389,7 @@ class FaceEnrollmentService:
                 try:
                     result.append(self._metadata(self._load(path.name)))
                 except ValueError:
-                    errors.append(
-                        {"gallery_id": path.name, "error": "Gallery catalog is invalid"}
-                    )
+                    errors.append({"gallery_id": path.name, "error": "Gallery catalog is invalid"})
         response: dict[str, Any] = {"galleries": result}
         if errors:
             response["error"] = "One or more face galleries could not be loaded"
@@ -509,8 +507,7 @@ class FaceEnrollmentService:
     def delete_gallery(self, gallery_id: str) -> None:
         directory = self._dir(gallery_id)
         if any(
-            path.name not in {"catalog.json", "gallery-v1.json"}
-            for path in directory.iterdir()
+            path.name not in {"catalog.json", "gallery-v1.json"} for path in directory.iterdir()
         ):
             raise ValueError("Gallery storage contains unexpected files")
         for name in ("catalog.json", "gallery-v1.json"):
@@ -532,9 +529,7 @@ class FaceEnrollmentService:
         if (
             not detector.is_file()
             or not recognition.is_file()
-            or not self._verify_model(
-                detector, catalog["detector"]["sha256"], force=verify_models
-            )
+            or not self._verify_model(detector, catalog["detector"]["sha256"], force=verify_models)
             or not self._verify_model(
                 recognition, catalog["recognition"]["sha256"], force=verify_models
             )
