@@ -7,3 +7,6 @@
 .recording-overlay-status { flex: 1 1 180px; }
 .media-viewer-stage { position: relative; display: grid; place-items: center; width: 100%; min-height: 120px; background: #101010; }
 .media-viewer-stage :is(video, img) { display: block; width: 100%; max-height: min(60vh, 540px); object-fit: contain; }
+.recording-overlay-surface:fullscreen { width: 100vw; height: 100vh; max-width: none; max-height: none; background: #080808; }
+.recording-overlay-surface:fullscreen :is(video, img) { height: calc(100vh - 72px); max-height: calc(100vh - 72px); }
+.recording-overlay-surface:fullscreen .recording-overlay-controls { position: absolute; inset: auto 0 0; }
