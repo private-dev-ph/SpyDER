@@ -61,15 +61,15 @@
 }
 .dt-tools label {
   flex: 1;
-  min-width: 220px;
+  min-width: min(220px, 100%);
 }
-.dt-card label {
+:is(.dt-card, .dt-dialog) label {
   display: grid;
   gap: 6px;
   font-weight: 600;
 }
-.dt-card input,
-.dt-card select {
+:is(.dt-card, .dt-dialog) input,
+:is(.dt-card, .dt-dialog) select {
   min-height: 40px;
   padding: 8px 10px;
   border: 1px solid var(--control-border, #8c8274);
@@ -92,8 +92,8 @@
   color: var(--accent, #be1a1a);
 }
 .dt-button:focus-visible,
-.dt-card input:focus-visible,
-.dt-card select:focus-visible {
+:is(.dt-card, .dt-dialog) input:focus-visible,
+:is(.dt-card, .dt-dialog) select:focus-visible {
   outline: 3px solid var(--focus, #830000);
   outline-offset: 2px;
 }
@@ -122,7 +122,7 @@
 }
 .dt-gallery-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
   gap: 10px;
 }
 .dt-gallery {
@@ -156,7 +156,7 @@
 }
 .dt-enroll {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
   align-items: end;
   gap: 12px;
   padding: 16px 0;
@@ -327,4 +327,224 @@
   height: auto;
   border-radius: 10px;
   margin: 12px 0;
+}
+
+/* Share the application palette with dialogs mounted outside the gallery card. */
+:is(.dt-host, .dt-dialog) {
+  font: inherit;
+}
+:is(.dt-card, .dt-dialog) :is(input, select, button) {
+  font: inherit;
+}
+:is(.dt-card, .dt-dialog) :is(input, select) {
+  width: 100%;
+  min-width: 0;
+}
+:is(.dt-card, .dt-dialog) label {
+  min-width: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+:is(.dt-card, .dt-dialog) input::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+:is(.dt-card, .dt-dialog) select {
+  appearance: none;
+  padding-inline-end: 38px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23be1a1a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 8 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 18px;
+}
+:is(.dt-card, .dt-dialog) select option {
+  background: var(--surface);
+  color: var(--ink);
+}
+.dt-card input[type="file"] {
+  padding: 0;
+  font-size: 0.8rem;
+  line-height: 40px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.dt-card input[type="file"]::file-selector-button {
+  height: 40px;
+  margin-inline-end: 12px;
+  padding: 0 14px;
+  border: 0;
+  border-inline-end: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.dt-card input[type="file"]::file-selector-button:hover {
+  background: var(--accent-hover);
+}
+.dt-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  line-height: 1.4;
+}
+.dt-destructive {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.dt-destructive:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: #fff;
+}
+.dt-gallery {
+  min-width: 0;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+.dt-gallery:hover {
+  border-color: var(--accent);
+  background: var(--rail, var(--canvas));
+}
+.dt-gallery :is(b, span),
+.dt-identity b {
+  overflow-wrap: anywhere;
+}
+.dt-gallery.is-selected {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.dt-detail:empty {
+  display: none;
+}
+.dt-enroll > [data-choice] {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+}
+.dt-enroll > [data-choice]:empty {
+  display: none;
+}
+.dt-enroll > [data-choice] > .dt-button {
+  justify-self: start;
+}
+.dt-identity {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.dt-sample {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dt-sample-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dt-sample .dt-button {
+  flex-shrink: 0;
+}
+.dt-dialog {
+  position: fixed;
+  overflow: auto;
+  padding: 28px;
+  max-height: calc(100dvh - 24px);
+  scrollbar-color: var(--accent) var(--canvas);
+}
+.dt-dialog form {
+  gap: 20px;
+}
+.dt-dialog h3 {
+  padding-inline-end: 44px;
+  font-size: 1.25rem;
+  line-height: 1.4;
+}
+.dt-dialog p {
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.dt-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.dt-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.dt-icon-button:hover {
+  color: var(--danger);
+  border-color: var(--accent);
+  background: var(--rail, var(--canvas));
+}
+.dt-icon-button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.dt-icon-button svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.dt-dialog-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+}
+.dt-dialog[open] {
+  animation: dt-dialog-enter 160ms ease-out;
+}
+@keyframes dt-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (max-width: 480px) {
+  .dt-dialog {
+    padding: 20px;
+  }
+  .dt-dialog-close {
+    top: 14px;
+    right: 14px;
+  }
+  .dt-dialog-actions .dt-button {
+    flex: 1;
+  }
+  .dt-gallery-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dt-identity {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dt-dialog[open] {
+    animation: none;
+  }
+}
+
+:is(.dt-card, .dt-dialog),
+:is(.dt-card, .dt-dialog) * {
+  box-sizing: border-box;
 }
