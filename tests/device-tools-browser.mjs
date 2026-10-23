@@ -14,7 +14,7 @@ const profile = await mkdtemp(
 const screenshotDir = path.resolve(".pytest_cache/enrollment-studio");
 const html =
   '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/device-tools.css"><link rel="stylesheet" href="/face-enrollment-viewer.css"><style>body{font-family:system-ui,sans-serif}:root{--surface:#fffefa;--canvas:#f7f5ef;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--control-border:#8c8274;--focus:#830000;--accent:#be1a1a;--accent-hover:#830000;--danger:#bc0202;--gold-soft:#f8ebab}html[data-theme=dark]{--surface:#1e1c1b;--canvas:#141313;--ink:#f5efe4;--muted:#b0a69b;--border:#37312c;--focus:#f7d87f;--danger:#ff827b}</style></head><body><main><div id="face-gallery-tools"></div><div id="onvif-camera-tools"></div></main><script>' +
-  'window.testJpeg=(()=>{const c=document.createElement("canvas");c.width=160;c.height=160;const ctx=c.getContext("2d");ctx.fillStyle="#f8ebab";ctx.fillRect(0,0,160,160);ctx.fillStyle="#be1a1a";ctx.beginPath();ctx.arc(80,54,28,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.ellipse(80,147,52,49,0,0,Math.PI*2);ctx.fill();return c.toDataURL("image/jpeg")})();const nativeFetch=window.fetch.bind(window);window.calls=[];window.runtimeErrors=[];window.galleryIdentityCount=1;window.gallerySampleCount=1;window.holdAnalyze=false;window.analyzeStarted=false;window.resolveAnalyze=null;window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;if(path==="/test-video.mp4")return nativeFetch(url,opts);calls.push({path,method,body});if(window.holdAnalyze&&path.endsWith("/analyze"))return await new Promise(resolve=>{window.analyzeStarted=true;window.resolveAnalyze=()=>{window.holdAnalyze=false;resolve(new Response(JSON.stringify({review_token:"late-review",preview:window.testJpeg,width:640,height:480,faces:[{index:0,bbox:[.1,.1,.4,.5],confidence:.97,thumbnail:window.testJpeg}]}),{status:200,headers:{"Content-Type":"application/json"}}))}});if(path.endsWith("/preview-frame"))return new Response(Uint8Array.from(atob(window.testJpeg.split(",")[1]),c=>c.charCodeAt(0)),{status:200,headers:{"Content-Type":"image/jpeg"}});let data={};' +
+  'window.testJpeg=(()=>{const c=document.createElement("canvas");c.width=160;c.height=160;const ctx=c.getContext("2d");ctx.fillStyle="#f8ebab";ctx.fillRect(0,0,160,160);ctx.fillStyle="#be1a1a";ctx.beginPath();ctx.arc(80,54,28,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.ellipse(80,147,52,49,0,0,Math.PI*2);ctx.fill();return c.toDataURL("image/jpeg")})();const nativeFetch=window.fetch.bind(window);window.calls=[];window.runtimeErrors=[];window.galleryIdentityCount=1;window.gallerySampleCount=1;window.holdAnalyze=false;window.analyzeStarted=false;window.resolveAnalyze=null;window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;if(path==="/test-video.mp4")return nativeFetch(url,opts);calls.push({path,method,body});if(window.holdAnalyze&&path.endsWith("/analyze"))return await new Promise(resolve=>{window.analyzeStarted=true;window.resolveAnalyze=()=>{window.holdAnalyze=false;resolve(new Response(JSON.stringify({review_token:"late-review",preview:window.testJpeg,width:640,height:480,faces:[{index:0,bbox:[.1,.1,.4,.5],confidence:.97,thumbnail:window.testJpeg}]}),{status:200,headers:{"Content-Type":"application/json"}}))}});if(path.startsWith("/api/media/")&&path.endsWith("/info"))return new Response(JSON.stringify({duration_seconds:86400}),{headers:{"Content-Type":"application/json"}});if(path.startsWith("/api/media/")&&path.includes("/frame?"))return new Response(Uint8Array.from(atob(window.testJpeg.split(",")[1]),c=>c.charCodeAt(0)),{headers:{"Content-Type":"image/jpeg"}});if(path.endsWith("/preview-frame"))return new Response(Uint8Array.from(atob(window.testJpeg.split(",")[1]),c=>c.charCodeAt(0)),{status:200,headers:{"Content-Type":"image/jpeg"}});let data={};' +
   'if(path==="/api/models")data={models:[{id:"det-1",name:"Detector",engine:"insightface",metadata:{model_type:"face_detection"}},{id:"rec-1",name:"Recognizer",engine:"insightface",metadata:{model_type:"face_recognition"}}]};' +
   'else if(path==="/api/faces/galleries"&&method==="GET")data={galleries:[{id:"g1",name:"Lobby",identity_count:window.galleryIdentityCount,sample_count:window.gallerySampleCount,thumbnail:window.testJpeg},{id:"g2",name:"Office",identity_count:1,sample_count:1}]};' +
   'else if(path.endsWith("/identities/i1/samples/s1/remove")){window.gallerySampleCount=0;data={};}' +
@@ -782,6 +782,79 @@ try {
     true,
     "Enrollment studio previews selected camera through mocked JPEG endpoint",
   );
+  await evaluate(
+    `(()=>{const b=document.createElement('button');b.id='vision-gallery-tab';document.body.append(b);window.recordingItem={id:'a'.repeat(32),kind:'recording',filename:'day-long.mkv',url:'/api/media/'+ 'a'.repeat(32),duration_seconds:86400};window.spyderFaceEnrollment.fromRecording(window.recordingItem,86399)})()`,
+  );
+  await until("!!document.querySelector('[data-picker-open]:not(:disabled)')");
+  await evaluate("document.querySelector('[data-picker-gallery]').value='g2'");
+  await click("[data-picker-open]");
+  await until(
+    "!!document.querySelector('.fe-studio') && !document.querySelector('[data-fe-inspect]').disabled",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-fe-start]').value"),
+    "86395",
+    "End-of-recording handoff clamps to a complete five-second range",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.fe-studio .fe-heading').textContent.includes('Office')",
+    ),
+    true,
+    "Chosen gallery reaches the studio",
+  );
+  assert.equal(
+    await evaluate("calls.some(c=>c.path==='/api/media/'+ 'a'.repeat(32))"),
+    false,
+    "Never fetch the full day-long recording into memory",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-fe-file-label]').hidden"),
+    true,
+    "Saved clip needs no manual upload",
+  );
+  await click("[data-fe-sample-video]");
+  await until(
+    "document.querySelector('[data-fe-status]').innerText.includes('Review the detected crops')",
+  );
+  assert.equal(
+    await evaluate(
+      "calls.filter(c=>/^\\/api\\/media\\/[a-f0-9]{32}\\/frame/.test(c.path)).length",
+    ),
+    6,
+    "Only initial frame and five range samples are read",
+  );
+  assert.equal(
+    await evaluate("calls.some(c=>c.path==='/api/faces/galleries/g2/analyze')"),
+    true,
+    "Analysis uses selected gallery",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-fe-save]').disabled"),
+    true,
+    "Inspection never saves or selects someone automatically",
+  );
+  await click("[data-fe-select-all]");
+  await evaluate(
+    "document.querySelector('[data-fe-name]').value='Reviewed person';document.querySelector('[data-fe-name]').dispatchEvent(new Event('input',{bubbles:true}))",
+  );
+  await click("[data-fe-save]");
+  await until("!document.querySelector('.fe-studio')");
+  assert.equal(
+    await evaluate(
+      "calls.some(c=>c.path==='/api/faces/galleries/g2/enroll-reviewed'&&c.body.identity_name==='Reviewed person'&&c.body.selections.length===10)",
+    ),
+    true,
+    "Explicit save uses chosen gallery and only reviewed selections",
+  );
+  await evaluate(
+    "window.spyderFaceEnrollment.fromRecording({id:'../../invalid',kind:'recording'},0)",
+  );
+  assert.equal(
+    await evaluate("!!document.querySelector('.fe-recording-picker')"),
+    false,
+    "Invalid media IDs cannot navigate or open enrollment",
+  );
   assert.deepEqual(await evaluate("runtimeErrors"), []);
   await command(
     "Page.navigate",
@@ -806,6 +879,14 @@ try {
     ),
     false,
     "Showcase enrollment preview and review make zero API calls",
+  );
+  await evaluate(
+    "window.spyderFaceEnrollment.fromRecording({id:'a'.repeat(32),kind:'recording'},0)",
+  );
+  assert.equal(
+    await evaluate("calls.length"),
+    0,
+    "Showcase recording enrollment makes zero API calls",
   );
   console.log(
     "PASS: visual enrollment review, ROI, local video sampling, ONVIF controls, responsive themes, showcase zero API calls",
