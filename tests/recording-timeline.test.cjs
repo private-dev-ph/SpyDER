@@ -1,6 +1,9 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const timeline = require("../src/spyder_cctv/assets/recording-timeline.js");
+const timelineSource = fs.readFileSync(path.join(__dirname, "../src/spyder_cctv/assets/recording-timeline.js"), "utf8");
 process.env.TZ = "America/New_York";
 
 function clip(id, start, duration = 60, extra = {}) {
@@ -29,6 +32,19 @@ test("segments sort valid positive-duration videos and ignore invalid rows and c
   assert.equal(timeline.segments(rows)[0].start_ms, 0);
   assert.equal(timeline.segments(rows)[0].end_ms, 60000);
   assert.equal(JSON.stringify(rows), before);
+});
+
+test("timeline enrollment accepts native recordings only", () => {
+  const item = clip("0123456789abcdef0123456789abcdef", 0);
+  assert.equal(timeline.recordingEnrollmentAvailable(item), true);
+  assert.equal(timeline.recordingEnrollmentAvailable({ ...item, kind: "capture" }), false);
+  assert.equal(timeline.recordingEnrollmentAvailable({ ...item, id: "browser-local-id" }), false);
+  assert.equal(timeline.recordingEnrollmentAvailable(item, true), false);
+});
+
+test("timeline enrollment pauses and closes player before opening at selected position", () => {
+  assert.match(timelineSource, /video\?\.hidden \? NaN : Number\(video\?\.currentTime\)/);
+  assert.match(timelineSource, /playerHandle\?\.pause\(\)[\s\S]*?playerHandle\.destroy\(\)[\s\S]*?spyderFaceEnrollment\?\.fromRecording\?\.\(item, seconds\)/);
 });
 
 test("local day boundaries use local midnight and next calendar midnight across DST", () => {
