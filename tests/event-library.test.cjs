@@ -1,6 +1,9 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { eventPage, groupKey, mediaUrl } = require("../src/spyder_cctv/assets/event-library.js");
+const fs = require("node:fs");
+const path = require("node:path");
+const { eventPage, groupKey, mediaUrl, enrollmentRecording } = require("../src/spyder_cctv/assets/event-library.js");
+const librarySource = fs.readFileSync(path.join(__dirname, "../src/spyder_cctv/assets/event-library.js"), "utf8");
 const events = Array.from({ length: 43 }, (_, i) => ({
   id: "event" + i, name: "Door " + i, kind: i % 2 ? "event" : "motion",
   camera_id: i % 3 ? "front" : "back", camera_name: i % 3 ? "Front door" : "Back yard",
@@ -31,4 +34,16 @@ test("Media viewer allows only local manifest URLs and browser-owned blobs", () 
   assert.equal(mediaUrl({ url: "/api/media/abc123" }), "/api/media/abc123");
   assert.equal(mediaUrl({ url: "blob:http://localhost/abc" }), "blob:http://localhost/abc");
   for (const url of ["https://other.test/file", "javascript:alert(1)", "/api/media/../secret", "//other.test/"]) assert.equal(mediaUrl({ url }), null);
+});
+test("Recording enrollment accepts native recordings only", () => {
+  const item = { id: "0123456789abcdef0123456789abcdef", kind: "recording" };
+  assert.equal(enrollmentRecording(item), true);
+  assert.equal(enrollmentRecording({ ...item, kind: "capture" }), false);
+  assert.equal(enrollmentRecording({ ...item, id: "browser-local-id" }), false);
+  assert.equal(enrollmentRecording({ ...item, id: item.id.toUpperCase() }), false);
+  assert.equal(enrollmentRecording(item, true), false);
+});
+test("event media enrollment closes player before opening enrollment at current position", () => {
+  assert.match(librarySource, /content\.currentTime[\s\S]*?dataset\.playbackTime[\s\S]*?const seconds =/);
+  assert.match(librarySource, /closeMedia\(\);\s*window\.spyderFaceEnrollment\?\.fromRecording\?\.\(item, seconds\)/);
 });

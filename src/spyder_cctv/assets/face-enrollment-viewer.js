@@ -69,6 +69,12 @@
       saving = false,
       source = "camera",
       live = true;
+    let recording = null,
+      recordingTime = 0,
+      recordingPlaying = false,
+      frameSerial = 0;
+    const videoLength = () =>
+      recording ? recording.duration_seconds : video.duration;
     let mediaURL = null,
       timer = null,
       previewAbort = null,
@@ -93,8 +99,8 @@
         busy ||
         saving ||
         source !== "video" ||
-        !Number.isFinite(video.duration) ||
-        video.duration < 5;
+        !Number.isFinite(videoLength()) ||
+        videoLength() < 5;
       $("[data-fe-save]").disabled =
         busy ||
         saving ||
@@ -112,11 +118,11 @@
       $("[data-fe-select-all]").disabled =
         busy || saving || samples.length === 0;
       $("[data-fe-clear]").disabled = busy || saving;
+      $("[data-fe-play]").textContent = recordingPlaying
+        ? "Pause preview"
+        : "Play selected range";
       $("[data-fe-play]").disabled =
-        busy ||
-        saving ||
-        source !== "video" ||
-        !Number.isFinite(video.duration);
+        busy || saving || source !== "video" || !Number.isFinite(videoLength());
       dialog
         .querySelectorAll(
           "[data-fe-roi], [data-fe-reset-roi], [data-fe-start], [data-fe-duration]",
@@ -260,6 +266,9 @@
     function stopPreview() {
       clearTimeout(timer);
       timer = null;
+      recordingPlaying = false;
+      frameSerial++;
+      imageVersion++;
       previewAbort?.abort();
       previewAbort = null;
     }
@@ -308,6 +317,8 @@
     function invalidate() {
       generation++;
       operation++;
+      frameSerial++;
+      recording = null;
       requestAbort?.abort();
       requestAbort = null;
       busy = false;
@@ -371,14 +382,14 @@
         video.src = mediaURL;
         await mediaEvent("loadedmetadata", expected, () => video.load());
         if (expected !== generation || closed) return;
-        if (!Number.isFinite(video.duration) || video.duration < 5)
+        if (!Number.isFinite(videoLength()) || videoLength() < 5)
           throw Error("Choose a readable video at least 5 seconds long.");
         $("[data-fe-start]").value = 0;
         dialog
           .querySelectorAll("[data-fe-duration] option")
           .forEach(
             (option) =>
-              (option.disabled = Number(option.value) > video.duration),
+              (option.disabled = Number(option.value) > videoLength()),
           );
         $("[data-fe-duration]").value = 5;
         updateRange();
@@ -419,12 +430,105 @@
         trigger();
       });
     }
-    function seek(time, expected) {
+    async function recordingSource(item, offset) {
+      if (!/^[0-9a-f]{32}$/.test(String(item?.id || "")))
+        throw Error("Choose a saved local recording.");
+      $("[data-fe-source]").value = "video";
+      sourceChanged();
+      const expected = generation;
+      const abort = new AbortController();
+      previewAbort = abort;
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        abort.abort();
+      }, 15000);
+      let response;
+      try {
+        response = await fetch(`/api/media/${item.id}/info`, {
+          cache: "no-store",
+          signal: abort.signal,
+        });
+      } catch (error) {
+        if (timedOut)
+          throw Error("Recording metadata loading timed out. Try again.");
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+        if (previewAbort === abort) previewAbort = null;
+      }
+      if (!response.ok)
+        throw Error("Recording is unavailable. It may have been removed.");
+      const info = await response.json();
+      if (closed || generation !== expected) return;
+      clipRange(offset, 5, info.duration_seconds);
+      recording = { id: item.id, duration_seconds: info.duration_seconds };
+      $("[data-fe-file-label]").hidden = true;
+      $("[data-fe-duration]").value = "5";
+      dialog
+        .querySelectorAll("[data-fe-duration] option")
+        .forEach(
+          (option) => (option.disabled = Number(option.value) > videoLength()),
+        );
+      $("[data-fe-start]").max = Math.max(0, videoLength() - 5);
+      $("[data-fe-start]").value = clipRange(offset, 5, videoLength()).start;
+      const range = updateRange();
+      await seek(range.start, expected);
+      if (closed || generation !== expected) return;
+      status(
+        `${item.name || item.filename || "Saved recording"} · Choose a 5–10 second range and focus on one person. Playback is a sampled local preview.`,
+      );
+      controls();
+    }
+    async function seek(time, expected) {
+      if (recording) {
+        const serial = ++frameSerial;
+        previewAbort?.abort();
+        const abort = new AbortController();
+        previewAbort = abort;
+        let timedOut = false;
+        const timeout = setTimeout(() => {
+          timedOut = true;
+          abort.abort();
+        }, 15000);
+        let url;
+        try {
+          const response = await fetch(
+            `/api/media/${recording.id}/frame?time=${time.toFixed(3)}`,
+            { cache: "no-store", signal: abort.signal },
+          );
+          if (!response.ok)
+            throw Error(
+              "Recording frame is unavailable. Choose another time or verify the clip still exists.",
+            );
+          url = URL.createObjectURL(await response.blob());
+          if (closed || expected !== generation || serial !== frameSerial)
+            return false;
+          recordingTime = time;
+          shownToken = null;
+          return await loadImage(url, expected);
+        } catch (error) {
+          if (timedOut)
+            throw Error(
+              "Recording frame loading timed out. Try another position.",
+            );
+          throw error;
+        } finally {
+          clearTimeout(timeout);
+          if (url) URL.revokeObjectURL(url);
+          if (previewAbort === abort) previewAbort = null;
+        }
+      }
       if (Math.abs(video.currentTime - time) < 0.01 && video.readyState >= 2)
         return Promise.resolve(true);
       return mediaEvent("seeked", expected, () => (video.currentTime = time));
     }
     function drawVideo() {
+      if (recording) {
+        draw();
+        controls();
+        return;
+      }
       if (!video.videoWidth || !video.videoHeight) return;
       const scale = Math.min(
         1,
@@ -441,16 +545,16 @@
       controls();
     }
     function updateRange() {
-      if (!Number.isFinite(video.duration)) return;
+      if (!Number.isFinite(videoLength())) return;
       const range = clipRange(
         $("[data-fe-start]").value,
         $("[data-fe-duration]").value,
-        video.duration,
+        videoLength(),
       );
-      $("[data-fe-start]").max = Math.max(0, video.duration - range.duration);
+      $("[data-fe-start]").max = Math.max(0, videoLength() - range.duration);
       $("[data-fe-start]").value = range.start;
       $("[data-fe-range]").textContent =
-        `${range.start.toFixed(1)}s – ${(range.start + range.duration).toFixed(1)}s / ${video.duration.toFixed(1)}s`;
+        `${range.start.toFixed(1)}s – ${(range.start + range.duration).toFixed(1)}s / ${videoLength().toFixed(1)}s`;
       return range;
     }
     function rawImage() {
@@ -530,7 +634,8 @@
             status(
               `Inspecting frame ${index + 1} of ${count} at ${time.toFixed(1)}s…`,
             );
-            await seek(time, expected);
+            const ready = await seek(time, expected);
+            if (!ready) break;
             if (closed || expected !== generation || op !== operation) break;
             drawVideo();
             const body = { image_base64: rawImage() };
@@ -544,10 +649,12 @@
           await analyze(
             body,
             source === "video"
-              ? currentImage === video
-                ? `${video.currentTime.toFixed(1)}s`
-                : samples.find((sample) => sample.token === shownToken)
-                    ?.label || "Reviewed frame"
+              ? recording && !shownToken
+                ? `${recordingTime.toFixed(1)}s`
+                : currentImage === video
+                  ? `${video.currentTime.toFixed(1)}s`
+                  : samples.find((sample) => sample.token === shownToken)
+                      ?.label || "Reviewed frame"
               : "Frame " + (new Set(samples.map((s) => s.token)).size + 1),
             expected,
             op,
@@ -684,13 +791,14 @@
         if (event.target.matches("[data-fe-file]"))
           await mediaFile(event.target.files[0]);
         if (event.target.matches("[data-fe-start], [data-fe-duration]")) {
+          stopPreview();
           video.pause();
           const range = updateRange();
           await seek(range.start, generation);
           drawVideo();
         }
       } catch (error) {
-        status(error.message, true);
+        if (!closed && error.name !== "AbortError") status(error.message, true);
         controls();
       }
     });
@@ -708,6 +816,9 @@
         if (button.hasAttribute("data-fe-clear")) clearReview();
         if (button.hasAttribute("data-fe-cancel")) {
           operation++;
+          frameSerial++;
+          imageVersion++;
+          stopPreview();
           requestAbort?.abort();
           busy = false;
           status(
@@ -732,8 +843,47 @@
           paintSamples();
         }
         if (button.hasAttribute("data-fe-play")) {
+          if (recording && recordingPlaying) {
+            stopPreview();
+            controls();
+            return;
+          }
           const range = updateRange();
           if (!range) return;
+          stopPreview();
+          if (recording) {
+            recordingPlaying = true;
+            const expected = generation;
+            const started = performance.now();
+            const playRecording = async () => {
+              if (
+                closed ||
+                document.hidden ||
+                !recordingPlaying ||
+                expected !== generation
+              )
+                return;
+              const time = range.start + (performance.now() - started) / 1000;
+              if (time >= range.start + range.duration) {
+                recordingPlaying = false;
+                controls();
+                return;
+              }
+              try {
+                await seek(time, expected);
+              } catch (error) {
+                const active = recordingPlaying && expected === generation;
+                recordingPlaying = false;
+                if (active && !closed) status(error.message, true);
+                controls();
+                return;
+              }
+              if (recordingPlaying && expected === generation)
+                timer = setTimeout(playRecording, 500);
+            };
+            await playRecording();
+            return;
+          }
           await seek(range.start, generation);
           await video.play();
           const play = () => {
@@ -810,7 +960,13 @@
     dialog.showModal();
     $("[data-fe-camera]").value = options.cameraId || "";
     controls();
-    if (options.file) {
+    if (options.recording) {
+      try {
+        await recordingSource(options.recording, options.offset || 0);
+      } catch (error) {
+        if (!closed && error.name !== "AbortError") status(error.message, true);
+      }
+    } else if (options.file) {
       try {
         await mediaFile(options.file);
       } catch (error) {
@@ -819,5 +975,115 @@
     } else preview(generation);
     return dialog;
   }
-  window.spyderFaceEnrollment = { open, clipRange, normalizedRegion };
+  let handoff = 0;
+  async function fromRecording(item, offset = 0) {
+    if (
+      window.spyderShowcase ||
+      item?.kind !== "recording" ||
+      !/^[0-9a-f]{32}$/.test(String(item?.id || ""))
+    )
+      return;
+    if (document.querySelector(".fe-studio, .fe-recording-picker")) return;
+    const token = ++handoff;
+    // Wait for workspace mounting, rather than a fixed timeout after hash navigation.
+    location.hash = "vision-lab";
+    let observer, timeout;
+    const tab = await new Promise((resolve) => {
+      const scan = () => {
+        const button = document.getElementById("vision-gallery-tab");
+        if (button) {
+          observer?.disconnect();
+          clearTimeout(timeout);
+          resolve(button);
+        }
+      };
+      observer = new MutationObserver(scan);
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+      timeout = setTimeout(() => {
+        observer.disconnect();
+        resolve(null);
+      }, 5000);
+      scan();
+    });
+    if (!tab || token !== handoff) return;
+    tab.click();
+    const picker = document.createElement("dialog");
+    picker.className = "dt-dialog fe-recording-picker";
+    picker.setAttribute("aria-labelledby", "fe-recording-title");
+    picker.innerHTML = `<header class="fe-heading"><div><h3 id="fe-recording-title">Enroll someone from a recording</h3><p>${escape(item.name || item.filename || "Saved recording")} · ${Math.max(0, Number(offset) || 0).toFixed(1)}s</p></div><button type="button" class="dt-icon-button" data-picker-close aria-label="Cancel enrollment">${closeIcon}</button></header><p>Choose the gallery for this person. Then focus on their face and review a 5–10 second range before saving.</p><label>Face gallery<select data-picker-gallery disabled><option>Loading galleries…</option></select></label><p data-picker-status role="status"></p><div class="fe-actions"><button type="button" class="dt-button dt-primary" data-picker-open disabled>Open clip in Enrollment Studio</button><button type="button" class="dt-button" data-picker-close>Cancel</button></div>`;
+    document.body.append(picker);
+    picker.showModal();
+    const abort = new AbortController();
+    const navigation = new MutationObserver(() => {
+      if (!tab.isConnected) picker.close();
+    });
+    navigation.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+    picker.addEventListener(
+      "close",
+      () => {
+        abort.abort();
+        navigation.disconnect();
+        picker.remove();
+      },
+      { once: true },
+    );
+    picker
+      .querySelectorAll("[data-picker-close]")
+      .forEach((button) => (button.onclick = () => picker.close()));
+    try {
+      const response = await fetch("/api/faces/galleries", {
+        cache: "no-store",
+        signal: abort.signal,
+      });
+      if (!response.ok)
+        throw Error("Unable to load galleries. Cancel and try again.");
+      const result = await response.json();
+      if (!picker.open) return;
+      const select = picker.querySelector("[data-picker-gallery]");
+      select.replaceChildren();
+      for (const gallery of result.galleries || [])
+        select.add(new Option(gallery.name, gallery.id));
+      const ready = select.options.length > 0;
+      select.disabled = !ready;
+      picker.querySelector("[data-picker-open]").disabled = !ready;
+      if (!ready)
+        picker.querySelector("[data-picker-status]").textContent =
+          "Create a gallery on this page first, then return to your recording and choose Enroll someone.";
+      picker.querySelector("[data-picker-open]").onclick = async () => {
+        const galleryId = select.value;
+        const galleryName = select.selectedOptions[0]?.text;
+        picker.close();
+        await open({
+          galleryId,
+          galleryName,
+          recording: { id: item.id, name: item.name, filename: item.filename },
+          offset,
+          opener: tab,
+          onSaved: () => {
+            window.dispatchEvent(
+              new CustomEvent("spyder:face-galleries-changed"),
+            );
+            document.querySelector(".fe-studio")?.close();
+            if (tab.isConnected) tab.click();
+          },
+        });
+      };
+    } catch (error) {
+      if (picker.open)
+        picker.querySelector("[data-picker-status]").textContent =
+          error.message;
+    }
+  }
+  window.spyderFaceEnrollment = {
+    open,
+    clipRange,
+    normalizedRegion,
+    fromRecording,
+  };
 })();

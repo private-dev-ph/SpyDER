@@ -140,6 +140,10 @@
     return ids.has(String(cameraId));
   }
 
+  function recordingEnrollmentAvailable(item, showcase = false) {
+    return !showcase && item?.kind === "recording" && /^[a-f0-9]{32}$/.test(String(item.id || ""));
+  }
+
   function coverageBins(items, range, count = MAX_BINS) {
     return coverageBinsFromSegments(segments(items), range, count);
   }
@@ -281,6 +285,8 @@
     setPlayButton(false);
     const previousClip = button("Previous clip", "secondary");
     const nextClip = button("Next clip", "secondary");
+    const enrollRecording = button("Enroll someone", "secondary");
+    enrollRecording.disabled = true;
     const rateLabel = el("label", "", "Speed");
     const rate = el("select");
     for (const value of [0.5, 1, 2, 4])
@@ -291,7 +297,7 @@
     const skip = el("input");
     skip.type = "checkbox";
     skipLabel.prepend(skip);
-    controls.append(previousClip, playButton, nextClip, rateLabel, skipLabel);
+    controls.append(previousClip, playButton, nextClip, enrollRecording, rateLabel, skipLabel);
     stage.append(playerContainer, detail, controls);
 
     const railHeader = el("div", "recording-timeline-rail-header");
@@ -612,6 +618,7 @@
       lastLoadedId = null;
       selected = null;
       playing = false;
+      enrollRecording.disabled = true;
       playerContainer.replaceChildren(
         el("p", "recording-timeline-empty", message),
       );
@@ -649,6 +656,7 @@
       }
       loadedName.textContent =
         segment.item.name || segment.item.filename || "Saved recording";
+      enrollRecording.disabled = !recordingEnrollmentAvailable(segment.item, !!window.spyderShowcase);
       syncSelectedRow();
       renderTimeline();
       if (!ensurePlayer()) {
@@ -911,6 +919,22 @@
       speed = Number(rate.value) || 1;
       if (playerHandle) playerHandle.setRate(speed);
     });
+    enrollRecording.addEventListener("click", () => {
+      if (!selected || !recordingEnrollmentAvailable(selected.item, !!window.spyderShowcase)) return;
+      const item = selected.item;
+      const video = playerContainer.querySelector("video");
+      const nativeTime = video?.hidden ? NaN : Number(video?.currentTime);
+      const fallbackTime = Math.max(0, (clockMs - selected.start_ms) / 1000);
+      const seconds = Number.isFinite(nativeTime) && nativeTime >= 0 ? nativeTime : fallbackTime;
+      try { playerHandle?.pause(); } catch (_) {}
+      if (playerHandle && typeof playerHandle.destroy === "function") playerHandle.destroy();
+      playerHandle = null;
+      lastLoadedId = null;
+      playing = false;
+      setPlayButton(false);
+      playerContainer.replaceChildren();
+      window.spyderFaceEnrollment?.fromRecording?.(item, seconds);
+    });
 
     return {
       setItems(nextItems) {
@@ -990,6 +1014,7 @@
     clipPage,
     cameraIds,
     belongsToCamera,
+    recordingEnrollmentAvailable,
     mount,
   };
 });
