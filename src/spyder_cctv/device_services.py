@@ -177,11 +177,13 @@ class DeviceServices:
                     self._reviews.pop(oldest, None)
                 review_token = uuid4().hex
                 staged = [item.pop("embedding") for item in result["faces"]]
+                staged_thumbnails = [item.get("thumbnail") for item in result["faces"]]
                 self._reviews[review_token] = {
                     "expires": now + 300,
                     "gallery_id": gallery_id,
                     "provenance": provenance,
                     "embeddings": staged,
+                    "thumbnails": staged_thumbnails,
                 }
             public_faces = [
                 {key: value for key, value in item.items() if key != "embedding"}
@@ -221,6 +223,7 @@ class DeviceServices:
                 if tokens & self._review_inflight:
                     raise RuntimeError("A selected review is already being processed")
                 staged = []
+                staged_thumbnails = []
                 current = self.galleries.get_gallery(gallery_id)
                 for token, index in refs:
                     review = self._reviews.get(token)
@@ -231,9 +234,15 @@ class DeviceServices:
                     if index >= len(review["embeddings"]):
                         raise ValueError("Selected face index is invalid")
                     staged.append(review["embeddings"][index])
+                    staged_thumbnails.append(review["thumbnails"][index])
                 self._review_inflight.update(tokens)
             try:
-                result = self.galleries.enroll_embeddings(gallery_id, data["identity_name"], staged)
+                result = self.galleries.enroll_embeddings(
+                    gallery_id,
+                    data["identity_name"],
+                    staged,
+                    thumbnails=staged_thumbnails,
+                )
             except BaseException:
                 with self._lock:
                     self._review_inflight.difference_update(tokens)
