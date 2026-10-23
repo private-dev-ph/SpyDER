@@ -24,6 +24,7 @@ class DeviceServices:
         self._lock = threading.RLock()
         self._camera_sessions = {}
         self._enrollment_frames = {}
+        self._enrollment_inflight = set()
         self._connections = {}
 
     def _model(self, model_id):
@@ -77,10 +78,8 @@ class DeviceServices:
             return self.galleries.list_galleries()
         if len(parts) in (4, 5) and parts[:3] == ["api", "faces", "galleries"]:
             if len(parts) == 4:
-                return {
-                    **self.galleries.get_gallery(parts[3]),
-                    **self.galleries.list_identities(parts[3]),
-                }
+                snapshot = self.galleries.snapshot(parts[3])
+                return {**snapshot["gallery"], "identities": snapshot["identities"]}
             if parts[4] == "export":
                 return self.galleries.export_gallery(parts[3])
         raise KeyError("Unknown device resource")
@@ -135,22 +134,37 @@ class DeviceServices:
             )
             if sum(key in data for key in ("camera_id", "image_base64", "enrollment_token")) != 1:
                 raise ValueError("Choose one live camera or one image")
+            claimed_token = None
             if "enrollment_token" in data:
                 token = data["enrollment_token"]
                 if not isinstance(token, str):
                     raise ValueError("Invalid enrollment selection")
+                if type(data.get("face_index")) is not int:
+                    raise ValueError("Select a face before confirming enrollment")
                 with self._lock:
-                    cached = self._enrollment_frames.pop(token, None)
-                if not cached or cached[0] < time.monotonic() or cached[1] != gallery_id:
-                    raise ValueError("Face selection expired; capture the image again")
-                image = cached[2]
+                    cached = self._enrollment_frames.get(token)
+                    if not cached or cached[0] < time.monotonic() or cached[1] != gallery_id:
+                        raise ValueError("Face selection expired; capture the image again")
+                    if cached[3] != data["identity_name"].strip().casefold():
+                        raise ValueError("Identity changed; process a new enrollment image")
+                    if token in self._enrollment_inflight:
+                        raise RuntimeError("This face selection is already being processed")
+                    self._enrollment_inflight.add(token)
+                    claimed_token = token
+                    image = cached[2]
             elif "camera_id" in data:
                 worker = self.manager.get_worker(data["camera_id"])
                 if worker.status()["state"] != "running":
                     raise ValueError("Start the selected camera before enrolling")
-                frame = worker.raw_frame()
+                frame = worker.raw_frame(timeout=2.0)
                 if frame is None:
-                    raise ValueError("Wait for a fresh camera frame")
+                    if worker.status()["state"] != "running":
+                        raise ValueError(
+                            "Camera stopped or disconnected while waiting for enrollment"
+                        )
+                    raise ValueError(
+                        "Camera did not supply a fresh frame; check its live view and retry"
+                    )
                 image = encode_jpeg(frame)
             else:
                 value = data["image_base64"]
@@ -162,9 +176,18 @@ class DeviceServices:
                     raise ValueError("Image must contain valid base64 data") from None
                 if len(image) > 8 * 1024 * 1024:
                     raise ValueError("Choose an image smaller than 8 MiB")
-            result = self.galleries.enroll(
-                gallery_id, data["identity_name"], image, face_index=data.get("face_index")
-            )
+            accepted = False
+            try:
+                result = self.galleries.enroll(
+                    gallery_id, data["identity_name"], image, face_index=data.get("face_index")
+                )
+                accepted = not result.get("needs_face_selection")
+            finally:
+                if claimed_token is not None:
+                    with self._lock:
+                        if accepted:
+                            self._enrollment_frames.pop(claimed_token, None)
+                        self._enrollment_inflight.discard(claimed_token)
             if result.get("needs_face_selection"):
                 with self._lock:
                     now = time.monotonic()
@@ -176,7 +199,12 @@ class DeviceServices:
                     if len(self._enrollment_frames) >= 4:
                         self._enrollment_frames.pop(next(iter(self._enrollment_frames)))
                     token = uuid4().hex
-                    self._enrollment_frames[token] = (now + 60, gallery_id, image)
+                    self._enrollment_frames[token] = (
+                        now + 60,
+                        gallery_id,
+                        image,
+                        data["identity_name"].strip().casefold(),
+                    )
                 return {
                     "requires_selection": True,
                     "faces": [
@@ -325,6 +353,7 @@ class DeviceServices:
         self.onvif.close_all()
         with self._lock:
             self._enrollment_frames.clear()
+            self._enrollment_inflight.clear()
             self._connections.clear()
 
 
