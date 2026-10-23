@@ -134,6 +134,9 @@ class FaceEnrollmentService:
         self._lock = threading.RLock()
         self._enrollment_slots = threading.BoundedSemaphore(1)
         self._verified_models: dict[str, tuple[int, int, int, int, int, str]] = {}
+        self._verified_exports: dict[
+            str, tuple[tuple[int, int, int, int, int], tuple[int, int, int, int, int] | None]
+        ] = {}
         self._catalog_cache: dict[str, tuple[int, int, int, int, int, dict[str, Any]]] = {}
         self.root = Path(storage_dir).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -162,7 +165,7 @@ class FaceEnrollmentService:
                 stat.st_ctime_ns,
             )
             if cached is not None and cached[:5] == fingerprint:
-                self._repair_export(directory, cached[5])
+                self._repair_export(directory, cached[5], fingerprint)
                 return copy.deepcopy(cached[5]) if copy_data else cached[5]
             with path.open("r", encoding="utf-8") as stream:
                 data = json.load(
@@ -170,7 +173,7 @@ class FaceEnrollmentService:
                     parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
                 )
             self._validate_catalog(data, gallery_id)
-            self._repair_export(directory, data)
+            self._repair_export(directory, data, self._file_fingerprint(path))
             stat = path.stat()
             self._catalog_cache[gallery_id] = (
                 stat.st_dev,
@@ -184,20 +187,59 @@ class FaceEnrollmentService:
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, OverflowError) as error:
             raise ValueError("Gallery catalog is invalid") from error
 
-    @classmethod
-    def _repair_export(cls, directory: Path, catalog: dict[str, Any]) -> None:
+    @staticmethod
+    def _file_fingerprint(path: Path) -> tuple[int, int, int, int, int]:
+        stat = path.stat()
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+
+    def _repair_export(
+        self,
+        directory: Path,
+        catalog: dict[str, Any],
+        canonical_fingerprint: tuple[int, int, int, int, int] | None = None,
+    ) -> None:
         exported_path = directory / "gallery-v1.json"
+        if canonical_fingerprint is None:
+            canonical_fingerprint = self._file_fingerprint(directory / "catalog.json")
+        gallery_id = catalog["id"]
         try:
-            with exported_path.open("r", encoding="utf-8") as stream:
-                exported = json.load(
-                    stream,
-                    parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
-                )
+            export_stat = exported_path.stat()
+            export_fingerprint = (
+                export_stat.st_dev,
+                export_stat.st_ino,
+                export_stat.st_size,
+                export_stat.st_mtime_ns,
+                export_stat.st_ctime_ns,
+            )
+        except OSError:
+            export_fingerprint = None
+        if self._verified_exports.get(gallery_id) == (
+            canonical_fingerprint,
+            export_fingerprint,
+        ):
+            return
+        try:
+            if export_fingerprint is None or export_stat.st_size > _MAX_CATALOG_BYTES:
+                exported = None
+            else:
+                with exported_path.open("r", encoding="utf-8") as stream:
+                    exported = json.load(
+                        stream,
+                        parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+                    )
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
             exported = None
-        expected = cls._v1(catalog)
+        expected = self._v1(catalog)
         if exported != expected:
             _atomic_json(exported_path, expected)
+            export_fingerprint = self._file_fingerprint(exported_path)
+        self._verified_exports[gallery_id] = (canonical_fingerprint, export_fingerprint)
 
     @staticmethod
     def _validate_catalog(data: Any, gallery_id: str) -> None:
@@ -277,6 +319,7 @@ class FaceEnrollmentService:
         exported = self._v1(catalog)
         directory = self._dir(gallery_id)
         previous = self._catalog_cache.get(gallery_id)
+        self._verified_exports.pop(gallery_id, None)
         _atomic_json(directory / "gallery-v1.json", exported)
         try:
             _atomic_json(directory / "catalog.json", catalog)
@@ -284,7 +327,7 @@ class FaceEnrollmentService:
             self._catalog_cache.pop(gallery_id, None)
             if previous is not None:
                 try:
-                    self._repair_export(directory, previous[5])
+                    self._repair_export(directory, previous[5], previous[:5])
                 except BaseException:
                     pass
             raise
@@ -296,6 +339,10 @@ class FaceEnrollmentService:
             stat.st_mtime_ns,
             stat.st_ctime_ns,
             copy.deepcopy(catalog),
+        )
+        self._verified_exports[gallery_id] = (
+            self._file_fingerprint(directory / "catalog.json"),
+            self._file_fingerprint(directory / "gallery-v1.json"),
         )
 
     @staticmethod
@@ -461,10 +508,16 @@ class FaceEnrollmentService:
     @_serialized
     def delete_gallery(self, gallery_id: str) -> None:
         directory = self._dir(gallery_id)
+        if any(
+            path.name not in {"catalog.json", "gallery-v1.json"}
+            for path in directory.iterdir()
+        ):
+            raise ValueError("Gallery storage contains unexpected files")
         for name in ("catalog.json", "gallery-v1.json"):
             (directory / name).unlink(missing_ok=True)
         directory.rmdir()
         self._catalog_cache.pop(gallery_id, None)
+        self._verified_exports.pop(gallery_id, None)
 
     @_serialized
     def gallery_path(self, gallery_id: str) -> Path:
