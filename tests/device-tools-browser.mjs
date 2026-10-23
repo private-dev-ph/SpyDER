@@ -11,10 +11,12 @@ const profile = await mkdtemp(
 );
 const html =
   '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/device-tools.css"><style>:root{--surface:#fffefa;--canvas:#f7f5ef;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--control-border:#8c8274;--focus:#830000;--accent:#be1a1a;--accent-hover:#830000;--danger:#bc0202;--gold-soft:#f8ebab}html[data-theme=dark]{--surface:#1e1c1b;--canvas:#141313;--ink:#f5efe4;--muted:#b0a69b;--border:#37312c;--focus:#f7d87f;--danger:#ff827b}</style></head><body><main><div id="face-gallery-tools"></div><div id="onvif-camera-tools"></div></main><script>' +
-  'window.calls=[];window.runtimeErrors=[];window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;calls.push({path,method,body});let data={};' +
+  'window.calls=[];window.runtimeErrors=[];window.galleryIdentityCount=1;window.gallerySampleCount=1;window.holdEnroll=false;window.enrollStarted=false;window.resolveEnroll=null;window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;calls.push({path,method,body});if(window.holdEnroll&&path.endsWith("/enroll")&&!body.enrollment_token)return await new Promise(resolve=>{window.enrollStarted=true;window.resolveEnroll=()=>{window.holdEnroll=false;window.resolveEnroll=null;resolve(new Response(JSON.stringify({requires_selection:true,enrollment_token:"late-token",faces:[{index:0}]}),{status:200,headers:{"Content-Type":"application/json"}}))}});let data={};' +
   'if(path==="/api/models")data={models:[{id:"det-1",name:"Detector",engine:"insightface",metadata:{model_type:"face_detection"}},{id:"rec-1",name:"Recognizer",engine:"insightface",metadata:{model_type:"face_recognition"}}]};' +
-  'else if(path==="/api/faces/galleries"&&method==="GET")data={galleries:[{id:"g1",name:"Lobby",identity_count:1,sample_count:1},{id:"g2",name:"Office",identity_count:0,sample_count:0}]};' +
-  'else if(path==="/api/faces/galleries/g1"&&method==="GET")data={id:"g1",name:"Lobby",detector_model_id:"det-1",recognition_model_id:"rec-1",identities:[{id:"i1",name:"Ada",samples:[{id:"s1"}]}]};' +
+  'else if(path==="/api/faces/galleries"&&method==="GET")data={galleries:[{id:"g1",name:"Lobby",identity_count:window.galleryIdentityCount,sample_count:window.gallerySampleCount},{id:"g2",name:"Office",identity_count:0,sample_count:0}]};' +
+  'else if(path.endsWith("/identities/i1/samples/s1/remove")){window.gallerySampleCount=0;data={};}' +
+  'else if(path.endsWith("/identities/i1/remove")){window.galleryIdentityCount=0;window.gallerySampleCount=0;data={};}' +
+  'else if(path==="/api/faces/galleries/g1"&&method==="GET")data={id:"g1",name:"Lobby",detector_model_id:"det-1",recognition_model_id:"rec-1",identities:window.galleryIdentityCount?[{id:"i1",name:"Ada",samples:window.gallerySampleCount?[{id:"s1"}]:[]}]:[]};' +
   'else if(path==="/api/faces/galleries/g2"&&method==="GET")data={id:"g2",name:"Office",identities:[]};' +
   'else if(path==="/api/faces/galleries"&&method==="POST")data={id:"g1"};else if(path.endsWith("/enroll")&&method==="POST")data=body.enrollment_token?{}:{requires_selection:true,enrollment_token:"token-1",faces:[{index:0,bbox:[1,2,30,40],confidence:.97},{index:1,bbox:[50,5,80,40],confidence:.82}]};' +
   'else if(path==="/api/onvif/discover")data={devices:[{endpoint:"http://192.168.1.8/onvif/device_service",name:"Mock cam"}]};else if(path==="/api/onvif/connect")data={session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true},{token:"p-2",name:"No PTZ",ptz:true,ptz_caps:{pan_tilt:false,zoom:false}}],ptz:{pan_tilt:true,zoom:false}};else if(path==="/api/onvif/sessions")data={sessions:[{session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true}],ptz:{pan_tilt:true,zoom:false}}]};else if(path==="/api/onvif/add")data={message:"Added"};return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}})};</script><script src="/device-tools.js"></script></body></html>';
@@ -189,6 +191,68 @@ try {
   await until(
     "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
   );
+  await evaluate(`(() => {
+    window.holdEnroll=true;
+    FileReader.prototype.readAsDataURL=function(){window.fileReader=this;window.fileReadStarted=true};
+    const transfer=new DataTransfer();transfer.items.add(new File(['face'],'face.jpg',{type:'image/jpeg'}));
+    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='Before switch';form.elements.image.files=transfer.files;
+    form.querySelector('button').click();
+  })()`);
+  await until("window.fileReadStarted === true");
+  await click("#face-gallery-tools [data-gid=g2]");
+  await until(
+    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
+  );
+  await evaluate(`(() => {
+    Object.defineProperty(window.fileReader,'result',{value:'data:image/jpeg;base64,ZmFrZQ=='});
+    window.fileReader.onload();
+  })()`);
+  await delay(100);
+  assert.equal(
+    await evaluate("calls.some(x=>x.body?.identity_name==='Before switch')"),
+    false,
+    "A file read completed after switching galleries is discarded before enrollment",
+  );
+  await evaluate("window.holdEnroll=false");
+  await click("#face-gallery-tools [data-gid=g1]");
+  await until(
+    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
+  );
+  await evaluate(`(() => {
+    window.holdEnroll=true;window.enrollStarted=false;
+    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='Late token';form.elements.camera_id.value='cam-1';form.querySelector('button').click();
+  })()`);
+  await until("window.enrollStarted === true");
+  await click("#face-gallery-tools [data-gid=g2]");
+  await until(
+    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
+  );
+  await evaluate("window.resolveEnroll()");
+  await delay(100);
+  assert.equal(
+    await evaluate("document.querySelector('#face-gallery-tools')._pending"),
+    undefined,
+    "Late face selections do not attach to the newly selected gallery",
+  );
+  await click("#face-gallery-tools [data-gid=g1]");
+  await until(
+    "document.querySelector('#face-gallery-tools [data-detail]').innerText.includes('Enroll face')",
+  );
+  await evaluate(`(() => {
+    const form=document.querySelector('[data-enroll]');form.elements.identity_name.value='Draft name';form.elements.camera_id.value='cam-1';
+    const transfer=new DataTransfer();transfer.items.add(new File(['draft'],'draft.jpg',{type:'image/jpeg'}));form.elements.image.files=transfer.files;
+    const search=document.querySelector('[data-search]');search.value='Ada';search.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  assert.deepEqual(
+    await evaluate(
+      `(() => {const f=document.querySelector('[data-enroll]');return {name:f.elements.identity_name.value,camera:f.elements.camera_id.value,files:f.elements.image.files.length}})()`,
+    ),
+    { name: "Draft name", camera: "cam-1", files: 1 },
+    "Searching preserves the enrollment draft and selected image",
+  );
+  await evaluate(
+    `(() => {const s=document.querySelector('[data-search]');s.value='';s.dispatchEvent(new Event('input',{bubbles:true}));const f=document.querySelector('[data-enroll]');f.reset()})()`,
+  );
   await evaluate(
     "(()=>{const f=document.querySelector('[data-enroll]');f.elements.identity_name.value='Bea';f.elements.camera_id.value='cam-1';f.querySelector('button[type=submit],button').click()})()",
   );
@@ -244,6 +308,9 @@ try {
       "Cancel rename/delete must not call an API",
     );
   }
+  const readsBeforeRename = await evaluate(
+    "calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length",
+  );
   await click("#face-gallery-tools [data-ri]");
   await until("!!document.querySelector('.dt-dialog[open]')");
   await evaluate(
@@ -273,6 +340,39 @@ try {
     ),
     true,
     "Enter submits the rename rather than canceling it",
+  );
+  await until(
+    `calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length>${readsBeforeRename}`,
+  );
+  await click("#face-gallery-tools [data-xs=s1]");
+  await until("!!document.querySelector('.dt-dialog[open]')");
+  const readsBeforeSampleRemove = await evaluate(
+    "calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length",
+  );
+  await click(".dt-dialog [value=confirm]");
+  await until("!document.querySelector('.dt-dialog')");
+  await until(
+    `calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length>${readsBeforeSampleRemove}`,
+  );
+  assert.match(
+    await evaluate("document.querySelector('[data-gid=g1]').innerText"),
+    /1 identities.*0 samples/,
+    "Removing a sample refreshes gallery counts",
+  );
+  await click("#face-gallery-tools [data-xi=i1]");
+  await until("!!document.querySelector('.dt-dialog[open]')");
+  const readsBeforeIdentityRemove = await evaluate(
+    "calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length",
+  );
+  await click(".dt-dialog [value=confirm]");
+  await until("!document.querySelector('.dt-dialog')");
+  await until(
+    `calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length>${readsBeforeIdentityRemove}`,
+  );
+  assert.match(
+    await evaluate("document.querySelector('[data-gid=g1]').innerText"),
+    /0 identities.*0 samples/,
+    "Removing an identity refreshes gallery counts",
   );
   await click("#onvif-camera-tools [data-discover]");
   await until("document.querySelector('[data-devices]').options.length>1");

@@ -138,7 +138,8 @@
       desc = null,
       q = "",
       selectionVersion = 0,
-      detailVersion = 0;
+      detailVersion = 0,
+      galleryGeneration = 0;
     h.classList.add("dt-host");
     h.innerHTML =
       '<section class="dt-card"><header class="dt-head"><div><p class="dt-eyebrow">LOCAL IDENTITY GALLERY</p><h2>Face enrollment</h2><p>Gallery matches stay separate from closed-set classifiers.</p></div><button class="dt-button dt-primary" data-create>Create gallery</button></header>' +
@@ -157,6 +158,7 @@
         list = d.galleries || [];
         if (gid && !list.some((g) => g.id === gid)) {
           gid = "";
+          galleryGeneration++;
           desc = null;
           detailVersion++;
           delete h._pending;
@@ -185,49 +187,9 @@
           say(h, e.message, true);
       }
     }
-    function paint() {
-      h.querySelector("[data-list]").innerHTML =
-        list
-          .filter((g) => (g.name + " " + g.id).toLowerCase().includes(q))
-          .map(
-            (g) =>
-              '<button class="dt-gallery ' +
-              (gid === g.id ? "is-selected" : "") +
-              '" data-gid="' +
-              esc(g.id) +
-              '" aria-pressed="' +
-              (gid === g.id) +
-              '"><b>' +
-              esc(g.name) +
-              "</b><span>" +
-              (g.identity_count || 0) +
-              " identities · " +
-              (g.sample_count || 0) +
-              " samples</span></button>",
-          )
-          .join("") ||
-        '<p class="dt-empty">No galleries. Create one to begin.</p>';
-      const p = h.querySelector("[data-detail]");
-      if (!desc || desc.id !== gid) {
-        p.replaceChildren();
-        return;
-      }
-      p.innerHTML =
-        '<header class="dt-detail-head"><h3>' +
-        esc(desc.name) +
-        '</h3><div class="dt-actions"><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><form class="dt-enroll" data-enroll><h4>Enroll face</h4><label>Identity name<input name="identity_name" required maxlength="128"></label><label>Camera frame<select name="camera_id"><option value="">Choose camera</option>' +
-        (window.spyder?.cameras?.() || [])
-          .map(
-            (c) =>
-              '<option value="' +
-              esc(c.id) +
-              '">' +
-              esc(c.name || c.id) +
-              "</option>",
-          )
-          .join("") +
-        '</select></label><label>Or upload image<input name="image" type="file" accept="image/*"></label><button class="dt-button dt-primary">Process enrollment</button><p>Image used for this request only.</p><div data-choice></div></form><section class="dt-identities"><h4>Identities</h4>' +
-        ((desc.identities || [])
+    function identitiesMarkup() {
+      return (
+        (desc.identities || [])
           .filter((i) => (i.name + " " + i.id).toLowerCase().includes(q))
           .map(
             (i) =>
@@ -254,8 +216,60 @@
                 .join("") +
               "</article>",
           )
-          .join("") || '<p class="dt-empty">No identities found.</p>') +
-        "</section>";
+          .join("") || '<p class="dt-empty">No identities found.</p>'
+      );
+    }
+    function paint() {
+      h.querySelector("[data-list]").innerHTML =
+        list
+          .filter((g) => (g.name + " " + g.id).toLowerCase().includes(q))
+          .map(
+            (g) =>
+              '<button class="dt-gallery ' +
+              (gid === g.id ? "is-selected" : "") +
+              '" data-gid="' +
+              esc(g.id) +
+              '" aria-pressed="' +
+              (gid === g.id) +
+              '"><b>' +
+              esc(g.name) +
+              "</b><span>" +
+              (g.identity_count || 0) +
+              " identities · " +
+              (g.sample_count || 0) +
+              " samples</span></button>",
+          )
+          .join("") ||
+        '<p class="dt-empty">No galleries. Create one to begin.</p>';
+      const p = h.querySelector("[data-detail]");
+      if (!desc || desc.id !== gid) {
+        p.replaceChildren();
+        delete p.dataset.renderedGid;
+        p._renderedDesc = null;
+        return;
+      }
+      if (p.dataset.renderedGid === gid && p._renderedDesc === desc) {
+        p.querySelector(".dt-identities").innerHTML = identitiesMarkup();
+        return;
+      }
+      p.innerHTML =
+        '<header class="dt-detail-head"><h3>' +
+        esc(desc.name) +
+        '</h3><div class="dt-actions"><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><form class="dt-enroll" data-enroll><h4>Enroll face</h4><label>Identity name<input name="identity_name" required maxlength="128"></label><label>Camera frame<select name="camera_id"><option value="">Choose camera</option>' +
+        (window.spyder?.cameras?.() || [])
+          .map(
+            (c) =>
+              '<option value="' +
+              esc(c.id) +
+              '">' +
+              esc(c.name || c.id) +
+              "</option>",
+          )
+          .join("") +
+        '</select></label><label>Or upload image<input name="image" type="file" accept="image/*"></label><button class="dt-button dt-primary">Process enrollment</button><p>Image used for this request only.</p><div data-choice></div></form><section class="dt-identities"><h4>Identities</h4></section>';
+      p.querySelector(".dt-identities").innerHTML = identitiesMarkup();
+      p.dataset.renderedGid = gid;
+      p._renderedDesc = desc;
     }
     h.addEventListener("input", (e) => {
       if (e.target.matches("[data-search]")) {
@@ -272,8 +286,8 @@
         if (b.hasAttribute("data-refresh")) return await refresh();
         if (b.dataset.gid) {
           if (gid !== b.dataset.gid) {
+            galleryGeneration++;
             delete h._pending;
-            h._enrolling = false;
           }
           gid = b.dataset.gid;
           paint();
@@ -360,6 +374,7 @@
                     "/api/faces/galleries",
                     Object.fromEntries(new FormData(d.querySelector("form"))),
                   );
+                  galleryGeneration++;
                   gid = r.id;
                   await refresh();
                   await load();
@@ -418,6 +433,7 @@
               {},
             );
             gid = "";
+            galleryGeneration++;
             desc = null;
             await refresh();
             window.dispatchEvent(
@@ -461,6 +477,7 @@
             { name },
           );
           await load();
+          await refresh();
           window.dispatchEvent(
             new CustomEvent("spyder:face-galleries-changed"),
           );
@@ -487,6 +504,7 @@
             {},
           );
           await load();
+          await refresh();
           window.dispatchEvent(
             new CustomEvent("spyder:face-galleries-changed"),
           );
@@ -515,6 +533,7 @@
             {},
           );
           await load();
+          await refresh();
           window.dispatchEvent(
             new CustomEvent("spyder:face-galleries-changed"),
           );
@@ -531,14 +550,17 @@
     h.addEventListener("submit", async (e) => {
       if (!e.target.matches("[data-enroll]") || blocked) return;
       e.preventDefault();
-      if (h._enrolling) return;
-      h._enrolling = true;
       let f = e.target,
-        submit = f.querySelector("button"),
-        b = { identity_name: f.elements.identity_name.value.trim() };
+        submit = f.querySelector("button");
+      if (f._enrolling) return;
+      f._enrolling = true;
       if (submit) submit.disabled = true;
+      const enrollmentGallery = gid,
+        enrollmentGeneration = galleryGeneration,
+        file = f.elements.image.files[0],
+        cameraId = f.elements.camera_id.value,
+        b = { identity_name: f.elements.identity_name.value.trim() };
       try {
-        let file = f.elements.image.files[0];
         if (file) {
           if (file.size > 8 * 1024 * 1024)
             throw Error("Choose an image smaller than 8 MiB.");
@@ -548,14 +570,26 @@
             r.onerror = no;
             r.readAsDataURL(file);
           });
+          if (
+            enrollmentGeneration !== galleryGeneration ||
+            enrollmentGallery !== gid
+          )
+            return;
           b.image_base64 = String(u).split(",")[1];
-        } else if (f.elements.camera_id.value) {
-          b.camera_id = f.elements.camera_id.value;
+        } else if (cameraId) {
+          b.camera_id = cameraId;
         } else throw Error("Choose camera frame or image.");
         let d = await api(
-          "/api/faces/galleries/" + encodeURIComponent(gid) + "/enroll",
+          "/api/faces/galleries/" +
+            encodeURIComponent(enrollmentGallery) +
+            "/enroll",
           b,
         );
+        if (
+          enrollmentGeneration !== galleryGeneration ||
+          enrollmentGallery !== gid
+        )
+          return;
         if (d.requires_selection) {
           f.querySelector("[data-choice]").innerHTML =
             (d.preview?.startsWith("data:image/jpeg;base64,")
@@ -585,51 +619,94 @@
           h._pending = {
             identity_name: b.identity_name,
             enrollment_token: d.enrollment_token,
-            gallery_id: gid,
+            gallery_id: enrollmentGallery,
+            gallery_generation: enrollmentGeneration,
           };
           say(h, "Select one detected face.");
           return;
         }
         f.reset();
         await load();
+        if (
+          enrollmentGeneration !== galleryGeneration ||
+          enrollmentGallery !== gid
+        )
+          return;
         await refresh();
+        if (
+          enrollmentGeneration !== galleryGeneration ||
+          enrollmentGallery !== gid
+        )
+          return;
         say(h, "Face enrolled. Image not retained.");
         window.dispatchEvent(new CustomEvent("spyder:face-galleries-changed"));
       } catch (x) {
-        say(h, x.message, true);
+        if (
+          enrollmentGeneration === galleryGeneration &&
+          enrollmentGallery === gid
+        )
+          say(h, x.message, true);
       } finally {
-        h._enrolling = false;
+        f._enrolling = false;
         if (submit?.isConnected) submit.disabled = false;
       }
     });
     h.addEventListener("click", async (e) => {
-      if (!e.target.closest("[data-confirm-face]") || blocked) return;
-      if (h._enrolling) return;
-      h._enrolling = true;
       const confirm = e.target.closest("[data-confirm-face]");
+      if (!confirm || blocked) return;
+      const form = confirm.closest("[data-enroll]");
+      if (form._enrolling) return;
+      form._enrolling = true;
       confirm.disabled = true;
+      const pending = h._pending,
+        enrollmentGallery = pending?.gallery_id,
+        enrollmentGeneration = pending?.gallery_generation;
       try {
-        let b = h._pending;
-        if (!b || b.gallery_id !== gid)
+        if (
+          !pending ||
+          enrollmentGallery !== gid ||
+          enrollmentGeneration !== galleryGeneration
+        )
           throw Error("Start enrollment again for this gallery.");
-        b.face_index = Number(h.querySelector("[data-face-index]").value);
+        const faceIndex = Number(form.querySelector("[data-face-index]").value);
         await api(
-          "/api/faces/galleries/" + encodeURIComponent(gid) + "/enroll",
+          "/api/faces/galleries/" +
+            encodeURIComponent(enrollmentGallery) +
+            "/enroll",
           {
-            identity_name: b.identity_name,
-            enrollment_token: b.enrollment_token,
-            face_index: b.face_index,
+            identity_name: pending.identity_name,
+            enrollment_token: pending.enrollment_token,
+            face_index: faceIndex,
           },
         );
+        if (
+          enrollmentGeneration !== galleryGeneration ||
+          enrollmentGallery !== gid
+        )
+          return;
         delete h._pending;
         await load();
+        if (
+          enrollmentGeneration !== galleryGeneration ||
+          enrollmentGallery !== gid
+        )
+          return;
         await refresh();
+        if (
+          enrollmentGeneration !== galleryGeneration ||
+          enrollmentGallery !== gid
+        )
+          return;
         say(h, "Face enrolled. Image not retained.");
         window.dispatchEvent(new CustomEvent("spyder:face-galleries-changed"));
       } catch (x) {
-        say(h, x.message, true);
+        if (
+          enrollmentGeneration === galleryGeneration &&
+          enrollmentGallery === gid
+        )
+          say(h, x.message, true);
       } finally {
-        h._enrolling = false;
+        form._enrolling = false;
         if (confirm.isConnected) confirm.disabled = false;
       }
     });
