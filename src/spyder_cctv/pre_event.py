@@ -2,19 +2,92 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import math
 import threading
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class BufferedFrame:
     timestamp: float
     jpeg: bytes
     capture_session: str
+    _annotations: tuple[MappingProxyType, ...] = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        timestamp: float,
+        jpeg: bytes,
+        capture_session: str,
+        annotations: tuple[dict[str, Any], ...] = (),
+    ) -> None:
+        object.__setattr__(self, "timestamp", timestamp)
+        object.__setattr__(self, "jpeg", jpeg)
+        object.__setattr__(self, "capture_session", capture_session)
+        copied = []
+        labels: set[str] = set()
+        for item in tuple(annotations)[:128]:
+            if not isinstance(item, dict):
+                continue
+            if (
+                set(item) - {"bbox", "label", "kind", "confidence", "identity", "track_id"}
+                or item.get("kind") not in ("detection", "motion", "track")
+                or not isinstance(item.get("label"), str)
+                or not 0 < len(item["label"]) <= 128
+                or not isinstance(item.get("bbox"), (list, tuple))
+                or len(item["bbox"]) != 4
+            ):
+                continue
+            try:
+                box = tuple(float(value) for value in item["bbox"])
+            except (TypeError, ValueError):
+                continue
+            if (
+                any(not math.isfinite(value) or not 0 <= value <= 1 for value in box)
+                or box[2] <= 0
+                or box[3] <= 0
+                or box[0] + box[2] > 1 + 1e-9
+                or box[1] + box[3] > 1 + 1e-9
+            ):
+                continue
+            if item["label"] not in labels and len(labels) >= 96:
+                continue
+            labels.add(item["label"])
+            normalized = {"bbox": list(box), "label": item["label"], "kind": item["kind"]}
+            confidence = item.get("confidence")
+            if (
+                isinstance(confidence, (int, float))
+                and not isinstance(confidence, bool)
+                and math.isfinite(confidence)
+                and 0 <= confidence <= 1
+            ):
+                normalized["confidence"] = confidence
+            for key in ("identity", "track_id"):
+                value = item.get(key)
+                if isinstance(value, str) and 0 < len(value) <= 128:
+                    normalized[key] = value
+                elif key == "track_id" and type(value) is int:
+                    normalized[key] = value
+            copied.append(MappingProxyType(normalized))
+        object.__setattr__(self, "_annotations", tuple(copied))
+
+    @property
+    def annotations(self) -> tuple[dict[str, Any], ...]:
+        return tuple(copy.deepcopy(dict(item)) for item in self._annotations)
+
+    @property
+    def size_bytes(self) -> int:
+        return len(self.jpeg) + sum(
+            len(json.dumps(dict(item), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            for item in self._annotations
+        )
 
 
 @dataclass(slots=True)
@@ -70,7 +143,15 @@ class PreEventBuffer:
                     camera.seconds = seconds
                     self._trim_camera(camera_id, self._clock())
 
-    def push(self, camera_id: str, jpeg: bytes, timestamp: float, capture_session: str) -> bool:
+    def push(
+        self,
+        camera_id: str,
+        jpeg: bytes,
+        timestamp: float,
+        capture_session: str,
+        *,
+        annotations: tuple[dict[str, Any], ...] = (),
+    ) -> bool:
         now = self._clock()
         timestamp = float(timestamp)
         if not math.isfinite(timestamp) or timestamp > now:
@@ -97,10 +178,10 @@ class PreEventBuffer:
                 and timestamp - camera.last_accepted < 1 / self._max_fps
             ):
                 return False
-            size = len(jpeg)
+            frame = BufferedFrame(timestamp, jpeg, capture_session, annotations)
+            size = frame.size_bytes
             if size > self._per_camera_bytes or size > self._max_bytes:
                 return False
-            frame = BufferedFrame(timestamp, jpeg, capture_session)
             camera.frames.append(frame)
             camera.size += size
             self._bytes += size
@@ -178,8 +259,8 @@ class PreEventBuffer:
             camera.frames.popleft()
         else:
             camera.frames.remove(frame)
-        camera.size -= len(frame.jpeg)
-        self._bytes -= len(frame.jpeg)
+        camera.size -= frame.size_bytes
+        self._bytes -= frame.size_bytes
         self._order.pop(id(frame), None)
 
     def _remove_frames(self, camera_id: str) -> None:
