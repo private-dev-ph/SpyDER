@@ -391,3 +391,51 @@ def test_cached_catalog_read_repairs_modified_managed_export(tmp_path, monkeypat
         "version": 1,
         "identities": [{"name": "Ada", "embedding": [0.6, 0.8]}],
     }
+
+
+def test_repeated_catalog_reads_skip_export_parsing_and_centroid_rebuild(
+    tmp_path, monkeypatch
+):
+    import spyder_cctv.face_gallery as module
+
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    service.enroll(gallery["id"], "Ada", image, face_index=0)
+    original_v1 = service._v1
+    original_json_load = module.json.load
+    calls = {"centroids": 0, "json_loads": 0}
+
+    def count_v1(catalog):
+        calls["centroids"] += 1
+        return original_v1(catalog)
+
+    def count_json_load(*args, **kwargs):
+        calls["json_loads"] += 1
+        return original_json_load(*args, **kwargs)
+
+    monkeypatch.setattr(FaceEnrollmentService, "_v1", staticmethod(count_v1))
+    monkeypatch.setattr(module.json, "load", count_json_load)
+    for _ in range(3):
+        service.config(gallery["id"])
+        service.descriptor(gallery["id"])
+        service.snapshot(gallery["id"])
+
+    assert calls == {"centroids": 0, "json_loads": 0}
+
+
+def test_delete_gallery_preserves_known_data_when_unexpected_entries_exist(tmp_path, monkeypatch):
+    service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
+    service.enroll(gallery["id"], "Ada", image, face_index=0)
+    directory = service.root / gallery["id"]
+    catalog_path = directory / "catalog.json"
+    export_path = directory / "gallery-v1.json"
+    before_catalog = catalog_path.read_bytes()
+    before_export = export_path.read_bytes()
+    extra_path = directory / "keep.txt"
+    extra_path.write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected files"):
+        service.delete_gallery(gallery["id"])
+
+    assert catalog_path.read_bytes() == before_catalog
+    assert export_path.read_bytes() == before_export
+    assert extra_path.read_text(encoding="utf-8") == "preserve"
