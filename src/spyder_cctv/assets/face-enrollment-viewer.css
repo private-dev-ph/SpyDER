@@ -129,11 +129,20 @@
   font-size: 12px;
 }
 .fe-focus label {
-  flex: 1 1 65px;
-  max-width: 100px;
+  display: grid;
+  gap: 8px;
+  flex: 1 1 148px;
+  min-width: min(100%, 148px);
 }
 .fe-focus input {
+  width: 100%;
+  min-width: 0;
   padding: 7px;
+  font-variant-numeric: tabular-nums;
+}
+.fe-focus > [data-fe-reset-roi] {
+  min-height: 42px;
+  flex: 0 0 auto;
 }
 .fe-trim {
   padding: 14px;
