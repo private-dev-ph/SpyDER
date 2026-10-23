@@ -29,6 +29,8 @@ _MAX_IDENTITIES = 1000
 _MAX_SAMPLES = 100
 _MAX_GALLERY_SAMPLES = 1000
 _MAX_CATALOG_BYTES = 16 * 1024 * 1024
+_MAX_THUMBNAIL_BYTES = 32 * 1024
+_THUMBNAIL_PREFIX = "data:image/jpeg;base64,"
 _MAX_EMBEDDING_VALUES = 1_000_000
 _NAME_LIMIT = 128
 
@@ -101,6 +103,51 @@ def _encoded_dimensions(data: bytes | bytearray | memoryview) -> tuple[int, int]
             width = int.from_bytes(view[offset + 5 : offset + 7], "big")
             return width, height
         offset += segment_length
+    return None
+
+
+def _thumbnail_data_uri(value: Any, *, normalize: bool = True) -> str:
+    """Validate and optionally re-encode a small JPEG face thumbnail."""
+    if not isinstance(value, str) or not value.startswith(_THUMBNAIL_PREFIX):
+        raise ValueError("Face thumbnail must be a JPEG data URI")
+    encoded = value[len(_THUMBNAIL_PREFIX) :]
+    if not encoded or len(encoded) > 64 * 1024:
+        raise ValueError("Face thumbnail is too large")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, base64.binascii.Error):
+        raise ValueError("Face thumbnail is invalid") from None
+    if not raw.startswith(b"\xff\xd8") or len(raw) > _MAX_THUMBNAIL_BYTES:
+        raise ValueError("Face thumbnail is invalid or too large")
+    dimensions = _encoded_dimensions(raw)
+    if dimensions is None or min(dimensions) < 1 or max(dimensions) > 160:
+        raise ValueError("Face thumbnail dimensions are invalid")
+    image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None or image.shape[1::-1] != dimensions:
+        raise ValueError("Face thumbnail is invalid")
+    if not normalize:
+        return value
+    for size, quality in ((160, 82), (160, 65), (128, 55), (96, 45)):
+        thumb = image
+        scale = min(1.0, size / max(image.shape[:2]))
+        if scale < 1:
+            thumb = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        ok, result = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if ok and len(result) <= _MAX_THUMBNAIL_BYTES:
+            return _THUMBNAIL_PREFIX + base64.b64encode(result).decode("ascii")
+    raise ValueError("Face thumbnail cannot be bounded")
+
+
+def _encode_thumbnail(image: np.ndarray) -> str | None:
+    if image.size == 0 or image.ndim != 3:
+        return None
+    scale = min(1.0, 160 / max(image.shape[:2]))
+    if scale < 1:
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    for quality in (82, 65, 55, 45):
+        ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if ok and len(encoded) <= _MAX_THUMBNAIL_BYTES:
+            return _THUMBNAIL_PREFIX + base64.b64encode(encoded).decode("ascii")
     return None
 
 
@@ -276,6 +323,8 @@ class FaceEnrollmentService:
                 if row["id"] in sample_ids:
                     raise ValueError("Gallery sample IDs must be unique")
                 sample_ids.add(row["id"])
+                if "thumbnail" in row:
+                    _thumbnail_data_uri(row["thumbnail"], normalize=False)
                 values = row.get("embedding")
                 if not isinstance(values, list) or not values:
                     raise ValueError("Gallery embedding is invalid")
@@ -317,6 +366,11 @@ class FaceEnrollmentService:
 
     def _save(self, gallery_id: str, catalog: dict[str, Any]) -> None:
         self._validate_catalog(catalog, gallery_id)
+        serialized = json.dumps(
+            catalog, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        )
+        if len(serialized.encode("utf-8")) > _MAX_CATALOG_BYTES:
+            raise ValueError("Gallery catalog too large")
         exported = self._v1(catalog)
         directory = self._dir(gallery_id)
         previous = self._catalog_cache.get(gallery_id)
@@ -388,7 +442,20 @@ class FaceEnrollmentService:
                 and (path / "catalog.json").is_file()
             ):
                 try:
-                    result.append(self._metadata(self._load(path.name)))
+                    catalog = self._load(path.name)
+                    metadata = self._metadata(catalog)
+                    thumbnail = next(
+                        (
+                            sample["thumbnail"]
+                            for identity in catalog["identities"]
+                            for sample in reversed(identity["samples"])
+                            if "thumbnail" in sample
+                        ),
+                        None,
+                    )
+                    if thumbnail is not None:
+                        metadata["thumbnail"] = thumbnail
+                    result.append(metadata)
                 except ValueError:
                     errors.append({"gallery_id": path.name, "error": "Gallery catalog is invalid"})
         response: dict[str, Any] = {"galleries": result}
@@ -568,15 +635,7 @@ class FaceEnrollmentService:
         catalog = self._load(gallery_id)
         return {
             "gallery_id": gallery_id,
-            "identities": [
-                {
-                    "id": item["id"],
-                    "name": item["name"],
-                    "sample_count": len(item["samples"]),
-                    "samples": [{"id": sample["id"]} for sample in item["samples"]],
-                }
-                for item in catalog["identities"]
-            ],
+            "identities": [self._identity_details(item) for item in catalog["identities"]],
         }
 
     @_serialized
@@ -585,16 +644,34 @@ class FaceEnrollmentService:
         catalog = self._load(gallery_id)
         return {
             "gallery": self._metadata(catalog),
-            "identities": [
+            "identities": [self._identity_details(item) for item in catalog["identities"]],
+        }
+
+    @staticmethod
+    def _identity_details(identity: dict[str, Any]) -> dict[str, Any]:
+        details = {
+            "id": identity["id"],
+            "name": identity["name"],
+            "sample_count": len(identity["samples"]),
+            "samples": [
                 {
-                    "id": item["id"],
-                    "name": item["name"],
-                    "sample_count": len(item["samples"]),
-                    "samples": [{"id": sample["id"]} for sample in item["samples"]],
+                    "id": sample["id"],
+                    **({"thumbnail": sample["thumbnail"]} if "thumbnail" in sample else {}),
                 }
-                for item in catalog["identities"]
+                for sample in identity["samples"]
             ],
         }
+        representative = next(
+            (
+                sample["thumbnail"]
+                for sample in reversed(identity["samples"])
+                if "thumbnail" in sample
+            ),
+            None,
+        )
+        if representative is not None:
+            details["thumbnail"] = representative
+        return details
 
     @_serialized
     def rename_identity(self, gallery_id: str, identity_id: str, name: str) -> dict[str, Any]:
@@ -796,17 +873,7 @@ class FaceEnrollmentService:
                     max(0, int(x1)) : min(width, int(math.ceil(x2))),
                 ]
                 if face_thumb.size:
-                    scale = min(1.0, 160 / max(face_thumb.shape[:2]))
-                    if scale < 1:
-                        face_thumb = cv2.resize(
-                            face_thumb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
-                        )
-                ok, thumb = cv2.imencode(".jpg", face_thumb)
-                candidate["thumbnail"] = (
-                    "data:image/jpeg;base64," + base64.b64encode(thumb).decode("ascii")
-                    if ok
-                    else None
-                )
+                    candidate["thumbnail"] = _encode_thumbnail(face_thumb)
                 if landmarks is None or index >= len(landmarks):
                     raise VisionUnavailable(
                         "alignment_failed", "Detector did not return five-point face landmarks."
@@ -858,13 +925,25 @@ class FaceEnrollmentService:
 
     @_enrollment_slot
     def enroll_embeddings(
-        self, gallery_id: str, identity_name: str, embeddings: list[list[float]]
+        self,
+        gallery_id: str,
+        identity_name: str,
+        embeddings: list[list[float]],
+        *,
+        thumbnails: list[str | None] | None = None,
     ) -> dict[str, Any]:
         """Validate all reviewed embeddings, then save gallery once."""
         catalog = self._load(gallery_id, copy_data=True)
         name = _clean_name(identity_name)
         if not isinstance(embeddings, list) or not 1 <= len(embeddings) <= 20:
             raise ValueError("Select between 1 and 20 reviewed faces")
+        if thumbnails is None:
+            thumbnails = [None] * len(embeddings)
+        if not isinstance(thumbnails, list) or len(thumbnails) != len(embeddings):
+            raise ValueError("Reviewed face thumbnails must match embeddings")
+        thumbnails = [
+            _thumbnail_data_uri(item) if item is not None else None for item in thumbnails
+        ]
         vectors = []
         for values in embeddings:
             vector = np.asarray(values, dtype=np.float64)
@@ -895,10 +974,11 @@ class FaceEnrollmentService:
         if matching is None:
             matching = {"id": uuid.uuid4().hex, "name": name, "samples": []}
             catalog["identities"].append(matching)
-        for vector in vectors:
-            matching["samples"].append(
-                {"id": uuid.uuid4().hex, "embedding": vector.astype(float).tolist()}
-            )
+        for vector, thumbnail in zip(vectors, thumbnails, strict=True):
+            sample = {"id": uuid.uuid4().hex, "embedding": vector.astype(float).tolist()}
+            if thumbnail is not None:
+                sample["thumbnail"] = thumbnail
+            matching["samples"].append(sample)
         catalog["dimension"] = int(vectors[0].size)
         self._config(gallery_id, verify_models=True)
         self._save(gallery_id, catalog)
@@ -909,7 +989,10 @@ class FaceEnrollmentService:
                 "name": matching["name"],
                 "sample_count": len(matching["samples"]),
             },
-            "samples": [{"id": row["id"]} for row in matching["samples"][-len(vectors) :]],
+            "samples": [
+                {"id": row["id"], **({"thumbnail": row["thumbnail"]} if "thumbnail" in row else {})}
+                for row in matching["samples"][-len(vectors) :]
+            ],
         }
 
     @staticmethod
@@ -1076,7 +1159,15 @@ class FaceEnrollmentService:
             catalog["identities"].append(matching)
         if len(matching["samples"]) >= _MAX_SAMPLES:
             raise ValueError("Identity sample limit reached")
+        x1, y1, x2, y2 = self._candidate(boxes[face_index], face_index)["box"]
+        face_thumb = image[
+            max(0, int(y1)) : min(height, int(math.ceil(y2))),
+            max(0, int(x1)) : min(width, int(math.ceil(x2))),
+        ]
+        thumbnail = _encode_thumbnail(face_thumb)
         sample = {"id": uuid.uuid4().hex, "embedding": features.astype(float).tolist()}
+        if thumbnail is not None:
+            sample["thumbnail"] = thumbnail
         matching["samples"].append(sample)
         catalog["dimension"] = int(features.size)
         self._save(gallery_id, catalog)
@@ -1088,7 +1179,10 @@ class FaceEnrollmentService:
                 "name": matching["name"],
                 "sample_count": len(matching["samples"]),
             },
-            "sample": {"id": sample["id"]},
+            "sample": {
+                "id": sample["id"],
+                **({"thumbnail": sample["thumbnail"]} if "thumbnail" in sample else {}),
+            },
             "face": self._candidate(boxes[face_index], face_index),
         }
 
