@@ -13,7 +13,7 @@ const profile = await mkdtemp(
 );
 const screenshotDir = path.resolve(".pytest_cache/enrollment-studio");
 const html =
-  '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/device-tools.css"><link rel="stylesheet" href="/face-enrollment-viewer.css"><style>body{font-family:system-ui,sans-serif}:root{--surface:#fffefa;--canvas:#f7f5ef;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--control-border:#8c8274;--focus:#830000;--accent:#be1a1a;--accent-hover:#830000;--danger:#bc0202;--gold-soft:#f8ebab}html[data-theme=dark]{--surface:#1e1c1b;--canvas:#141313;--ink:#f5efe4;--muted:#b0a69b;--border:#37312c;--focus:#f7d87f;--danger:#ff827b}</style></head><body><main><div id="face-gallery-tools"></div><div id="onvif-camera-tools"></div></main><script>' +
+  '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/device-tools.css"><link rel="stylesheet" href="/face-enrollment-viewer.css"><link rel="stylesheet" href="/form-controls.css"><style>body{font-family:system-ui,sans-serif}:root{--surface:#fffefa;--canvas:#f7f5ef;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--control-border:#8c8274;--focus:#830000;--accent:#be1a1a;--accent-hover:#830000;--danger:#bc0202;--gold-soft:#f8ebab}html[data-theme=dark]{--surface:#1e1c1b;--canvas:#141313;--ink:#f5efe4;--muted:#b0a69b;--border:#37312c;--focus:#f7d87f;--danger:#ff827b}</style></head><body><main><div id="face-gallery-tools"></div><div id="onvif-camera-tools"></div></main><script>' +
   'window.testJpeg=(()=>{const c=document.createElement("canvas");c.width=160;c.height=160;const ctx=c.getContext("2d");ctx.fillStyle="#f8ebab";ctx.fillRect(0,0,160,160);ctx.fillStyle="#be1a1a";ctx.beginPath();ctx.arc(80,54,28,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.ellipse(80,147,52,49,0,0,Math.PI*2);ctx.fill();return c.toDataURL("image/jpeg")})();const nativeFetch=window.fetch.bind(window);window.calls=[];window.runtimeErrors=[];window.galleryIdentityCount=1;window.gallerySampleCount=1;window.holdAnalyze=false;window.analyzeStarted=false;window.resolveAnalyze=null;window.addEventListener("error",e=>runtimeErrors.push(e.message));window.spyder={cameras:()=>[{id:"cam-1",name:"Lobby"}]};if(location.search.includes("showcase"))window.spyderShowcase={};window.fetch=async(url,opts={})=>{const method=opts.method||"GET",path=String(url),body=opts.body?JSON.parse(opts.body):null;if(path==="/test-video.mp4")return nativeFetch(url,opts);calls.push({path,method,body});if(window.holdAnalyze&&path.endsWith("/analyze"))return await new Promise(resolve=>{window.analyzeStarted=true;window.resolveAnalyze=()=>{window.holdAnalyze=false;resolve(new Response(JSON.stringify({review_token:"late-review",preview:window.testJpeg,width:640,height:480,faces:[{index:0,bbox:[.1,.1,.4,.5],confidence:.97,thumbnail:window.testJpeg}]}),{status:200,headers:{"Content-Type":"application/json"}}))}});if(path.startsWith("/api/media/")&&path.endsWith("/info"))return new Response(JSON.stringify({duration_seconds:86400}),{headers:{"Content-Type":"application/json"}});if(path.startsWith("/api/media/")&&path.includes("/frame?"))return new Response(Uint8Array.from(atob(window.testJpeg.split(",")[1]),c=>c.charCodeAt(0)),{headers:{"Content-Type":"image/jpeg"}});if(path.endsWith("/preview-frame"))return new Response(Uint8Array.from(atob(window.testJpeg.split(",")[1]),c=>c.charCodeAt(0)),{status:200,headers:{"Content-Type":"image/jpeg"}});let data={};' +
   'if(path==="/api/models")data={models:[{id:"det-1",name:"Detector",engine:"insightface",metadata:{model_type:"face_detection"}},{id:"rec-1",name:"Recognizer",engine:"insightface",metadata:{model_type:"face_recognition"}}]};' +
   'else if(path==="/api/faces/galleries"&&method==="GET")data={galleries:[{id:"g1",name:"Lobby",identity_count:window.galleryIdentityCount,sample_count:window.gallerySampleCount,thumbnail:window.testJpeg},{id:"g2",name:"Office",identity_count:1,sample_count:1}]};' +
@@ -22,7 +22,7 @@ const html =
   'else if(path==="/api/faces/galleries/g1"&&method==="GET")data={id:"g1",name:"Lobby",detector_model_id:"det-1",recognition_model_id:"rec-1",identities:window.galleryIdentityCount?[{id:"i1",name:"Ada",thumbnail:window.testJpeg,samples:window.gallerySampleCount?[{id:"s1",thumbnail:window.testJpeg}]:[]}]:[]};' +
   'else if(path==="/api/faces/galleries/g2"&&method==="GET")data={id:"g2",name:"Office",identities:[{id:"legacy",name:"Legacy profile",samples:[{id:"old-sample"}]}]};' +
   'else if(path==="/api/faces/galleries"&&method==="POST")data={id:"g1"};else if(path.endsWith("/analyze")&&method==="POST")data={review_token:"review-1",preview:window.testJpeg,width:640,height:480,faces:[{index:0,bbox:[.1,.1,.4,.5],confidence:.97,thumbnail:window.testJpeg},{index:1,bbox:[.5,.1,.9,.5],confidence:.82,thumbnail:window.testJpeg}]};else if(path.endsWith("/enroll-reviewed")&&method==="POST")data={};' +
-  'else if(path==="/api/onvif/discover")data={devices:[{endpoint:"http://192.168.1.8/onvif/device_service",name:"Mock cam"}]};else if(path==="/api/onvif/connect")data={session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true},{token:"p-2",name:"No PTZ",ptz:true,ptz_caps:{pan_tilt:false,zoom:false}}],ptz:{pan_tilt:true,zoom:false}};else if(path==="/api/onvif/sessions")data={sessions:[{session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true}],ptz:{pan_tilt:true,zoom:false}}]};else if(path==="/api/onvif/add")data={message:"Added"};return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}})};</script><script src="/face-enrollment-viewer.js"></script><script src="/device-tools.js"></script></body></html>';
+  'else if(path==="/api/onvif/discover")data={devices:[{endpoint:"http://192.168.1.8/onvif/device_service",name:"Mock cam"}]};else if(path==="/api/onvif/connect")data={session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true},{token:"p-2",name:"No PTZ",ptz:true,ptz_caps:{pan_tilt:false,zoom:false}}],ptz:{pan_tilt:true,zoom:false}};else if(path==="/api/onvif/sessions")data={sessions:[{session_id:"s-1",device:{name:"Mock cam"},profiles:[{token:"p-1",name:"Main",ptz:true}],ptz:{pan_tilt:true,zoom:false}}]};else if(path==="/api/onvif/add")data={message:"Added"};return new Response(JSON.stringify(data),{status:200,headers:{"Content-Type":"application/json"}})};</script><script src="/face-enrollment-viewer.js"></script><script src="/device-tools.js"></script><script src="/form-controls.js"></script></body></html>';
 const server = http.createServer(async (req, res) => {
   const name = new URL(req.url, "http://localhost").pathname;
   if (name === "/test-video.mp4") {
@@ -40,7 +40,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   const file =
-    name === "/device-tools.js" || name === "/device-tools.css"
+    name === "/device-tools.js" ||
+    name === "/device-tools.css" ||
+    name === "/form-controls.js" ||
+    name === "/form-controls.css"
       ? path.basename(name)
       : name === "/face-enrollment-viewer.js" ||
           name === "/face-enrollment-viewer.css"
@@ -736,6 +739,63 @@ try {
         "(()=>{document.querySelector('[data-enroll-open]').click()})()",
       );
       await until("!!document.querySelector('dialog.fe-studio[open]')");
+      await until(
+        "document.querySelectorAll('.fe-focus input.themed-number-input').length===4",
+      );
+      await delay(100);
+      const focusAudit = await evaluate(`(() => {
+        return [...document.querySelectorAll('.fe-focus input')].map(input => {
+          const style=getComputedStyle(input), box=input.getBoundingClientRect();
+          const canvas=document.createElement('canvas'), context=canvas.getContext('2d');context.font=style.font;
+          const buttons=[...document.querySelectorAll('.fe-focus .number-stepper-button')].filter(b=>b.getAttribute('aria-controls')===input.id);
+          return {readable:box.width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-2 >= context.measureText('100').width+4,
+            buttons:buttons.length===2 && buttons.every(button=>{const b=button.getBoundingClientRect();return b.left>=box.left&&b.right<=box.right+1&&Math.abs(b.top-box.top)<=2&&b.height>=40})};
+        });
+      })()`);
+      assert.ok(
+        focusAudit.every((field) => field.readable),
+        JSON.stringify(v) +
+          "/" +
+          theme +
+          " focus values must fit three digits beside step buttons",
+      );
+      assert.ok(
+        focusAudit.every((field) => field.buttons),
+        "Focus step buttons must align inside their own input",
+      );
+      if (theme === "light" && v.width === 1280) {
+        await evaluate(
+          `(()=>{const input=document.querySelector('[data-fe-roi="2"]');[...document.querySelectorAll('.fe-focus .number-stepper-button')].find(button=>button.getAttribute('aria-controls')===input.id&&button.dataset.direction==='-1').click()})()`,
+        );
+        assert.equal(
+          await evaluate("document.querySelector('[data-fe-roi=\"2\"]').value"),
+          "99",
+          "Width stepper adjusts the focus value",
+        );
+        await click("[data-fe-reset-roi]");
+        assert.equal(
+          await evaluate("document.querySelector('[data-fe-roi=\"2\"]').value"),
+          "100",
+          "Whole frame restores readable 100 percent",
+        );
+        await evaluate(
+          "document.querySelector('.fe-focus').scrollIntoView({block:'center'})",
+        );
+        await delay(100);
+        const rect = await evaluate(
+          "(()=>{const r=document.querySelector('.fe-focus').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1}})()",
+        );
+        await mkdir(screenshotDir, { recursive: true });
+        const shot = await command(
+          "Page.captureScreenshot",
+          { format: "png", clip: rect },
+          sid,
+        );
+        await writeFile(
+          path.join(screenshotDir, "focus-controls.png"),
+          Buffer.from(shot.data, "base64"),
+        );
+      }
       const fileTheme = await evaluate(`(() => {
         const input = document.querySelector('dialog.fe-studio [data-fe-file]');
         return {background:getComputedStyle(input,'::file-selector-button').backgroundColor,
