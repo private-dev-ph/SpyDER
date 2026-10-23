@@ -53,7 +53,7 @@
       <div class="fe-focus"><b>Focus area (%)</b>${["Left", "Top", "Width", "Height"].map((label, i) => `<label>${label}<input data-fe-roi="${i}" type="number" min="0" max="100" step="1" value="${i < 2 ? 0 : 100}"></label>`).join("")}<button type="button" class="dt-button" data-fe-reset-roi>Whole frame</button></div>
       <section class="fe-trim" data-fe-trim hidden><div class="fe-trim-head"><b>Use only a short range</b><output data-fe-range></output></div><label>Start time<input type="range" data-fe-start min="0" max="0" step="0.1" value="0"></label><div class="fe-actions"><label>Range length<select data-fe-duration>${[5, 6, 7, 8, 9, 10].map((seconds) => `<option value="${seconds}">${seconds} seconds</option>`).join("")}</select></label><button type="button" class="dt-button" data-fe-play>Play selected range</button><button type="button" class="dt-button dt-primary" data-fe-sample-video>Inspect range</button></div><p>Up to 10 evenly spaced frames are inspected locally. The full video is never sent to the server.</p></section>
       <div class="fe-actions"><button type="button" class="dt-button" data-fe-live>Pause preview</button><button type="button" class="dt-button dt-primary" data-fe-inspect>Analyze current frame</button><button type="button" class="dt-button" data-fe-cancel hidden>Cancel inspection</button></div><p class="fe-status" data-fe-status role="status" aria-live="polite">Nothing is saved until you select samples and confirm.</p></section>
-      <aside class="fe-review"><label>Identity name<input data-fe-name maxlength="128" placeholder="Who is this person?" value="${escape(options.identityName || "")}"></label><div class="fe-review-head"><h4>Detected samples <span data-fe-count>0 selected</span></h4><div class="fe-actions"><button type="button" class="dt-button" data-fe-select-all>Select all</button><button type="button" class="dt-button" data-fe-clear>Clear review</button></div></div><p>Inspect the crops. Select only the same person across frames. Reviews expire after 5 minutes.</p><div class="fe-samples" data-fe-samples><p>No inspected frames yet.</p></div><button type="button" class="dt-button dt-primary fe-save" data-fe-save disabled>Save selected face samples</button><p>Only numerical face samples are stored. Photos and video stay temporary.</p></aside></div>`;
+      <aside class="fe-review"><label>Identity name<input data-fe-name maxlength="128" placeholder="Who is this person?" value="${escape(options.identityName || "")}"></label><div class="fe-review-head"><h4>Detected samples <span data-fe-count>0 selected</span></h4><div class="fe-actions"><button type="button" class="dt-button" data-fe-select-all>Select all</button><button type="button" class="dt-button" data-fe-clear>Clear review</button></div></div><p>Inspect the crops. Select only the same person across frames. Reviews expire after 5 minutes.</p><div class="fe-samples" data-fe-samples><p>No inspected frames yet.</p></div><button type="button" class="dt-button dt-primary fe-save" data-fe-save disabled>Save selected face samples</button><p>Face vectors and small portrait crops stay on this computer. Full photos and video are not retained.</p></aside></div>`;
     document.body.append(dialog);
     const $ = (selector) => dialog.querySelector(selector);
     const canvas = $("[data-fe-stage]"),
@@ -129,20 +129,27 @@
         context.drawImage(currentImage, 0, 0, canvas.width, canvas.height);
       if (roi) {
         const [x, y, w, h] = roi;
+        // Shade only the outside. Re-cropping with canvas-sized source coordinates
+        // samples the wrong pixels whenever the image/video was downscaled.
+        const left = x * canvas.width,
+          top = y * canvas.height;
+        const width = w * canvas.width,
+          height = h * canvas.height;
         context.fillStyle = "#0006";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        if (currentImage)
-          context.drawImage(
-            currentImage,
-            x * canvas.width,
-            y * canvas.height,
-            w * canvas.width,
-            h * canvas.height,
-            x * canvas.width,
-            y * canvas.height,
-            w * canvas.width,
-            h * canvas.height,
-          );
+        context.fillRect(0, 0, canvas.width, top);
+        context.fillRect(
+          0,
+          top + height,
+          canvas.width,
+          canvas.height - top - height,
+        );
+        context.fillRect(0, top, left, height);
+        context.fillRect(
+          left + width,
+          top,
+          canvas.width - left - width,
+          height,
+        );
         context.strokeStyle = "#f7d87f";
         context.lineWidth = 3;
         context.strokeRect(
@@ -531,10 +538,8 @@
             await analyze(body, `${time.toFixed(1)}s`, expected, op);
           }
         } else {
-          const body =
-            source === "camera"
-              ? { camera_id: $("[data-fe-camera]").value }
-              : { image_base64: rawImage() };
+          // Inspect the displayed snapshot, including a paused camera preview.
+          const body = { image_base64: rawImage() };
           if (focus) body.roi = focus;
           await analyze(
             body,
@@ -599,6 +604,19 @@
     canvas.addEventListener("pointerdown", (event) => {
       if (busy || saving || !imageReady || event.button !== 0) return;
       event.preventDefault();
+      if (source === "camera" && live) {
+        live = false;
+        stopPreview();
+        imageVersion++;
+        status(
+          "Preview frozen for precise focus. Analyze this frame or resume live.",
+        );
+        controls();
+      }
+      if (source === "video") {
+        video.pause();
+        stopPreview();
+      }
       drag = point(event);
       dragging = false;
       canvas.setPointerCapture(event.pointerId);
@@ -744,7 +762,9 @@
               })),
             });
             clearReview();
-            status("Face profile saved. Source media was not retained.");
+            status(
+              "Face profile saved. Portraits stay local; full source media was not retained.",
+            );
             await options.onSaved?.();
           } finally {
             saving = false;

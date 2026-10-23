@@ -146,7 +146,7 @@
       (blocked
         ? '<p class="dt-notice">Native enrollment unavailable in showcase. No network calls run.</p>'
         : "") +
-      '<p class="dt-privacy">Images process locally and are not retained. Only face samples are stored in gallery.</p><div class="dt-tools"><label>Search<input type="search" data-search></label><button class="dt-button" data-refresh>Refresh</button></div><p class="dt-status" role="status" aria-live="polite"></p><div data-list class="dt-gallery-list"></div><div data-detail class="dt-detail"></div></section>';
+      '<p class="dt-privacy">Enrollment stays on this computer. Galleries store face vectors and small portrait crops, never full source photos or videos.</p><div class="dt-tools"><label>Search<input type="search" data-search></label><button class="dt-button" data-refresh>Refresh</button></div><p class="dt-status" role="status" aria-live="polite"></p><div data-list class="dt-gallery-list"></div><div data-detail class="dt-detail"></div></section>';
     if (blocked)
       h.querySelectorAll("button").forEach((b) => (b.disabled = true));
     async function refresh() {
@@ -187,35 +187,32 @@
           say(h, e.message, true);
       }
     }
+    function hasPortrait(value) {
+      return (
+        typeof value === "string" &&
+        value.length <= 48 * 1024 &&
+        value.startsWith("data:image/jpeg;base64,")
+      );
+    }
+    function portrait(value, label) {
+      if (hasPortrait(value))
+        return `<img class="dt-portrait" src="${esc(value)}" alt="${esc(label)}" loading="lazy" decoding="async" draggable="false">`;
+      return '<span class="dt-portrait dt-portrait-empty" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg></span>';
+    }
     function identitiesMarkup() {
       return (
         (desc.identities || [])
-          .filter((i) => (i.name + " " + i.id).toLowerCase().includes(q))
-          .map(
-            (i) =>
-              '<article class="dt-identity"><div><b>' +
-              esc(i.name) +
-              "</b><span>" +
-              (i.samples || []).length +
-              ' samples</span></div><div class="dt-actions"><button class="dt-button" data-ri="' +
-              esc(i.id) +
-              '">Rename</button><button class="dt-button dt-danger" data-xi="' +
-              esc(i.id) +
-              '">Remove</button></div>' +
-              (i.samples || [])
-                .map(
-                  (s) =>
-                    '<div class="dt-sample"><span class="dt-sample-name">Sample ' +
-                    esc(s.id) +
-                    '</span><button class="dt-button dt-danger" data-xi="' +
-                    esc(i.id) +
-                    '" data-xs="' +
-                    esc(s.id) +
-                    '">Remove sample</button></div>',
-                )
-                .join("") +
-              "</article>",
+          .filter((identity) =>
+            (identity.name + " " + identity.id).toLowerCase().includes(q),
           )
+          .map((identity) => {
+            const image =
+              identity.thumbnail ||
+              (identity.samples || []).find((sample) =>
+                hasPortrait(sample.thumbnail),
+              )?.thumbnail;
+            return `<article class="dt-identity"><div class="dt-identity-heading">${portrait(image, "Portrait of " + identity.name)}<div class="dt-identity-copy"><b>${esc(identity.name)}</b><span>${(identity.samples || []).length} samples</span>${hasPortrait(image) ? "" : '<span class="dt-portrait-note">No portrait yet. Add a face sample to create one.</span>'}</div></div><div class="dt-actions"><button type="button" class="dt-button" data-enroll-identity="${esc(identity.id)}" aria-haspopup="dialog">Add sample</button><button class="dt-button" data-ri="${esc(identity.id)}">Rename</button><button class="dt-button dt-danger" data-xi="${esc(identity.id)}">Remove</button></div>${(identity.samples || []).map((sample, index) => `<div class="dt-sample"><div class="dt-sample-preview">${portrait(sample.thumbnail, "Face sample " + (index + 1) + " of " + identity.name)}<span class="dt-sample-name">Sample ${index + 1}</span></div><button class="dt-button dt-danger" data-xi="${esc(identity.id)}" data-xs="${esc(sample.id)}">Remove sample</button></div>`).join("")}</article>`;
+          })
           .join("") || '<p class="dt-empty">No identities found.</p>'
       );
     }
@@ -231,13 +228,15 @@
               esc(g.id) +
               '" aria-pressed="' +
               (gid === g.id) +
-              '"><b>' +
+              '">' +
+              portrait(g.thumbnail, "Gallery portrait") +
+              '<span class="dt-gallery-copy"><b>' +
               esc(g.name) +
               "</b><span>" +
               (g.identity_count || 0) +
               " identities · " +
               (g.sample_count || 0) +
-              " samples</span></button>",
+              " samples</span></span></button>",
           )
           .join("") ||
         '<p class="dt-empty">No galleries. Create one to begin.</p>';
@@ -255,18 +254,7 @@
       p.innerHTML =
         '<header class="dt-detail-head"><h3>' +
         esc(desc.name) +
-        '</h3><div class="dt-actions"><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><form class="dt-enroll" data-enroll><h4>Enroll face</h4><label>Identity name<input name="identity_name" maxlength="128"></label><label>Camera frame<select name="camera_id"><option value="">Choose camera</option>' +
-        (window.spyder?.cameras?.() || [])
-          .map(
-            (c) =>
-              '<option value="' +
-              esc(c.id) +
-              '">' +
-              esc(c.name || c.id) +
-              "</option>",
-          )
-          .join("") +
-        '</select></label><label>Or choose image / video<input name="image" type="file" accept="image/jpeg,image/png,video/*"></label><button class="dt-button dt-primary">Review enrollment</button><p>Preview the source, choose a focus area, and review detected faces before saving.</p><div data-choice></div></form><section class="dt-identities"><h4>Identities</h4></section>';
+        '</h3><div class="dt-actions"><button type="button" class="dt-button dt-primary" data-enroll-open aria-haspopup="dialog">Enroll someone</button><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><section class="dt-identities"><h4>Identities</h4></section>';
       p.querySelector(".dt-identities").innerHTML = identitiesMarkup();
       p.dataset.renderedGid = gid;
       p._renderedDesc = desc;
@@ -547,11 +535,12 @@
         delete b.dataset.actionBusy;
       }
     });
-    h.addEventListener("submit", async (e) => {
-      if (!e.target.matches("[data-enroll]") || blocked) return;
-      e.preventDefault();
-      const form = e.target,
-        enrollmentGallery = gid,
+    h.addEventListener("click", async (e) => {
+      const opener = e.target.closest(
+        "[data-enroll-open], [data-enroll-identity]",
+      );
+      if (!opener || blocked) return;
+      const enrollmentGallery = gid,
         enrollmentGeneration = galleryGeneration;
       try {
         if (!window.spyderFaceEnrollment)
@@ -561,10 +550,12 @@
         await window.spyderFaceEnrollment.open({
           galleryId: enrollmentGallery,
           galleryName: desc.name,
-          identityName: form.elements.identity_name.value.trim(),
-          cameraId: form.elements.camera_id.value,
-          file: form.elements.image.files[0],
-          opener: form.querySelector("button"),
+          identityName: opener.dataset.enrollIdentity
+            ? desc.identities.find(
+                (identity) => identity.id === opener.dataset.enrollIdentity,
+              )?.name
+            : undefined,
+          opener,
           onSaved: async () => {
             if (
               enrollmentGeneration !== galleryGeneration ||
@@ -573,7 +564,10 @@
               return;
             await load();
             await refresh();
-            say(h, "Face enrolled. Source media was not retained.");
+            say(
+              h,
+              "Face enrolled. Portraits saved locally; full source media was not retained.",
+            );
             window.dispatchEvent(
               new CustomEvent("spyder:face-galleries-changed"),
             );
