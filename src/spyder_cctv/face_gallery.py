@@ -138,6 +138,7 @@ class FaceEnrollmentService:
             str, tuple[tuple[int, int, int, int, int], tuple[int, int, int, int, int] | None]
         ] = {}
         self._catalog_cache: dict[str, tuple[int, int, int, int, int, dict[str, Any]]] = {}
+        self._analysis_models = None
         self.root = Path(storage_dir).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -649,6 +650,280 @@ class FaceEnrollmentService:
             len(sample["embedding"]) for item in catalog["identities"] for sample in item["samples"]
         }
         catalog["dimension"] = next(iter(dimensions), None)
+
+    @_enrollment_slot
+    def analyze(self, gallery_id: str, image_bytes: bytes, roi=None) -> dict[str, Any]:
+        """Detect and embed faces without changing gallery storage."""
+        catalog = self._load(gallery_id, copy_data=True)
+        if (
+            not isinstance(image_bytes, (bytes, bytearray, memoryview))
+            or not 1 <= len(image_bytes) <= _MAX_IMAGE_BYTES
+        ):
+            raise ValueError("Image must be between 1 byte and 16 MiB")
+        dimensions = _encoded_dimensions(image_bytes)
+        if (
+            dimensions is None
+            or min(dimensions) < 1
+            or dimensions[0] * dimensions[1] > _MAX_IMAGE_PIXELS
+        ):
+            raise ValueError("Upload must be a valid image under 24 megapixels")
+        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None or image.ndim != 3:
+            raise ValueError("Upload must be a valid color image")
+        height, width = image.shape[:2]
+        if width * height > _MAX_IMAGE_PIXELS:
+            raise ValueError("Decoded image exceeds 24 megapixels")
+        left, top, right, bottom = 0, 0, width, height
+        if roi is not None:
+            if not isinstance(roi, (list, tuple)) or len(roi) != 4:
+                raise ValueError("ROI must contain normalized x, y, width and height")
+            if any(type(value) not in (int, float) or not math.isfinite(value) for value in roi):
+                raise ValueError("ROI values must be finite numbers")
+            x, y, rw, rh = map(float, roi)
+            if x < 0 or y < 0 or rw <= 0 or rh <= 0 or x + rw > 1 or y + rh > 1:
+                raise ValueError("ROI must fit within normalized image bounds")
+            left, top = int(x * width), int(y * height)
+            right, bottom = (
+                min(width, int(math.ceil((x + rw) * width))),
+                min(height, int(math.ceil((y + rh) * height))),
+            )
+            if right <= left or bottom <= top:
+                raise ValueError("ROI is empty")
+        crop = image[top:bottom, left:right]
+        detector, recognition = (
+            Path(catalog["detector"]["path"]),
+            Path(catalog["recognition"]["path"]),
+        )
+        if (
+            not detector.is_file()
+            or not recognition.is_file()
+            or not self._verify_model(detector, catalog["detector"]["sha256"])
+            or not self._verify_model(recognition, catalog["recognition"]["sha256"])
+        ):
+            raise VisionUnavailable(
+                "model_missing", "A model linked to this gallery changed or is unavailable."
+            )
+        model_key = (
+            str(detector.resolve()),
+            catalog["detector"]["sha256"],
+            str(recognition.resolve()),
+            catalog["recognition"]["sha256"],
+        )
+        cached = self._analysis_models
+        if cached is None or cached[0] != model_key:
+            try:
+                library = importlib.import_module("insightface.model_zoo")
+                detector_model = library.get_model(
+                    str(detector), providers=["CPUExecutionProvider"], download=False
+                )
+                recognition_model = library.get_model(
+                    str(recognition), providers=["CPUExecutionProvider"], download=False
+                )
+                align = importlib.import_module("insightface.utils.face_align")
+            except ImportError as error:
+                raise VisionUnavailable(
+                    "dependency_missing", "Install spyder-cctv[insightface] in this environment."
+                ) from error
+            if (
+                detector_model is None
+                or detector_model.taskname != "detection"
+                or recognition_model is None
+                or recognition_model.taskname != "recognition"
+            ):
+                raise VisionUnavailable(
+                    "model_incompatible", "Select compatible local InsightFace models."
+                )
+            detector_model.prepare(ctx_id=-1, input_size=(640, 640), det_thresh=0.5)
+            self._analysis_models = (model_key, detector_model, recognition_model, align)
+        else:
+            _, detector_model, recognition_model, align = cached
+        try:
+            boxes, landmarks = detector_model.detect(crop, max_num=0)
+            if boxes is None:
+                boxes = np.empty((0, 5), dtype=np.float32)
+            boxes = np.asarray(boxes)
+            if boxes.size == 0:
+                boxes = np.empty((0, 5), dtype=np.float32)
+            if (
+                boxes.ndim != 2
+                or boxes.shape[1] < 4
+                or not np.isfinite(boxes[:, :4]).all()
+                or np.any(boxes[:, 2] <= boxes[:, 0])
+                or np.any(boxes[:, 3] <= boxes[:, 1])
+            ):
+                raise VisionUnavailable("detection_failed", "Detector returned invalid face boxes.")
+            boxes = boxes.copy()
+            crop_height, crop_width = crop.shape[:2]
+            boxes[:, 0] = np.clip(boxes[:, 0], 0, crop_width)
+            boxes[:, 1] = np.clip(boxes[:, 1], 0, crop_height)
+            boxes[:, 2] = np.clip(boxes[:, 2], 0, crop_width)
+            boxes[:, 3] = np.clip(boxes[:, 3], 0, crop_height)
+            if np.any(boxes[:, 2] <= boxes[:, 0]) or np.any(boxes[:, 3] <= boxes[:, 1]):
+                raise VisionUnavailable(
+                    "detection_failed", "Detector returned boxes outside the analyzed image."
+                )
+            if len(boxes) > 16:
+                boxes = boxes[:16]
+            if landmarks is None:
+                if len(boxes):
+                    raise VisionUnavailable(
+                        "alignment_failed", "Detector did not return five-point face landmarks."
+                    )
+                landmarks = np.empty((0, 5, 2), dtype=np.float32)
+            landmarks = np.asarray(landmarks)
+            if (
+                landmarks.ndim != 3
+                or landmarks.shape[1:] != (5, 2)
+                or len(landmarks) < len(boxes)
+                or not np.isfinite(landmarks[: len(boxes)]).all()
+            ):
+                raise VisionUnavailable(
+                    "alignment_failed", "Detector returned invalid face landmarks."
+                )
+            faces = []
+            for index, row in enumerate(boxes):
+                candidate = self._candidate(row, index)
+                x1, y1, x2, y2 = candidate["box"]
+                x1, y1, x2, y2 = x1 + left, y1 + top, x2 + left, y2 + top
+                candidate["bbox"] = [
+                    max(0, x1 / width),
+                    max(0, y1 / height),
+                    min(1, x2 / width),
+                    min(1, y2 / height),
+                ]
+                face_thumb = image[
+                    max(0, int(y1)) : min(height, int(math.ceil(y2))),
+                    max(0, int(x1)) : min(width, int(math.ceil(x2))),
+                ]
+                if face_thumb.size:
+                    scale = min(1.0, 160 / max(face_thumb.shape[:2]))
+                    if scale < 1:
+                        face_thumb = cv2.resize(
+                            face_thumb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+                        )
+                ok, thumb = cv2.imencode(".jpg", face_thumb)
+                candidate["thumbnail"] = (
+                    "data:image/jpeg;base64," + base64.b64encode(thumb).decode("ascii")
+                    if ok
+                    else None
+                )
+                if landmarks is None or index >= len(landmarks):
+                    raise VisionUnavailable(
+                        "alignment_failed", "Detector did not return five-point face landmarks."
+                    )
+                try:
+                    aligned = align.norm_crop(crop, landmarks[index], image_size=112)
+                    features = np.asarray(
+                        recognition_model.get_feat([aligned]), dtype=np.float64
+                    ).reshape(-1)
+                except Exception as error:
+                    raise VisionUnavailable(
+                        "recognition_failed", "Could not align or embed detected face."
+                    ) from error
+                norm = float(np.linalg.norm(features)) if features.size else 0
+                if (
+                    not 1 <= features.size <= 4096
+                    or not np.isfinite(features).all()
+                    or not math.isfinite(norm)
+                    or norm < 1e-12
+                ):
+                    raise VisionUnavailable(
+                        "recognition_failed", "Recognition model returned invalid features."
+                    )
+                features /= norm
+                if catalog["dimension"] is not None and catalog["dimension"] != features.size:
+                    raise ValueError("Embedding dimension does not match gallery recognition model")
+                candidate["embedding"] = features.astype(float).tolist()
+                candidate["confidence"] = candidate.pop("score")
+                candidate.pop("box", None)
+                faces.append(candidate)
+            preview_image = image
+            scale = min(1.0, 1280 / max(image.shape[:2]))
+            if scale < 1:
+                preview_image = cv2.resize(
+                    image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+                )
+            ok, preview = cv2.imencode(".jpg", preview_image)
+            if not ok:
+                raise ValueError("Could not encode review preview")
+            return {
+                "preview": "data:image/jpeg;base64," + base64.b64encode(preview).decode("ascii"),
+                "width": width,
+                "height": height,
+                "faces": faces,
+                "_provenance": self._review_provenance(catalog),
+            }
+        finally:
+            detector_model = recognition_model = None
+
+    @_enrollment_slot
+    def enroll_embeddings(
+        self, gallery_id: str, identity_name: str, embeddings: list[list[float]]
+    ) -> dict[str, Any]:
+        """Validate all reviewed embeddings, then save gallery once."""
+        catalog = self._load(gallery_id, copy_data=True)
+        name = _clean_name(identity_name)
+        if not isinstance(embeddings, list) or not 1 <= len(embeddings) <= 20:
+            raise ValueError("Select between 1 and 20 reviewed faces")
+        vectors = []
+        for values in embeddings:
+            vector = np.asarray(values, dtype=np.float64)
+            norm = float(np.linalg.norm(vector)) if vector.ndim == 1 and vector.size else 0
+            if (
+                vector.ndim != 1
+                or not np.isfinite(vector).all()
+                or not math.isfinite(norm)
+                or norm < 1e-12
+            ):
+                raise ValueError("Reviewed face embedding is invalid")
+            vector /= norm
+            if catalog["dimension"] is not None and catalog["dimension"] != vector.size:
+                raise ValueError("Embedding dimension does not match gallery recognition model")
+            vectors.append(vector)
+        matching = next(
+            (item for item in catalog["identities"] if item["name"].casefold() == name.casefold()),
+            None,
+        )
+        if matching is None and len(catalog["identities"]) >= _MAX_IDENTITIES:
+            raise ValueError("Gallery identity limit reached")
+        existing_samples = len(matching["samples"]) if matching else 0
+        if existing_samples + len(vectors) > _MAX_SAMPLES:
+            raise ValueError("Identity sample limit reached")
+        total = sum(len(item["samples"]) for item in catalog["identities"])
+        if total + len(vectors) > _MAX_GALLERY_SAMPLES:
+            raise ValueError("Gallery sample limit reached")
+        if matching is None:
+            matching = {"id": uuid.uuid4().hex, "name": name, "samples": []}
+            catalog["identities"].append(matching)
+        for vector in vectors:
+            matching["samples"].append(
+                {"id": uuid.uuid4().hex, "embedding": vector.astype(float).tolist()}
+            )
+        catalog["dimension"] = int(vectors[0].size)
+        self._config(gallery_id, verify_models=True)
+        self._save(gallery_id, catalog)
+        return {
+            "gallery": self._metadata(catalog),
+            "identity": {
+                "id": matching["id"],
+                "name": matching["name"],
+                "sample_count": len(matching["samples"]),
+            },
+            "samples": [{"id": row["id"]} for row in matching["samples"][-len(vectors) :]],
+        }
+
+    @staticmethod
+    def _review_provenance(catalog: dict[str, Any]) -> tuple[str | None, ...]:
+        return (
+            catalog.get("detector_model_id"),
+            catalog.get("recognition_model_id"),
+            catalog["detector"]["sha256"],
+            catalog["recognition"]["sha256"],
+        )
+
+    @_serialized
+    def close(self) -> None:
+        self._analysis_models = None
 
     @_enrollment_slot
     def enroll(

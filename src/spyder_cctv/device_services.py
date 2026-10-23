@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import math
 import threading
 import time
 from uuid import uuid4
@@ -25,6 +26,8 @@ class DeviceServices:
         self._camera_sessions = {}
         self._enrollment_frames = {}
         self._enrollment_inflight = set()
+        self._reviews = {}
+        self._review_inflight = set()
         self._connections = {}
 
     def _model(self, model_id):
@@ -38,6 +41,15 @@ class DeviceServices:
         if descriptor["engine"] != "insightface":
             raise ValueError("Face enrollment requires local InsightFace ONNX models")
         return descriptor["path"]
+
+    @staticmethod
+    def _review_provenance(metadata):
+        return (
+            metadata.get("detector_model_id"),
+            metadata.get("recognition_model_id"),
+            metadata.get("detector_sha256"),
+            metadata.get("recognition_sha256"),
+        )
 
     def get(self, parts):
         if parts == ["api", "onvif", "sessions"]:
@@ -87,6 +99,20 @@ class DeviceServices:
     @staticmethod
     def _fields(data, required=(), optional=()):
         for key, value in data.items():
+            if key == "roi":
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 4
+                    or any(
+                        type(item) not in (int, float) or not math.isfinite(item) for item in value
+                    )
+                ):
+                    raise ValueError("ROI must contain four finite normalized numbers")
+                continue
+            if key == "selections":
+                if not isinstance(value, list):
+                    raise ValueError("Selections must be a list")
+                continue
             if key in {"pan", "tilt", "zoom", "duration_ms", "face_index"}:
                 if type(value) not in (int, float):
                     raise ValueError("Movement and face selection values must be numbers")
@@ -112,6 +138,111 @@ class DeviceServices:
         if len(parts) < 5 or parts[:3] != ["api", "faces", "galleries"]:
             raise KeyError("Unknown device action")
         gallery_id, tail = parts[3], parts[4:]
+        if tail == ["analyze"]:
+            self._fields(data, optional=("camera_id", "image_base64", "roi"))
+            if sum(key in data for key in ("camera_id", "image_base64")) != 1:
+                raise ValueError("Choose one live camera or one image")
+            if "camera_id" in data:
+                worker = self.manager.get_worker(data["camera_id"])
+                if worker.status()["state"] != "running":
+                    raise ValueError("Start the selected camera before reviewing faces")
+                frame = worker.raw_frame(timeout=2.0)
+                if frame is None:
+                    raise ValueError(
+                        "Camera did not supply a fresh frame; check its live view and retry"
+                    )
+                image = encode_jpeg(frame)
+            else:
+                value = data["image_base64"]
+                if not isinstance(value, str) or len(value) > 12 * 1024 * 1024:
+                    raise ValueError("Choose an image smaller than 8 MiB")
+                try:
+                    image = base64.b64decode(value, validate=True)
+                except (ValueError, binascii.Error):
+                    raise ValueError("Image must contain valid base64 data") from None
+                if not 1 <= len(image) <= 8 * 1024 * 1024:
+                    raise ValueError("Choose an image smaller than 8 MiB")
+            result = self.galleries.analyze(gallery_id, image, data.get("roi"))
+            provenance = result.pop("_provenance")
+            now = time.monotonic()
+            with self._lock:
+                self._reviews = {
+                    key: item for key, item in self._reviews.items() if item["expires"] > now
+                }
+                if len(self._reviews) >= 64:
+                    available = set(self._reviews) - self._review_inflight
+                    if not available:
+                        raise RuntimeError("Face review capacity is busy; retry shortly")
+                    oldest = min(available, key=lambda key: self._reviews[key]["expires"])
+                    self._reviews.pop(oldest, None)
+                review_token = uuid4().hex
+                staged = [item.pop("embedding") for item in result["faces"]]
+                self._reviews[review_token] = {
+                    "expires": now + 300,
+                    "gallery_id": gallery_id,
+                    "provenance": provenance,
+                    "embeddings": staged,
+                }
+            public_faces = [
+                {key: value for key, value in item.items() if key != "embedding"}
+                for item in result["faces"]
+            ]
+            return {
+                "review_token": review_token,
+                "preview": result["preview"],
+                "width": result["width"],
+                "height": result["height"],
+                "faces": public_faces,
+            }
+        if tail == ["enroll-reviewed"]:
+            self._fields(data, ("identity_name", "selections"))
+            selections = data["selections"]
+            if not 1 <= len(selections) <= 20:
+                raise ValueError("Select between 1 and 20 reviewed faces")
+            refs = []
+            for selection in selections:
+                if (
+                    not isinstance(selection, dict)
+                    or set(selection) != {"review_token", "face_index"}
+                    or not isinstance(selection["review_token"], str)
+                    or type(selection["face_index"]) is not int
+                    or selection["face_index"] < 0
+                ):
+                    raise ValueError("Each selection needs a review token and face index")
+                refs.append((selection["review_token"], selection["face_index"]))
+            if len(set(refs)) != len(refs):
+                raise ValueError("Duplicate face selections are not allowed")
+            tokens = {token for token, _ in refs}
+            with self._lock:
+                now = time.monotonic()
+                self._reviews = {
+                    key: item for key, item in self._reviews.items() if item["expires"] > now
+                }
+                if tokens & self._review_inflight:
+                    raise RuntimeError("A selected review is already being processed")
+                staged = []
+                current = self.galleries.get_gallery(gallery_id)
+                for token, index in refs:
+                    review = self._reviews.get(token)
+                    if review is None or review["gallery_id"] != gallery_id:
+                        raise ValueError("Face review expired or belongs to another gallery")
+                    if review["provenance"] != self._review_provenance(current):
+                        raise ValueError("Gallery model provenance changed; analyze image again")
+                    if index >= len(review["embeddings"]):
+                        raise ValueError("Selected face index is invalid")
+                    staged.append(review["embeddings"][index])
+                self._review_inflight.update(tokens)
+            try:
+                result = self.galleries.enroll_embeddings(gallery_id, data["identity_name"], staged)
+            except BaseException:
+                with self._lock:
+                    self._review_inflight.difference_update(tokens)
+                raise
+            with self._lock:
+                self._review_inflight.difference_update(tokens)
+                for token in tokens:
+                    self._reviews.pop(token, None)
+            return result
         if tail == ["rename"]:
             self._fields(data, ("name",))
             return self.galleries.rename_gallery(gallery_id, data["name"])
@@ -348,12 +479,20 @@ class DeviceServices:
             self._enrollment_frames = {
                 key: value for key, value in self._enrollment_frames.items() if value[0] > now
             }
+            self._reviews = {
+                key: item for key, item in self._reviews.items() if item["expires"] > now
+            }
 
     def close(self):
         self.onvif.close_all()
+        close_galleries = getattr(self.galleries, "close", None)
+        if close_galleries is not None:
+            close_galleries()
         with self._lock:
             self._enrollment_frames.clear()
             self._enrollment_inflight.clear()
+            self._reviews.clear()
+            self._review_inflight.clear()
             self._connections.clear()
 
 
