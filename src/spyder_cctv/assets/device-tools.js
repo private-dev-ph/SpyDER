@@ -32,6 +32,81 @@
     e.textContent = m;
     e.dataset.error = String(!!bad);
   };
+  let dialogSequence = 0;
+  const closeIcon =
+    '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+  function showDialog(dialog, opener) {
+    const heading = dialog.querySelector("h3");
+    heading.id = "dt-dialog-title-" + ++dialogSequence;
+    dialog.setAttribute("aria-labelledby", heading.id);
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "dt-icon-button dt-dialog-close";
+    close.setAttribute(
+      "aria-label",
+      "Close " + heading.textContent.toLowerCase(),
+    );
+    close.innerHTML = closeIcon;
+    close.addEventListener("click", () => dialog.close("cancel"));
+    dialog.append(close);
+    dialog
+      .querySelector('[value="cancel"]')
+      .addEventListener("click", () => dialog.close("cancel"));
+    dialog.addEventListener(
+      "close",
+      () => {
+        if (opener?.isConnected) opener.focus();
+      },
+      { once: true },
+    );
+    dialog.showModal();
+  }
+  function requestDialog({
+    title,
+    message,
+    initial,
+    submit,
+    destructive,
+    opener,
+  }) {
+    return new Promise((resolve) => {
+      const dialog = document.createElement("dialog");
+      dialog.className = "dt-dialog";
+      dialog.innerHTML =
+        '<form method="dialog"><h3>' +
+        esc(title) +
+        "</h3><p>" +
+        esc(message) +
+        "</p>" +
+        (initial !== undefined
+          ? '<label>Name<input name="name" required maxlength="128" value="' +
+            esc(initial) +
+            '" autofocus></label>'
+          : "") +
+        '<footer class="dt-dialog-actions"><button class="dt-button" type="button" value="cancel" formnovalidate>Cancel</button><button class="dt-button ' +
+        (destructive ? "dt-destructive" : "dt-primary") +
+        '" value="confirm">' +
+        esc(submit) +
+        "</button></footer></form>";
+      document.body.append(dialog);
+      dialog.addEventListener(
+        "close",
+        () => {
+          const accepted = dialog.returnValue === "confirm";
+          const result = accepted
+            ? initial === undefined
+              ? true
+              : dialog.querySelector('[name="name"]').value.trim()
+            : null;
+          dialog.remove();
+          resolve(result);
+        },
+        { once: true },
+      );
+      showDialog(dialog, opener);
+      if (initial !== undefined) dialog.querySelector('[name="name"]').select();
+    });
+  }
   function watch() {
     const scan = () => {
       for (const [id, k] of [
@@ -63,7 +138,7 @@
       (blocked
         ? '<p class="dt-notice">Native enrollment unavailable in showcase. No network calls run.</p>'
         : "") +
-      '<p class="dt-privacy">Images process locally and are not retained. Only face samples are stored in gallery.</p><div class="dt-tools"><label>Search<input type="search" data-search></label><button class="dt-button" data-refresh>Refresh</button></div><p class="dt-status" role="status" aria-live="polite"></p><div data-list class="dt-gallery-list"></div><div data-detail></div></section>';
+      '<p class="dt-privacy">Images process locally and are not retained. Only face samples are stored in gallery.</p><div class="dt-tools"><label>Search<input type="search" data-search></label><button class="dt-button" data-refresh>Refresh</button></div><p class="dt-status" role="status" aria-live="polite"></p><div data-list class="dt-gallery-list"></div><div data-detail class="dt-detail"></div></section>';
     if (blocked)
       h.querySelectorAll("button").forEach((b) => (b.disabled = true));
     async function refresh() {
@@ -141,9 +216,9 @@
               (i.samples || [])
                 .map(
                   (s) =>
-                    '<div class="dt-sample">Sample ' +
+                    '<div class="dt-sample"><span class="dt-sample-name">Sample ' +
                     esc(s.id) +
-                    ' <button class="dt-button dt-danger" data-xi="' +
+                    '</span><button class="dt-button dt-danger" data-xi="' +
                     esc(i.id) +
                     '" data-xs="' +
                     esc(s.id) +
@@ -239,9 +314,9 @@
                   "</select></label>",
               )
               .join("") +
-            '<p>Workflow use: connect gallery Classifier to InsightFace Detections CLASSIFIER IN.</p><button value="cancel">Cancel</button><button value="create">Create</button></form>';
+            '<p class="dt-dialog-note">Connect this gallery’s Classifier node to InsightFace Detections to recognize enrolled identities.</p><footer class="dt-dialog-actions"><button class="dt-button" type="button" value="cancel" formnovalidate>Cancel</button><button class="dt-button dt-primary" value="create">Create gallery</button></footer></form>';
           document.body.append(d);
-          d.showModal();
+          showDialog(d, b);
           d.addEventListener(
             "close",
             async () => {
@@ -264,6 +339,7 @@
               d.remove();
               h._creatingGallery = false;
               b.disabled = false;
+              if (b.isConnected) b.focus();
             },
             { once: true },
           );
@@ -271,7 +347,14 @@
         }
         let id = b.dataset.xi;
         if (b.hasAttribute("data-rg")) {
-          let name = prompt("Gallery name", desc.name)?.trim();
+          const name = await requestDialog({
+            title: "Rename gallery",
+            message:
+              "Choose a name that helps you find this identity collection.",
+            initial: desc.name,
+            submit: "Save name",
+            opener: b,
+          });
           if (name) {
             await api(
               "/api/faces/galleries/" + encodeURIComponent(gid) + "/rename",
@@ -286,7 +369,16 @@
           return;
         }
         if (b.hasAttribute("data-xg")) {
-          if (confirm("Remove gallery and samples?")) {
+          if (
+            await requestDialog({
+              title: "Remove gallery?",
+              message:
+                "This permanently removes this gallery and all its enrolled face samples.",
+              submit: "Remove gallery",
+              destructive: true,
+              opener: b,
+            })
+          ) {
             await api(
               "/api/faces/galleries/" + encodeURIComponent(gid) + "/remove",
               {},
@@ -318,16 +410,22 @@
         }
         if (b.dataset.ri) {
           let old = desc.identities.find((x) => x.id === b.dataset.ri),
-            name = prompt("Identity name", old.name)?.trim();
-          if (name)
-            await api(
-              "/api/faces/galleries/" +
-                encodeURIComponent(gid) +
-                "/identities/" +
-                encodeURIComponent(old.id) +
-                "/rename",
-              { name },
-            );
+            name = await requestDialog({
+              title: "Rename identity",
+              message: "The new name will also appear in recognition results.",
+              initial: old.name,
+              submit: "Save name",
+              opener: b,
+            });
+          if (!name) return;
+          await api(
+            "/api/faces/galleries/" +
+              encodeURIComponent(gid) +
+              "/identities/" +
+              encodeURIComponent(old.id) +
+              "/rename",
+            { name },
+          );
           await load();
           window.dispatchEvent(
             new CustomEvent("spyder:face-galleries-changed"),
@@ -335,15 +433,25 @@
           return;
         }
         if (id && !b.dataset.xs && b.hasAttribute("data-xi")) {
-          if (confirm("Remove identity and samples?"))
-            await api(
-              "/api/faces/galleries/" +
-                encodeURIComponent(gid) +
-                "/identities/" +
-                encodeURIComponent(id) +
-                "/remove",
-              {},
-            );
+          if (
+            !(await requestDialog({
+              title: "Remove identity?",
+              message:
+                "This permanently removes this identity and its enrolled samples from the gallery.",
+              submit: "Remove identity",
+              destructive: true,
+              opener: b,
+            }))
+          )
+            return;
+          await api(
+            "/api/faces/galleries/" +
+              encodeURIComponent(gid) +
+              "/identities/" +
+              encodeURIComponent(id) +
+              "/remove",
+            {},
+          );
           await load();
           window.dispatchEvent(
             new CustomEvent("spyder:face-galleries-changed"),
@@ -351,17 +459,27 @@
           return;
         }
         if (id && b.dataset.xs) {
-          if (confirm("Remove sample?"))
-            await api(
-              "/api/faces/galleries/" +
-                encodeURIComponent(gid) +
-                "/identities/" +
-                encodeURIComponent(id) +
-                "/samples/" +
-                encodeURIComponent(b.dataset.xs) +
-                "/remove",
-              {},
-            );
+          if (
+            !(await requestDialog({
+              title: "Remove sample?",
+              message:
+                "This permanently removes this face sample. Removing the final sample also removes the identity.",
+              submit: "Remove sample",
+              destructive: true,
+              opener: b,
+            }))
+          )
+            return;
+          await api(
+            "/api/faces/galleries/" +
+              encodeURIComponent(gid) +
+              "/identities/" +
+              encodeURIComponent(id) +
+              "/samples/" +
+              encodeURIComponent(b.dataset.xs) +
+              "/remove",
+            {},
+          );
           await load();
           window.dispatchEvent(
             new CustomEvent("spyder:face-galleries-changed"),
@@ -423,7 +541,7 @@
                   "</option>",
               )
               .join("") +
-            '</select></label><button type="button" data-confirm-face>Enroll selected face</button>';
+            '</select></label><button type="button" class="dt-button dt-primary" data-confirm-face>Enroll selected face</button>';
           h._pending = {
             identity_name: b.identity_name,
             enrollment_token: d.enrollment_token,
