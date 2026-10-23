@@ -90,9 +90,10 @@ def test_gallery_crud_exports_centroid_and_metadata_hides_vectors(tmp_path, monk
     )
     assert enrolled["identity"]["sample_count"] == 1
     assert enrolled["sample"]["thumbnail"].startswith("data:image/jpeg;base64,")
-    assert service.list_identities(gallery["id"])["identities"][0]["thumbnail"] == enrolled[
-        "sample"
-    ]["thumbnail"]
+    assert (
+        service.list_identities(gallery["id"])["identities"][0]["thumbnail"]
+        == enrolled["sample"]["thumbnail"]
+    )
     assert "embedding" not in json.dumps(service.list_galleries())
     assert "embedding" not in json.dumps(service.list_identities(gallery["id"]))
     assert np.allclose(
@@ -259,15 +260,11 @@ def test_gallery_snapshot_returns_metadata_and_identity_samples_without_vectors(
 def test_portraits_persist_locally_are_bounded_and_fall_back_after_removal(tmp_path, monkeypatch):
     service, gallery, _, _, image = _setup(tmp_path, monkeypatch)
     thumb = service.analyze(gallery["id"], image)["faces"][0]["thumbnail"]
-    ok, newer_image = cv2.imencode(
-        ".jpg", np.full((48, 48, 3), (25, 80, 220), dtype=np.uint8)
-    )
+    ok, newer_image = cv2.imencode(".jpg", np.full((48, 48, 3), (25, 80, 220), dtype=np.uint8))
     assert ok
     newer_thumb = "data:image/jpeg;base64," + base64.b64encode(newer_image).decode("ascii")
     first = service.enroll_embeddings(gallery["id"], "Ada", [[1.0, 0.0]], thumbnails=[thumb])
-    second = service.enroll_embeddings(
-        gallery["id"], "Ada", [[0.0, 1.0]], thumbnails=[newer_thumb]
-    )
+    second = service.enroll_embeddings(gallery["id"], "Ada", [[0.0, 1.0]], thumbnails=[newer_thumb])
     assert first["samples"][0]["thumbnail"].startswith("data:image/jpeg;base64,")
 
     restarted = FaceEnrollmentService(service.root)

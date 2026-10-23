@@ -164,9 +164,10 @@
   padding: 12px 0;
   border-bottom: 1px solid var(--border, #e4dfd4);
 }
-.dt-identity > div:first-child {
+.dt-identity-copy {
   display: grid;
-  gap: 3px;
+  gap: 4px;
+  min-width: 0;
 }
 .dt-sample {
   grid-column: 1/-1;
@@ -519,4 +520,72 @@
 :is(.dt-card, .dt-dialog),
 :is(.dt-card, .dt-dialog) * {
   box-sizing: border-box;
+}
+
+.dt-gallery {
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.dt-gallery-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.dt-gallery-copy > b {
+  font-size: 14px;
+  color: var(--ink);
+}
+.dt-portrait {
+  display: block;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+}
+.dt-portrait-empty {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.dt-portrait-empty svg {
+  width: 30px;
+  height: 30px;
+}
+.dt-gallery > .dt-portrait {
+  width: 52px;
+  height: 52px;
+}
+.dt-identity-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.dt-portrait-note {
+  max-width: 34ch;
+  line-height: 1.4;
+}
+.dt-sample-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.dt-sample-preview .dt-portrait {
+  width: 52px;
+  height: 52px;
+  flex-basis: 52px;
+  border-radius: 8px;
+}
+@media (max-width: 500px) {
+  .dt-gallery-list {
+    grid-template-columns: 1fr;
+  }
+  .dt-sample {
+    flex-wrap: wrap;
+  }
 }

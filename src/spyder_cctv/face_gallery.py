@@ -175,7 +175,7 @@ def _enrollment_slot(method):
 
 
 class FaceEnrollmentService:
-    """Manage local face galleries; retain vectors, never source images."""
+    """Manage local galleries with face vectors and bounded portrait crops."""
 
     def __init__(self, storage_dir: str | Path) -> None:
         self._lock = threading.RLock()
@@ -366,9 +366,7 @@ class FaceEnrollmentService:
 
     def _save(self, gallery_id: str, catalog: dict[str, Any]) -> None:
         self._validate_catalog(catalog, gallery_id)
-        serialized = json.dumps(
-            catalog, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-        )
+        serialized = json.dumps(catalog, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         if len(serialized.encode("utf-8")) > _MAX_CATALOG_BYTES:
             raise ValueError("Gallery catalog too large")
         exported = self._v1(catalog)
