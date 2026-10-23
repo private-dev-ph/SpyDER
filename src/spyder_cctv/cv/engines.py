@@ -155,7 +155,7 @@ class InsightFaceEngine:
                 )
             self.gallery_path = gallery_path
             self.gallery = _load_identity_gallery(gallery_path)
-            self._gallery_mtime_ns = gallery_path.stat().st_mtime_ns
+            self._gallery_fingerprint = self._gallery_stat_fingerprint(gallery_path)
             from spyder_cctv.cv.identity_stability import IdentityStabilizer
 
             self.identity_stabilizer = IdentityStabilizer(
@@ -268,18 +268,29 @@ class InsightFaceEngine:
         if self.recognizer is None:
             return
         try:
-            mtime_ns = self.gallery_path.stat().st_mtime_ns
+            fingerprint = self._gallery_stat_fingerprint(self.gallery_path)
         except OSError as error:
             raise VisionUnavailable(
                 "gallery_invalid", "Identity gallery file is unavailable."
             ) from error
-        if mtime_ns != self._gallery_mtime_ns:
+        if fingerprint != self._gallery_fingerprint:
             gallery = _load_identity_gallery(self.gallery_path)
             self.gallery = gallery
-            self._gallery_mtime_ns = mtime_ns
+            self._gallery_fingerprint = fingerprint
             stabilizer = getattr(self, "identity_stabilizer", None)
             if stabilizer is not None:
                 stabilizer.clear()
+
+    @staticmethod
+    def _gallery_stat_fingerprint(path: Path) -> tuple[int, int, int, int, int]:
+        stat = path.stat()
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
 
     def reset(self) -> None:
         """Forget temporal identities after inference has been idle; retain model weights."""
