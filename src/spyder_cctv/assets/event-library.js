@@ -61,7 +61,7 @@
     if (!viewer) return;
     viewer.dataset.closing = "true";
     viewerCleanup?.(); viewerCleanup = null;
-    viewerOverlayCleanup?.(); viewerOverlayCleanup = null;
+    viewerOverlayCleanup?.destroy?.(); viewerOverlayCleanup = null;
     const video = viewer.querySelector("video");
     if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
     if (viewer.open) viewer.close();
@@ -91,7 +91,7 @@
       error.textContent = "This browser cannot play this file, or the file is unavailable. Use Download to open it with a local player.";
       if (content.tagName === "VIDEO" && !window.spyderShowcase && url.startsWith("/api/media/")) {
         fallbackStarted = true;
-        viewerOverlayCleanup?.(); viewerOverlayCleanup = null;
+        viewerOverlayCleanup?.destroy?.(); viewerOverlayCleanup = null;
         viewerCleanup = fallbackPlayer(content, item, error);
       }
     });

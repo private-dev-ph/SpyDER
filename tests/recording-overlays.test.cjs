@@ -13,7 +13,7 @@ class Element {
     this.tagName = tag.toUpperCase(); this.ownerDocument = ownerDocument; this.children = [];
     this.listeners = new Map(); this.style = {}; this.attrs = {}; this.classList = { add() {}, remove() {} };
     this.clientWidth = 640; this.clientHeight = 360; this.width = 0; this.height = 0; this.checked = false;
-    this.context = { setTransform() {}, clearRect() {}, strokeRect() { this.drawn = (this.drawn || 0) + 1; }, measureText: () => ({ width: 40 }), fillRect() {}, fillText() {} };
+    this.context = { setTransform() {}, clearRect() {}, strokeRect(...rect) { this.rects = [...(this.rects || []), rect]; this.drawn = (this.drawn || 0) + 1; }, measureText: () => ({ width: 40 }), fillRect() {}, fillText() {} };
   }
   append(...items) { this.children.push(...items); }
   setAttribute(k, v) { this.attrs[k] = v; }
@@ -63,6 +63,28 @@ test("toggle fetches only active chunk, paints matching boxes, and reuses bounde
     await h.controller.update(31); await flush();
     assert.equal(h.requests(), 2, "seek loads only requested chunk");
     assert.match(h.status.textContent, /loaded/);
+  } finally { h.restore(); }
+});
+
+test("sample selection never paints future detections and missing chunks are cached", async () => {
+  const h = harness({ fetcher: (...args) => {
+    const index = Number(new URL("http://local" + args[0]).searchParams.get("chunk"));
+    return { ok: true, text: async () => JSON.stringify(index === 0 ? {
+      ...sample(0), samples: [
+        { time: 1, boxes: [{ bbox: [0.1, 0.2, 0.1, 0.1], camera_id: "cam", kind: "person", label: "past" }] },
+        { time: 2, boxes: [{ bbox: [0.7, 0.2, 0.1, 0.1], camera_id: "cam", kind: "person", label: "future" }] },
+      ],
+    } : { ...sample(index), available: false, samples: [] }) };
+  } });
+  try {
+    h.toggle.checked = true; h.toggle.dispatch("change"); await flush();
+    const canvas = h.surface.children.find((child) => child.className === "recording-overlay-canvas");
+    assert.equal(canvas.context.rects.length, 1);
+    assert.equal(canvas.context.rects[0][0], 64, "time 1 shows the past sample, not the sample at time 2");
+    await h.controller.update(31); await flush();
+    assert.equal(canvas.context.rects.length, 1, "empty chunk clears previous boxes");
+    await h.controller.update(32); await flush();
+    assert.equal(h.requests(), 2, "cached no-data chunk is not fetched again on every frame");
   } finally { h.restore(); }
 });
 
