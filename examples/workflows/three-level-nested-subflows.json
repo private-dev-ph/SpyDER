@@ -1,0 +1,297 @@
+{
+  "format": "spyder-workflow-bundle",
+  "version": 1,
+  "workflow": {
+    "id": "demo-three-level-subflows",
+    "name": "DEMO · Three-level nested face event",
+    "enabled": false,
+    "camera_ids": [],
+    "nodes": [
+      {
+        "id": "camera",
+        "type": "camera",
+        "x": 80,
+        "y": 160,
+        "params": {
+          "camera_id": ""
+        }
+      },
+      {
+        "id": "detections",
+        "type": "detections",
+        "x": 340,
+        "y": 160,
+        "params": {
+          "engine": "any"
+        }
+      },
+      {
+        "id": "call_level_1",
+        "type": "subflow",
+        "x": 600,
+        "y": 160,
+        "params": {
+          "subflow_id": "demo-nested-level-1",
+          "version": 1,
+          "arguments": {}
+        }
+      },
+      {
+        "id": "event",
+        "type": "event",
+        "x": 900,
+        "y": 160,
+        "params": {
+          "message": "Three-level subflow demo matched",
+          "name_pattern": "Nested demo · {camera} · {date} {time}",
+          "attachment": "none",
+          "duration_seconds": 10,
+          "pre_event_seconds": 0
+        }
+      },
+      {
+        "id": "preview",
+        "type": "preview",
+        "x": 900,
+        "y": 360,
+        "params": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "camera",
+        "to": "detections",
+        "input": "camera"
+      },
+      {
+        "from": "detections",
+        "to": "call_level_1"
+      },
+      {
+        "from": "call_level_1",
+        "to": "event"
+      },
+      {
+        "from": "call_level_1",
+        "to": "preview"
+      },
+      {
+        "from": "camera",
+        "to": "preview",
+        "input": "camera"
+      }
+    ]
+  },
+  "subflows": [
+    {
+      "id": "demo-nested-level-3",
+      "name": "DEMO · Level 3 · Cooldown",
+      "description": "Innermost branch: pass matching detections at most once every five seconds.",
+      "version": 1,
+      "graph": {
+        "id": "demo-nested-level-3-graph",
+        "name": "DEMO · Level 3 · Cooldown",
+        "enabled": false,
+        "camera_ids": [],
+        "nodes": [
+          {
+            "id": "input",
+            "type": "subflow_input",
+            "x": 80,
+            "y": 160,
+            "params": {}
+          },
+          {
+            "id": "cooldown",
+            "type": "cooldown",
+            "x": 400,
+            "y": 160,
+            "params": {
+              "seconds": 5
+            }
+          },
+          {
+            "id": "output",
+            "type": "subflow_output",
+            "x": 1040,
+            "y": 160,
+            "params": {}
+          }
+        ],
+        "edges": [
+          {
+            "from": "input",
+            "to": "cooldown"
+          },
+          {
+            "from": "cooldown",
+            "to": "output"
+          }
+        ]
+      },
+      "parameters": [
+        {
+          "name": "cooldown_seconds",
+          "type": "integer",
+          "default": 5,
+          "node_id": "cooldown",
+          "field": "seconds"
+        }
+      ]
+    },
+    {
+      "id": "demo-nested-level-2",
+      "name": "DEMO · Level 2 · Minimum count",
+      "description": "Middle branch: require enough matching detections, then call Level 3.",
+      "version": 1,
+      "graph": {
+        "id": "demo-nested-level-2-graph",
+        "name": "DEMO · Level 2 · Minimum count",
+        "enabled": false,
+        "camera_ids": [],
+        "nodes": [
+          {
+            "id": "input",
+            "type": "subflow_input",
+            "x": 80,
+            "y": 160,
+            "params": {}
+          },
+          {
+            "id": "count",
+            "type": "count",
+            "x": 320,
+            "y": 160,
+            "params": {
+              "minimum": 1
+            }
+          },
+          {
+            "id": "call_level_3",
+            "type": "subflow",
+            "x": 640,
+            "y": 160,
+            "params": {
+              "subflow_id": "demo-nested-level-3",
+              "version": 1,
+              "arguments": {}
+            }
+          },
+          {
+            "id": "output",
+            "type": "subflow_output",
+            "x": 1040,
+            "y": 160,
+            "params": {}
+          }
+        ],
+        "edges": [
+          {
+            "from": "input",
+            "to": "count"
+          },
+          {
+            "from": "count",
+            "to": "call_level_3"
+          },
+          {
+            "from": "call_level_3",
+            "to": "output"
+          }
+        ]
+      },
+      "parameters": [
+        {
+          "name": "minimum_matches",
+          "type": "integer",
+          "default": 1,
+          "node_id": "count",
+          "field": "minimum"
+        }
+      ]
+    },
+    {
+      "id": "demo-nested-level-1",
+      "name": "DEMO · Level 1 · Face gate",
+      "description": "Outer branch: filter face detections by confidence, then call Level 2.",
+      "version": 1,
+      "graph": {
+        "id": "demo-nested-level-1-graph",
+        "name": "DEMO · Level 1 · Face gate",
+        "enabled": false,
+        "camera_ids": [],
+        "nodes": [
+          {
+            "id": "input",
+            "type": "subflow_input",
+            "x": 80,
+            "y": 160,
+            "params": {}
+          },
+          {
+            "id": "filter",
+            "type": "filter",
+            "x": 320,
+            "y": 160,
+            "params": {
+              "label": "face",
+              "confidence": 0.6,
+              "identity_source": "identity",
+              "identity": "",
+              "rules": [],
+              "match": "all"
+            }
+          },
+          {
+            "id": "call_level_2",
+            "type": "subflow",
+            "x": 640,
+            "y": 160,
+            "params": {
+              "subflow_id": "demo-nested-level-2",
+              "version": 1,
+              "arguments": {}
+            }
+          },
+          {
+            "id": "output",
+            "type": "subflow_output",
+            "x": 1040,
+            "y": 160,
+            "params": {}
+          }
+        ],
+        "edges": [
+          {
+            "from": "input",
+            "to": "filter"
+          },
+          {
+            "from": "filter",
+            "to": "call_level_2"
+          },
+          {
+            "from": "call_level_2",
+            "to": "output"
+          }
+        ]
+      },
+      "parameters": [
+        {
+          "name": "class_label",
+          "type": "string",
+          "default": "face",
+          "node_id": "filter",
+          "field": "label"
+        },
+        {
+          "name": "min_confidence",
+          "type": "number",
+          "default": 0.6,
+          "node_id": "filter",
+          "field": "confidence"
+        }
+      ]
+    }
+  ]
+}
