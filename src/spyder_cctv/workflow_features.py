@@ -182,8 +182,21 @@ class WorkflowFeatures:
         if not isinstance(raw["subflows"], list) or len(raw["subflows"]) > 50_000:
             raise ValueError("Invalid subflow dependencies")
         with self.service._lock:
+            if self.service._storage_error:
+                raise ValueError(
+                    "Cannot import while workflow storage is invalid; original files were preserved"
+                )
+            # Reject disabled call targets before changing the published catalog.
+            self.service._validate_call_permissions(
+                [
+                    graph,
+                    *(item.get("graph", {}) for item in raw["subflows"] if isinstance(item, dict)),
+                ]
+            )
             # Catalog validates the whole candidate before its single atomic write.
             self.service.subflows.import_definitions(raw["subflows"], graph=graph)
+            self.service._migrate_callable_workflows()
+            self.service._rebuild_summary_cache()
             self.service.compile_graph(graph)
         return {"workflow": graph, "subflows": raw["subflows"]}
 

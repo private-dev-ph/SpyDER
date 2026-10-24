@@ -165,7 +165,7 @@
           ? "Reusable event log"
           : kind === "confidence"
             ? "Confidence and cooldown"
-            : "New subflow",
+            : "New callable workflow",
       enabled: false,
       camera_ids: [],
       nodes,
@@ -218,7 +218,8 @@
       })
       .join("")}</svg>`;
   }
-  async function subflows() {
+  async function subflows(refresh = false) {
+    if (refresh) remoteCatalog = null;
     catalogError = "";
     if (demo()) {
       try {
@@ -235,7 +236,10 @@
                 .sort((a, b) => a - b),
             });
         }
-        return [...latest.values()];
+        const allowed = await window.spyderWorkflowStore?.callableIds?.();
+        return [...latest.values()].filter(
+          (item) => !allowed || allowed.includes(item.id),
+        );
       } catch (error) {
         catalogError = `Browser subflow storage is invalid: ${error.message}`;
         return [];
@@ -352,6 +356,7 @@
         byVersion.set(key, item);
       }
       storeBrowserDefinitions([...byVersion.values()]);
+      await window.spyderWorkflowStore?.migrateCallables?.();
       const workflow = clone(bundle.workflow);
       workflow.enabled = false;
       return workflow;
@@ -523,7 +528,10 @@
     const close = () => {
       wrap.remove();
       onClose?.();
-      returnFocus?.focus?.({ preventScroll: true });
+      (returnFocus?.isConnected
+        ? returnFocus
+        : document.querySelector("[data-save]")
+      )?.focus?.({ preventScroll: true });
     };
     wrap.addEventListener("click", (event) => {
       if (event.target === wrap || event.target.closest("[data-wt-close]"))
@@ -558,218 +566,69 @@
     return { wrap, close };
   }
   async function openSubflows() {
-    let entries = [],
-      page = 0,
-      query = "",
-      sort = "name";
-    remoteCatalog = null;
-    try {
-      entries = await subflows();
-    } catch (error) {
-      catalogError = error.message;
+    if (!editor.onOpenLibrary)
+      throw Error("Open the workflow editor to browse callable workflows.");
+    return editor.onOpenLibrary("callable");
+  }
+  function extractCallableGraph(raw) {
+    const graph = clone(raw);
+    const inputs = graph.nodes.filter((node) => node.type === "subflow_input"),
+      outputs = graph.nodes.filter((node) => node.type === "subflow_output");
+    if (inputs.length !== 1 || outputs.length !== 1)
+      throw Error(
+        "Add exactly one Workflow input and one Workflow output before publishing.",
+      );
+    const walk = (start, reverse) => {
+      const seen = new Set([start]),
+        queue = [start];
+      for (let index = 0; index < queue.length; index++)
+        for (const edge of graph.edges) {
+          const a = reverse ? edge.to : edge.from,
+            b = reverse ? edge.from : edge.to;
+          if (a === queue[index] && !seen.has(b)) {
+            seen.add(b);
+            queue.push(b);
+          }
+        }
+      return seen;
+    };
+    const forward = walk(inputs[0].id, false),
+      backward = walk(outputs[0].id, true);
+    if (!forward.has(outputs[0].id))
+      throw Error(
+        "Connect Workflow input to Workflow output through the branch you want callers to run.",
+      );
+    const included = new Set([...forward].filter((id) => backward.has(id)));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of graph.edges) {
+        const source = graph.nodes.find((node) => node.id === edge.from);
+        if (
+          included.has(edge.to) &&
+          ["model", "classifier"].includes(source?.type) &&
+          !included.has(edge.from)
+        ) {
+          included.add(edge.from);
+          changed = true;
+        }
+      }
     }
-    const view = modal(
-      `<section class="wt-dialog wt-subflows" role="dialog" aria-modal="true" aria-labelledby="wt-subflows-title"><header><div><p class="eyebrow">REUSABLE WORKFLOWS</p><h2 id="wt-subflows-title">Subflow library</h2></div><button class="button secondary" data-wt-close>Close</button></header><p>Build a branch once. Reuse it with separate settings and state in each workflow. Calls stay pinned to the version you choose.</p>${demo() ? '<p class="wt-demo">Demo editing only. Definitions stay in this browser; camera inference and actions require the installed app.</p>' : ""}<div class="wt-library-toolbar"><label>Search subflows<input type="search" data-wt-search placeholder="Name, description or ID" autocomplete="off"></label><label>Sort<select data-wt-sort><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="version">Latest version</option></select></label></div><div class="wt-list" data-wt-rows></div><nav class="wt-library-pages" aria-label="Subflow library pages"><button class="button secondary" data-wt-prev>Previous</button><span data-wt-page role="status"></span><button class="button secondary" data-wt-next>Next</button></nav><details class="wt-subflow-guide" ${entries.length ? "" : "open"}><summary>Create a reusable branch</summary><p>Choose a starter, connect processing nodes between Input and Output, then publish. Parent workflow edits are preserved while you work. No actions run while authoring.</p><div class="wt-starter-actions"><button class="button secondary" data-wt-new>Blank subflow</button><button class="button secondary" data-wt-starter="confidence">Confidence + cooldown</button><button class="button secondary" data-wt-starter="event">Filtered event log</button></div></details><footer><button class="button secondary" data-wt-export>Export definitions</button><label class="button secondary wt-file-label">Import definitions<input type="file" data-wt-import accept="application/json,.json" hidden></label><button class="button primary" data-wt-publish ${editor.subflowId || editor.getGraph?.()?.nodes.some((node) => node.type === "subflow_input") ? "" : "disabled"}>Publish current draft…</button></footer><p class="wt-status" role="status"></p></section>`,
+    graph.nodes = graph.nodes.filter((node) => included.has(node.id));
+    graph.edges = graph.edges.filter(
+      (edge) => included.has(edge.from) && included.has(edge.to),
     );
-    const status = view.wrap.querySelector(".wt-status");
-    function paint() {
-      const result = libraryPage(entries, { query, sort, page });
-      page = result.page;
-      view.wrap.querySelector("[data-wt-rows]").innerHTML = catalogError
-        ? `<p class="wt-error" role="alert">${esc(catalogError)}</p>`
-        : result.rows
-            .map(
-              (item) =>
-                `<article class="wt-subflow-row">${subflowThumbnail(item)}<div class="wt-subflow-copy"><h3>${esc(item.name)} <small>Latest v${item.version}</small></h3><p>${esc(item.description || "No description yet.")}</p><small>${item.graph.nodes.length} nodes · ${item.parameters.length} exposed settings · ${(item.versions || [item.version]).length} versions</small><small>Detections IN / OUT · ${esc(item.id)}</small></div><div class="wt-subflow-actions"><label>Version<select data-wt-version="${esc(item.id)}">${(item.versions || [item.version]).map((version) => `<option value="${version}" ${version === item.version ? "selected" : ""}>v${version}${version === item.version ? " · latest" : ""}</option>`).join("")}</select></label><button class="button primary" data-wt-insert="${esc(item.id)}">Add to workflow</button><button class="button secondary" data-wt-edit="${esc(item.id)}">Edit definition</button><button class="button secondary" data-wt-delete="${esc(item.id)}">Delete</button></div></article>`,
-            )
-            .join("") ||
-          `<p class="wt-empty" data-wt-empty>${query ? "No subflows match. Try another search." : "No published subflows. Choose a starter below to create your first reusable branch."}</p>`;
-      view.wrap.querySelector("[data-wt-page]").textContent =
-        `${result.total} subflows · Page ${page + 1} of ${result.pages}`;
-      view.wrap.querySelector("[data-wt-prev]").disabled = page === 0;
-      view.wrap.querySelector("[data-wt-next]").disabled =
-        page + 1 >= result.pages;
-    }
-    paint();
-    view.wrap
-      .querySelector("[data-wt-search]")
-      .addEventListener("input", (event) => {
-        query = event.target.value;
-        page = 0;
-        paint();
-      });
-    view.wrap
-      .querySelector("[data-wt-sort]")
-      .addEventListener("change", (event) => {
-        sort = event.target.value;
-        page = 0;
-        paint();
-      });
-    view.wrap.addEventListener("click", async (event) => {
-      const button = event.target.closest("button");
-      if (!button) return;
-      if (button.matches("[data-wt-prev],[data-wt-next]")) {
-        page += button.hasAttribute("data-wt-next") ? 1 : -1;
-        paint();
-        return;
-      }
-      if (button.hasAttribute("data-wt-new") || button.dataset.wtStarter) {
-        view.close();
-        editor.subflowId = undefined;
-        editor.currentDefinition = null;
-        editor.onCreateSubflow?.(
-          createSubflowDraft(button.dataset.wtStarter || "blank"),
-        );
-        return;
-      }
-      if (button.hasAttribute("data-wt-publish")) {
-        view.close();
-        publishDialog(editor.getGraph?.(), editor.currentDefinition);
-        return;
-      }
-      const id =
-        button.dataset.wtInsert ||
-        button.dataset.wtEdit ||
-        button.dataset.wtDelete;
-      if (!id) return;
-      button.disabled = true;
-      status.textContent = "Loading subflow…";
-      try {
-        if (button.dataset.wtDelete) {
-          if (
-            !window.confirm(
-              "Delete this subflow and all its versions? Referenced definitions are protected.",
-            )
-          )
-            return;
-          if (demo()) {
-            const definitions = readBrowserDefinitions();
-            const references = (graph) =>
-              graph?.nodes?.some(
-                (node) =>
-                  node.type === "subflow" && node.params.subflow_id === id,
-              );
-            if (
-              references(editor.getGraph?.()) ||
-              definitions.some((item) => references(item.graph))
-            )
-              throw Error(
-                "Subflow is referenced by a draft or another subflow. Remove those calls first.",
-              );
-            if (!window.spyderWorkflowStore)
-              throw Error(
-                "Workflow library is unavailable; deletion cannot safely check references.",
-              );
-            if (await window.spyderWorkflowStore.referencesSubflow(id))
-              throw Error(
-                "Subflow is referenced by a saved workflow. Remove that call first.",
-              );
-            for (const draft of editor.getDrafts?.() || [])
-              if (references(draft))
-                throw Error(
-                  "Subflow is referenced by an open draft. Remove that call first.",
-                );
-            const current = readBrowserDefinitions();
-            storeBrowserDefinitions(current.filter((item) => item.id !== id));
-          } else
-            await request(
-              `/api/workflows/subflows/${encodeURIComponent(id)}/remove`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: "{}",
-              },
-            );
-          remoteCatalog = null;
-          entries = await subflows();
-          paint();
-          status.textContent = "Subflow deleted.";
-          return;
-        }
-        const version = Number(
-          [...view.wrap.querySelectorAll("[data-wt-version]")].find(
-            (select) => select.dataset.wtVersion === id,
-          )?.value,
-        );
-        const definition = await getSubflow(id, version);
-        if (!definition)
-          throw Error("Selected subflow version is unavailable.");
-        if (!view.wrap.isConnected) return;
-        if (button.dataset.wtInsert) {
-          await editor.onInsertSubflow?.(clone(definition));
-          view.close();
-        } else {
-          view.close();
-          editor.currentDefinition = clone(definition);
-          editor.subflowId = id;
-          editor.onEdit?.(clone(definition));
-        }
-      } catch (error) {
-        status.textContent = error.message;
-      } finally {
-        if (button.isConnected) button.disabled = false;
-      }
-    });
-    view.wrap
-      .querySelector("[data-wt-export]")
-      .addEventListener("click", async () => {
-        try {
-          download(
-            demo()
-              ? {
-                  format: "spyder-subflows",
-                  version: 1,
-                  subflows: readBrowserDefinitions(),
-                }
-              : await request("/api/workflows/subflows/export"),
-            "spyder-subflows.json",
+    for (const node of graph.nodes)
+      for (const binding of Object.values(node.bindings || {}))
+        if (!included.has(binding.node))
+          throw Error(
+            "A callable setting links to a node outside the callable branch. Move that input inside the branch before publishing.",
           );
-          status.textContent = "Definitions exported.";
-        } catch (error) {
-          status.textContent = error.message;
-        }
-      });
-    view.wrap
-      .querySelector("[data-wt-import]")
-      .addEventListener("change", async (event) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        try {
-          if (file.size > 32 * 1024 * 1024)
-            throw Error("Subflow bundle exceeds 32 MiB.");
-          const payload = JSON.parse(await file.text());
-          if (
-            payload.format !== "spyder-subflows" ||
-            payload.version !== 1 ||
-            !Array.isArray(payload.subflows)
-          )
-            throw Error("Unsupported subflow bundle.");
-          await importBundle(
-            JSON.stringify({
-              format: "spyder-workflow-bundle",
-              version: 1,
-              workflow: {
-                id: "subflow-import",
-                name: "Imported dependencies",
-                enabled: false,
-                camera_ids: [],
-                nodes: [],
-                edges: [],
-              },
-              subflows: payload.subflows,
-            }),
-          );
-          remoteCatalog = null;
-          entries = await subflows();
-          page = 0;
-          paint();
-          status.textContent = `${payload.subflows.length} versions imported.`;
-        } catch (error) {
-          status.textContent = error.message;
-        } finally {
-          event.target.value = "";
-        }
-      });
+    graph.enabled = false;
+    graph.camera_ids = [];
+    delete graph.execution;
+    delete graph.callable_version;
+    return graph;
   }
   async function openDefinition(id, version) {
     try {
@@ -777,7 +636,7 @@
       if (!definition?.graph) throw Error("Subflow version is unavailable.");
       editor.currentDefinition = clone(definition);
       editor.subflowId = id;
-      editor.onEdit?.(clone(definition));
+      await editor.onEdit?.(clone(definition));
     } catch (error) {
       editor.onError?.(error.message);
     }
@@ -795,7 +654,16 @@
   function publishDialog(graph, existing = editor.currentDefinition) {
     if (!graph) return;
     let parameters = [];
-    const candidates = graph.nodes
+    const candidateGraph = (() => {
+      try {
+        return extractCallableGraph(graph);
+      } catch {
+        return graph;
+      }
+    })();
+    const parameterDefinitions =
+      graph.execution?.parameters ?? existing?.parameters ?? [];
+    const candidates = candidateGraph.nodes
       .filter(
         (node) =>
           !["subflow", "subflow_input", "subflow_output"].includes(node.type),
@@ -808,10 +676,10 @@
           .map(([field, value]) => ({ node, field, value })),
       );
     const view = modal(
-      `<section class="wt-dialog wt-publish" role="dialog" aria-modal="true" aria-labelledby="wt-publish-title"><header><h2 id="wt-publish-title">Publish subflow version</h2><button class="button secondary" data-wt-close>Close</button></header><p>Publishing creates a new immutable version. Add exactly one input and output bridge before publishing.</p><label>Name<input data-pub-name maxlength="128" value="${esc(graph.name)}"></label><label>Description<textarea data-pub-description maxlength="1000">${esc(existing?.description || "")}</textarea></label><fieldset><legend>Expose parameters</legend><div class="wt-parameter-list">${
+      `<section class="wt-dialog wt-publish" role="dialog" aria-modal="true" aria-labelledby="wt-publish-title"><header><h2 id="wt-publish-title">Publish callable workflow version</h2><button class="button secondary" data-wt-close>Close</button></header><p>Publishing creates a new immutable version. Only the branch from Workflow input to Workflow output is callable. Independent camera triggers are excluded.</p><label>Name<input data-pub-name maxlength="128" value="${esc(graph.name)}"></label><label>Description<textarea data-pub-description maxlength="1000">${esc(graph.execution?.description ?? existing?.description ?? "")}</textarea></label><fieldset><legend>Expose parameters</legend><div class="wt-parameter-list">${
         candidates
           .map(({ node, field, value }, index) => {
-            const parameter = existing?.parameters?.find(
+            const parameter = parameterDefinitions.find(
               (item) => item.node_id === node.id && item.field === field,
             );
             const selectedType =
@@ -886,7 +754,7 @@
             .length !== 1
         ) {
           status.textContent =
-            "Add exactly one Subflow input and one Subflow output node before publishing.";
+            "Add exactly one Workflow input and one Workflow output node before publishing.";
           return;
         }
         try {
@@ -894,16 +762,24 @@
           view.wrap.querySelector("[data-pub-submit]").disabled = true;
           status.textContent = "Publishing version…";
           graph.name = view.wrap.querySelector("[data-pub-name]").value.trim();
-          if (!graph.name) throw Error("Enter a name for this subflow.");
-          graph.enabled = false;
-          graph.camera_ids = [];
+          if (!graph.name) throw Error("Enter a name for this workflow.");
+          const draft = clone(graph);
+          draft.execution = {
+            run_independently: draft.execution?.run_independently ?? false,
+            allow_calls: true,
+            parameters: chosen,
+            description: view.wrap.querySelector("[data-pub-description]")
+              .value,
+          };
+          if (!draft.execution.run_independently) draft.enabled = false;
+          const callable = extractCallableGraph(draft);
+          const included = new Set(callable.nodes.map((node) => node.id));
+          if (chosen.some((parameter) => !included.has(parameter.node_id)))
+            throw Error("Expose only settings inside the callable branch.");
           let published;
           if (demo()) {
             const list = readBrowserDefinitions(),
-              id =
-                existing?.id ||
-                editor.subflowId ||
-                `subflow-${Date.now().toString(36)}`;
+              id = draft.id;
             const version =
               Math.max(
                 0,
@@ -913,14 +789,13 @@
               ) + 1;
             published = {
               id,
-              name: graph.name,
-              description: view.wrap.querySelector("[data-pub-description]")
-                .value,
-              graph,
+              name: draft.name,
+              description: draft.execution.description,
+              graph: callable,
               parameters: chosen,
               version,
             };
-            const bundle = {
+            validateBundle({
               format: "spyder-workflow-bundle",
               version: 1,
               workflow: {
@@ -932,32 +807,28 @@
                 edges: [],
               },
               subflows: [...list, published],
-            };
-            validateBundle(bundle);
-            storeBrowserDefinitions(bundle.subflows);
+            });
+            // Save the editable entity before publishing its immutable snapshot.
+            await window.spyderWorkflowStore.save(draft);
+            storeBrowserDefinitions([...list, published]);
           } else {
-            const result = await request("/api/workflows/subflows", {
+            await request("/api/workflows", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                subflow: {
-                  id: editor.subflowId || undefined,
-                  name: graph.name,
-                  description: view.wrap.querySelector("[data-pub-description]")
-                    .value,
-                  graph,
-                  parameters: chosen,
-                },
-              }),
+              body: JSON.stringify({ workflow: draft }),
             });
+            const result = await request(
+              `/api/workflows/${encodeURIComponent(draft.id)}/publish`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+              },
+            );
             remoteCatalog = null;
             published = result.subflow || result.definition || result;
-            if (!published?.id) {
-              const latest = await subflows();
-              published =
-                latest.find((item) => item.name === graph.name) || published;
-            }
           }
+          editor.onDraftSaved?.(clone(draft));
           if (published?.id) {
             const full =
               (await getSubflow(published.id, published.version)) || published;
@@ -1174,6 +1045,16 @@
     },
     libraryPage,
     createSubflowDraft,
+    extractCallableGraph,
+    async insertCall(id, version) {
+      remoteCatalog = null;
+      const definitions = await subflows();
+      const latest = definitions.find((item) => item.id === id);
+      const definition = await getSubflow(id, version || latest?.version);
+      if (!definition)
+        throw Error("Publish a callable version before adding a call.");
+      await editor.onInsertSubflow?.(clone(definition));
+    },
     openSubflows,
     openHistory,
     openDefinition,

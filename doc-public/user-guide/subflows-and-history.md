@@ -2,77 +2,16 @@
 
 [Documentation home](../README.md) · [Vision Lab and workflows](vision-workflows.md)
 
-## Reusable subflows
+## Reusable workflow calls
 
-A subflow packages a graph behind one detection-stream input and one output. Use it for repeated
-conditions and actions, such as filtering unknown faces, applying a cooldown, and
-creating an event. Calls reuse the camera results already available to the parent
-workflow. They do not create an additional camera capture or inference worker.
-Named scalar arguments customize settings; arbitrary named data ports are not part
-of this interface. The output bridge takes one upstream connection.
+Reusable branches are now workflows in the common manager. The same workflow can
+run independently, accept calls, or do both. See [Workflow library and calls](workflow-library.md)
+for the editor, input/output contracts, exposed settings, versioning, and migration.
 
-Open **Subflows** in the workflow toolbar. The library shows a graph thumbnail,
-node and exposed-setting counts, and available versions. Search by name, description,
-or ID, sort the list, and use Previous/Next to browse eight definitions at a time.
-
-Choose **Blank subflow**, **Confidence + cooldown**, or **Filtered event log** to
-start a draft. Connect processing nodes between exactly one **Subflow input** and
-one **Subflow output**, then publish a named version. Definitions do not run
-independently. The event starter logs a matching detection; it does not attach
-media until you configure the Event node to do so.
-
-Select a version in the library and choose **Add to workflow**. This inserts a call
-node and opens its settings. Connect its IN to the parent's detection stream and
-its OUT to the next processing node. Save and enable the parent workflow when ready.
-Adding a call never starts a camera, runs a model, or enables the workflow by itself.
-
-Double-click a call to edit its settings or open its pinned definition. Nested
-editing keeps a stack of parent drafts; **Return to parent subflow** or **Return to
-workflow** restores the appropriate parent and its undo history. Leaving unpublished
-changes asks for confirmation. Publish first if those changes should become reusable.
-
-### Parameters and state
-
-Exposed parameters map a named, typed argument to a setting on an internal node.
-For example, expose `confidence` on a Filter and `seconds` on a Cooldown. Each call
-can override the defaults without duplicating the internal graph. The publishing
-form shows each field's current default and lets you give the exposed setting a
-unique name and compatible scalar type. Bridge nodes and subflow reference fields
-are not offered as exposed settings.
-
-Call settings distinguish **Inherited default** from an **Override for this call**.
-Choose **Use default** to remove an override. Advanced JSON contains only explicit
-overrides; omitted keys inherit the selected version's defaults. Switching versions
-keeps compatible overrides and asks before dropping settings that the new version
-cannot accept. A published version's defaults never change in place.
-
-Type and final node-setting validation both apply: a number is not automatically
-a valid confidence.
-
-Internal node state belongs to the parent workflow, camera, and call path. Two
-calls to the same definition therefore have separate cooldowns. Camera handles and
-compatible model workers remain shared. Global action rate limits and the recorder's
-ownership rules still apply when several callers request actions simultaneously.
-
-Published versions are immutable. Editing and publishing creates another version;
-existing calls keep their pinned version until deliberately updated. Nested calls
-allow up to four nested levels and 256 expanded nodes (512 connections).
-The catalog allows up to 500 definitions, 100 versions per definition, and 8 MiB
-of configuration. Missing versions and invalid or
-recursive references are rejected. Referenced definitions cannot be deleted.
-
-### Portability
-
-Workflow bundle export includes the workflow and all pinned subflow dependencies.
-It contains configuration, not model weights, camera footage, or the execution
-history database. Export includes older pinned versions even when newer releases
-exist. Renaming a definition and publishing it creates another version of the same
-definition; existing calls keep their original version. Import validates dependencies
-before saving them and leaves the imported workflow disabled. An existing, different definition with the same ID and
-version is a conflict; imports do not silently replace it.
-
-The general System configuration backup has a separate schema. Use workflow bundle
-export for workflows containing subflows, rather than a configuration-only backup.
+Existing subflow IDs and immutable versions remain valid. Use **Call workflow**
+to open the common manager filtered to callable workflows. Opening a called
+workflow uses the same editor and preserves parent navigation. The
+[three-level sample](three-level-subflow-demo.md) demonstrates nested calls.
 
 ## Execution history
 
@@ -127,7 +66,7 @@ operational diagnostic record, not a guaranteed audit log.
 
 ## Static Cloudflare demonstration
 
-The static showcase keeps subflow configuration in browser-owned storage. It does
+The static showcase keeps workflow definitions and published callable versions in browser-owned storage. It does
 not execute native workflows or retain server execution history. History controls
 explain this boundary instead of requesting the local API or uploading camera data.
 Local application history stays on the user's computer.

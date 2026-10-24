@@ -71,8 +71,11 @@ test("workflow metadata summary matches manager row schema", () => {
         { type: "camera", params: { camera_id: "side" } },
         { type: "detections", params: { engine: "yolo" } },
         { type: "detections", params: { engine: "any" } },
+        { type: "subflow", params: { subflow_id: "shared" } },
+        { type: "subflow", params: { subflow_id: "shared" } },
       ],
       edges: [{}, {}],
+      execution: { run_independently: true, allow_calls: true },
     }),
     {
       id: "door",
@@ -80,10 +83,26 @@ test("workflow metadata summary matches manager row schema", () => {
       enabled: true,
       camera_ids: ["front", "side"],
       engines: ["yolo"],
-      node_count: 3,
+      node_count: 5,
       edge_count: 2,
+      execution_mode: "both",
+      callable_version: 0,
+      call_ids: ["shared"],
     },
   );
+});
+
+test("execution filters include both modes under independent and callable", () => {
+  const items = [
+    { id: "i", name: "Independent", execution_mode: "independent" },
+    { id: "c", name: "Callable", execution_mode: "callable" },
+    { id: "b", name: "Both", execution_mode: "both" },
+    { id: "legacy", name: "Legacy" },
+  ];
+  assert.deepEqual(workflowPage(items, { mode: "independent" }).items.map((x) => x.id), ["b", "i", "legacy"]);
+  assert.deepEqual(workflowPage(items, { mode: "callable" }).items.map((x) => x.id), ["b", "c"]);
+  assert.deepEqual(workflowPage(items, { mode: "both" }).items.map((x) => x.id), ["b"]);
+  assert.equal(workflowPage(items, { mode: "" }).total, 4);
 });
 
 test("empty filter values mean all and page includes total enabled and disabled counts", () => {
