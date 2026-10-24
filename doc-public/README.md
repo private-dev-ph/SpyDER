@@ -13,6 +13,8 @@ Start with [Getting started](getting-started.md) for a working local installatio
   fullscreen, and camera release behavior.
 - [Vision Lab and workflows](user-guide/vision-workflows.md): motion analysis,
   compatible models, connections, previews, and activation.
+- [Unified workflow library](user-guide/workflow-library.md): independent and callable
+  execution, input contracts, version pins, and migration.
 - [Three-level nested subflow demo](user-guide/three-level-subflow-demo.md): an
   importable sample and a practical nesting walkthrough.
 - [Layouts](layouts.md): saved walls, pins, activity priority, and simulated cameras.

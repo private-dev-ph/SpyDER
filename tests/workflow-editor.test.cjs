@@ -229,7 +229,7 @@ test("toolbar node copy and paste stays a disabled draft", async () => {
     (h.root.innerHTML.match(/data-node="/g) || []).length,
     before + 1,
   );
-  assert.match(h.root.innerHTML, /Workflow disabled/);
+  assert.match(h.root.innerHTML, /Independent execution disabled/);
   assert.equal(
     h.calls.some((call) => call.options?.method === "POST"),
     false,
@@ -2495,7 +2495,7 @@ test("poll synchronizes server enabled status while preserving unsaved workflow 
   );
   assert.equal(
     h.root.querySelector("[data-workflow-state]").textContent,
-    "Workflow disabled",
+    "Independent execution disabled",
   );
   h.root.dispatch("click", h.target("button", { save: "" }));
   await h.flush();
@@ -2569,7 +2569,7 @@ test("clean polling updates activation controls after another tab changes state"
   );
   assert.equal(
     h.root.querySelector("[data-workflow-state]").textContent,
-    "Workflow enabled",
+    "Independent execution enabled",
   );
   graph.enabled = false;
   [...h.pendingTimers.values()].find((t) => t.ms === 5000).fn();
@@ -2580,7 +2580,7 @@ test("clean polling updates activation controls after another tab changes state"
   );
   assert.equal(
     h.root.querySelector("[data-workflow-state]").textContent,
-    "Workflow disabled",
+    "Independent execution disabled",
   );
   h.window.spyderWorkflows.unmount();
 });
@@ -3217,7 +3217,7 @@ test("workflow picker keeps graph lists out of the toolbar and scopes polls", as
   const h = mountHarness();
   await h.flush();
   assert.match(h.root.innerHTML, /data-open-workflow-manager/);
-  assert.doesNotMatch(h.root.innerHTML, /<select data-workflow/);
+  assert.doesNotMatch(h.root.innerHTML, /<select data-workflow[ >]/);
   assert.ok(
     h.calls.some(
       (x) =>
@@ -3540,4 +3540,49 @@ test("demo refuses library activation without making requests", async () => {
   );
   assert.equal(h.calls.length, 0);
   h.window.spyderWorkflows.unmount();
+});
+
+test("execution metadata round-trips for independent, callable, and both modes", () => {
+  const {
+    decodeWorkflow,
+    workflowExecution,
+  } = require("../src/spyder_cctv/assets/workflow-editor.js");
+  const base = {
+    id: "mode-test",
+    name: "Mode test",
+    enabled: false,
+    camera_ids: [],
+    nodes: [],
+    edges: [],
+  };
+  assert.equal(workflowExecution(base).run_independently, true);
+  for (const flags of [
+    [true, false],
+    [false, true],
+    [true, true],
+  ]) {
+    const execution = {
+      run_independently: flags[0],
+      allow_calls: flags[1],
+      parameters: [],
+      description: "Explicit invocation modes",
+    };
+    const decoded = decodeWorkflow(JSON.stringify({ ...base, execution }));
+    assert.deepEqual(decoded.execution, execution);
+  }
+  assert.throws(
+    () =>
+      decodeWorkflow(
+        JSON.stringify({
+          ...base,
+          execution: {
+            run_independently: false,
+            allow_calls: false,
+            parameters: [],
+            description: "",
+          },
+        }),
+      ),
+    /execution settings/,
+  );
 });

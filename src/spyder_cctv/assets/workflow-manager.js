@@ -25,9 +25,20 @@
         (status === "empty" && item.node_count !== 0)
       )
         return false;
-      const executionMode = item.execution_mode || (item.execution?.allow_calls ? (item.execution?.run_independently === false ? "callable" : "both") : "independent");
-      if (mode === "independent" && !["independent", "both"].includes(executionMode)) return false;
-      if (mode === "callable" && !["callable", "both"].includes(executionMode)) return false;
+      const executionMode =
+        item.execution_mode ||
+        (item.execution?.allow_calls
+          ? item.execution?.run_independently === false
+            ? "callable"
+            : "both"
+          : "independent");
+      if (
+        mode === "independent" &&
+        !["independent", "both"].includes(executionMode)
+      )
+        return false;
+      if (mode === "callable" && !["callable", "both"].includes(executionMode))
+        return false;
       if (mode === "both" && executionMode !== "both") return false;
       if (camera && !(item.camera_ids || []).includes(camera)) return false;
       if (engine && !(item.engines || []).includes(engine)) return false;
@@ -110,7 +121,9 @@
       node_count: nodes.length,
       edge_count: (graph?.edges || []).length,
       execution_mode: allowCalls
-        ? runIndependently ? "both" : "callable"
+        ? runIndependently
+          ? "both"
+          : "callable"
         : "independent",
       callable_version: Number(graph?.callable_version) || 0,
       call_ids: [...callIds].sort(),
@@ -141,7 +154,10 @@
     dialog.setAttribute("aria-labelledby", "wm-title");
     dialog.innerHTML = `<div class="wm-shell" aria-busy="false"><header class="wm-header"><div><h2 id="wm-title">Workflows</h2><p class="wm-summary" aria-live="polite">Loading workflows…</p></div><button type="button" class="wm-close" aria-label="Close workflow manager"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"></use></svg></button></header><div class="wm-toolbar"><label class="wm-search">Search workflows<input type="search" name="query" autocomplete="off" placeholder="Find a workflow…"></label><label>Status<select name="status"><option value="">All statuses</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option><option value="empty">Empty drafts</option></select></label><label>Camera<select name="camera"><option value="">All cameras</option></select></label><label>Engine<select name="engine"><option value="">All engines</option></select></label><label>Sort<select name="sort"><option value="name">Name A–Z</option><option value="name_desc">Name Z–A</option><option value="enabled">Enabled first</option></select></label><button type="button" class="wm-primary" data-create>New workflow</button></div><p class="wm-error" role="alert" tabindex="-1" hidden></p><p class="wm-activity" role="status" aria-live="polite"></p><section class="wm-list" aria-label="Workflow results" tabindex="0"><div class="wm-rows"></div></section><footer class="wm-footer"><span class="wm-range"></span><div><button type="button" data-prev>Previous</button><span class="wm-page"></span><button type="button" data-next>Next</button><label>Rows<select name="size"><option>25</option><option>50</option></select></label></div></footer><section class="wm-toggle-confirm" hidden role="alertdialog" aria-labelledby="wm-toggle-title"><h3 id="wm-toggle-title">Review camera changes</h3><p></p><ul></ul><div><button type="button" data-cancel-toggle>Cancel</button><button type="button" class="wm-primary" data-confirm-toggle>Enable saved workflow</button></div></section><section class="wm-guard" hidden role="alertdialog" aria-labelledby="wm-guard-title"><h3 id="wm-guard-title">Unsaved workflow edits</h3><p>Continuing will discard your current draft.</p><div><button type="button" data-keep>Keep editing</button><button type="button" class="wm-danger" data-discard>Discard edits &amp; continue</button></div></section><section class="wm-delete-confirm" hidden role="alertdialog" aria-labelledby="wm-delete-title"><h3 id="wm-delete-title"></h3><p></p><div><button type="button" data-cancel-delete>Cancel</button><button type="button" class="wm-danger" data-confirm-delete>Delete workflow</button></div></section></div>`;
     const toolbar = dialog.querySelector(".wm-toolbar");
-    toolbar.insertAdjacentHTML("beforeend", '<label>Execution<select name="mode"><option value="">All</option><option value="independent">Independent</option><option value="callable">Callable</option><option value="both">Both</option></select></label><button type="button" data-create-callable>New callable workflow</button>');
+    toolbar.insertAdjacentHTML(
+      "beforeend",
+      '<label>Execution<select name="mode"><option value="">All</option><option value="independent">Independent</option><option value="callable">Callable</option><option value="both">Both</option></select></label><button type="button" data-create-callable>New callable workflow</button>',
+    );
     doc.body.append(dialog);
     const q = (s) => dialog.querySelector(s);
     let closed = false,
@@ -178,10 +194,14 @@
       )) {
         const item = rows.find((row) => row.id === button.dataset.id);
         const mode = item?.execution_mode || "independent";
-        button.disabled = value ||
-          (button.dataset.action === "toggle" && (!!callbacks.demo || mode === "callable")) ||
-          (button.dataset.action === "call" && !(Number(item?.callable_version) > 0)) ||
-          (button.dataset.action === "publish" && !!(callbacks.isDirty?.() && callbacks.currentId?.() === item?.id));
+        button.disabled =
+          value ||
+          (button.dataset.action === "toggle" &&
+            (!!callbacks.demo || mode === "callable")) ||
+          (button.dataset.action === "call" &&
+            !(Number(item?.callable_version) > 0)) ||
+          (button.dataset.action === "publish" &&
+            !!(callbacks.isDirty?.() && callbacks.currentId?.() === item?.id));
       }
     }
     function guard(selector, visible) {
@@ -243,15 +263,14 @@
       q("[data-next]").disabled = page >= result.pages;
       q(".wm-rows").innerHTML =
         rows
-          .map(
-            (item) => {
-              const mode = item.execution_mode || "independent";
-              const callable = mode === "callable" || mode === "both";
-              const independent = mode !== "callable";
-              const dirty = callbacks.isDirty?.() && callbacks.currentId?.() === item.id;
-              return `<article class="wm-row ${callbacks.currentId?.() === item.id ? "is-current" : ""}" data-id="${esc(item.id)}"><div class="wm-main"><strong>${esc(item.name || "Untitled workflow")}</strong>${callbacks.currentId?.() === item.id ? '<span class="wm-current">Editing</span>' : ""}<code>${esc(item.id)}</code><span class="wm-mode mode-${esc(mode)}">${mode === "both" ? "Independent + callable" : mode === "callable" ? "Callable only" : "Independent"}</span><span class="wm-status ${item.enabled && independent ? "is-enabled" : "is-disabled"}">Independent trigger ${item.enabled && independent ? "enabled" : "disabled"}</span>${callable ? `<span class="wm-callable-meta">Callable v${Number(item.callable_version) || "—"} · ${Number(item.caller_count) || 0} callers</span>` : ""}</div><div class="wm-meta"><span>Camera: ${esc((item.camera_ids || []).map((id) => callbacks.cameras?.().find((c) => c.id === id)?.name || id).join(", ") || "None")}</span><span>Engines: ${esc((item.engines || []).join(", ") || "None")}</span><span>${Number(item.node_count) || 0} nodes · ${Number(item.edge_count) || 0} connections</span></div><div class="wm-actions">${independent ? `<button type="button" data-action="toggle" data-id="${esc(item.id)}" aria-label="${item.enabled ? "Disable" : "Enable"} independent trigger for ${esc(item.name || item.id)}" ${callbacks.demo ? 'disabled title="Workflow execution requires the installed local app"' : ""}>${item.enabled ? "Disable" : "Enable"}</button>` : '<span class="wm-trigger-note">Callable only</span>'}${callable ? `<button type="button" data-action="call" data-id="${esc(item.id)}" ${Number(item.callable_version) > 0 ? "" : 'disabled title="Publish a callable version first"'}>Use in workflow</button>` : ""}<button type="button" data-action="open" data-id="${esc(item.id)}">Open</button><details><summary aria-label="More actions for ${esc(item.name || item.id)}">More</summary><div>${callable ? `<button type="button" data-action="publish" data-id="${esc(item.id)}" ${dirty ? 'disabled title="Save workflow before publishing"' : ""}>Publish callable version</button>` : ""}<button type="button" data-action="rename" data-id="${esc(item.id)}">Rename</button><button type="button" data-action="duplicate" data-id="${esc(item.id)}">Duplicate</button><button type="button" data-action="export" data-id="${esc(item.id)}">Export</button><button type="button" class="wm-danger" data-action="delete" data-id="${esc(item.id)}">Delete</button></div></details></div></article>`;
-            },
-          )
+          .map((item) => {
+            const mode = item.execution_mode || "independent";
+            const callable = mode === "callable" || mode === "both";
+            const independent = mode !== "callable";
+            const dirty =
+              callbacks.isDirty?.() && callbacks.currentId?.() === item.id;
+            return `<article class="wm-row ${callbacks.currentId?.() === item.id ? "is-current" : ""}" data-id="${esc(item.id)}"><div class="wm-main"><strong>${esc(item.name || "Untitled workflow")}</strong>${callbacks.currentId?.() === item.id ? '<span class="wm-current">Editing</span>' : ""}<code>${esc(item.id)}</code><span class="wm-mode mode-${esc(mode)}">${mode === "both" ? "Independent + callable" : mode === "callable" ? "Callable only" : "Independent"}</span><span class="wm-status ${item.enabled && independent ? "is-enabled" : "is-disabled"}">Independent trigger ${item.enabled && independent ? "enabled" : "disabled"}</span>${callable ? `<span class="wm-callable-meta">Callable v${Number(item.callable_version) || "—"} · ${Number(item.caller_count) || 0} callers</span>` : ""}</div><div class="wm-meta"><span>Camera: ${esc((item.camera_ids || []).map((id) => callbacks.cameras?.().find((c) => c.id === id)?.name || id).join(", ") || "None")}</span><span>Engines: ${esc((item.engines || []).join(", ") || "None")}</span><span>${Number(item.node_count) || 0} nodes · ${Number(item.edge_count) || 0} connections</span></div><div class="wm-actions">${independent ? `<button type="button" data-action="toggle" data-id="${esc(item.id)}" aria-label="${item.enabled ? "Disable" : "Enable"} independent trigger for ${esc(item.name || item.id)}" ${callbacks.demo ? 'disabled title="Workflow execution requires the installed local app"' : ""}>${item.enabled ? "Disable" : "Enable"}</button>` : '<span class="wm-trigger-note">Callable only</span>'}${callable ? `<button type="button" data-action="call" data-id="${esc(item.id)}" ${Number(item.callable_version) > 0 ? "" : 'disabled title="Publish a callable version first"'}>Use in workflow</button>` : ""}<button type="button" data-action="open" data-id="${esc(item.id)}">Open</button><details><summary aria-label="More actions for ${esc(item.name || item.id)}">More</summary><div>${callable ? `<button type="button" data-action="publish" data-id="${esc(item.id)}" ${dirty ? 'disabled title="Save workflow before publishing"' : ""}>Publish callable version</button>` : ""}<button type="button" data-action="rename" data-id="${esc(item.id)}">Rename</button><button type="button" data-action="duplicate" data-id="${esc(item.id)}">Duplicate</button><button type="button" data-action="export" data-id="${esc(item.id)}">Export</button><button type="button" class="wm-danger" data-action="delete" data-id="${esc(item.id)}">Delete</button></div></details></div></article>`;
+          })
           .join("") ||
         `<p class="wm-empty">${filters().query ? "No workflows match this search." : "No workflows yet."}</p>`;
     }
@@ -410,7 +429,9 @@
       void refresh();
     });
     q("[data-create]").addEventListener("click", () => proceed("onCreate"));
-    q("[data-create-callable]").addEventListener("click", () => proceed("onCreateCallable"));
+    q("[data-create-callable]").addEventListener("click", () =>
+      proceed("onCreateCallable"),
+    );
     q("[data-keep]").addEventListener("click", () => {
       pending = null;
       close();
