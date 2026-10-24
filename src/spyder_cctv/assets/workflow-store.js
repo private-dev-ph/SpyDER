@@ -154,6 +154,32 @@
     });
   }
   window.spyderWorkflowStore = {
+    async referencesSubflow(id) {
+      const db = await database();
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction("graphs", "readonly");
+        const cursor = transaction.objectStore("graphs").openCursor();
+        let found = false;
+        cursor.onsuccess = () => {
+          const entry = cursor.result;
+          if (!entry) return;
+          if (
+            entry.value.nodes?.some(
+              (node) =>
+                node.type === "subflow" && node.params?.subflow_id === id,
+            )
+          )
+            found = true;
+          else entry.continue();
+        };
+        transaction.oncomplete = () => resolve(found);
+        transaction.onabort = transaction.onerror = () =>
+          reject(
+            transaction.error ||
+              Error("Workflow references could not be checked."),
+          );
+      });
+    },
     async page(options, { signal } = {}) {
       const summaries = await read("summaries", undefined, signal);
       return {

@@ -31,7 +31,7 @@
   border: 1px solid var(--border, #344158);
   border-radius: 18px;
   background: var(--surface, #111827);
-  color: var(--text, #f5f7fb);
+  color: var(--ink, #201d1a);
   box-shadow: 0 24px 80px #0009;
 }
 .wt-dialog > header,
@@ -61,7 +61,7 @@
   padding: 0.65rem 0.75rem;
   border: 1px solid var(--border, #344158);
   border-radius: 9px;
-  background: var(--surface-raised, #182235);
+  background: var(--canvas, #f7f5ef);
   color: inherit;
 }
 .wt-dialog textarea {
@@ -78,7 +78,7 @@
   padding: 0.9rem 1rem;
   border: 1px solid var(--border, #344158);
   border-radius: 12px;
-  background: var(--surface-raised, #182235);
+  background: var(--canvas, #f7f5ef);
 }
 .wt-list article h3,
 .wt-list article p {
@@ -105,10 +105,10 @@
 .wt-status {
   padding: 0.75rem 1rem;
   border-radius: 10px;
-  background: var(--surface-raised, #182235);
+  background: var(--canvas, #f7f5ef);
 }
 .wt-error {
-  color: #ffb4a9;
+  color: var(--danger, #bc0202);
 }
 .wt-capacity {
   padding: 0.8rem 0;
@@ -165,7 +165,7 @@
   border: 1px solid var(--border, #344158);
   border-left: 4px solid #64748b;
   border-radius: 10px;
-  background: var(--surface-raised, #182235);
+  background: var(--canvas, #f7f5ef);
 }
 .wt-node-state strong,
 .wt-node-state span {
@@ -226,7 +226,10 @@
 }
 .wt-list .wt-subflow-row {
   display: grid;
-  grid-template-columns: minmax(150px, 210px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(120px, 170px) minmax(0, 1fr) minmax(
+      150px,
+      200px
+    );
   align-items: center;
   gap: 1rem;
   min-width: 0;
@@ -239,7 +242,8 @@
   padding: 0.4rem;
   border: 1px solid var(--border, #344158);
   border-radius: 9px;
-  background: radial-gradient(var(--border, #344158) 1px, transparent 1px) 0 0 / 12px 12px;
+  background: radial-gradient(var(--border, #344158) 1px, transparent 1px) 0 0 /
+    12px 12px;
 }
 .wt-subflow-preview rect {
   fill: var(--surface, #111827);
@@ -299,7 +303,11 @@
   padding: 0.8rem 1rem;
   border-inline-start: 3px solid var(--accent, #be1a1a);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent, #be1a1a) 8%, var(--surface, #111827));
+  background: color-mix(
+    in srgb,
+    var(--accent, #be1a1a) 8%,
+    var(--surface, #111827)
+  );
   color: var(--muted, #aab4c5);
   line-height: 1.5;
 }
@@ -314,13 +322,13 @@
 }
 .wt-publish .wt-parameter-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.7fr) minmax(110px, 0.7fr);
+  grid-template-columns: minmax(100px, 0.7fr) minmax(0, 1.3fr);
   align-items: start;
   gap: 0.55rem 0.75rem;
   padding: 0.75rem;
   border: 1px solid var(--border, #344158);
   border-radius: 10px;
-  background: var(--surface-raised, #182235);
+  background: var(--canvas, #f7f5ef);
 }
 .wt-publish .wt-parameter-row > * {
   min-width: 0;
@@ -399,7 +407,7 @@
   padding: 0.65rem 1rem;
   border: 1px solid var(--border, #344158);
   border-radius: 12px;
-  background: var(--surface-raised, #182235);
+  background: var(--canvas, #f7f5ef);
 }
 .wt-node-state.wt-state-error {
   border-left-color: #ef4444;
