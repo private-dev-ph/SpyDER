@@ -474,3 +474,94 @@ def test_model_usage_in_any_pinned_subflow_version_is_protected(service):
     service.subflows.publish(second)
     assert service.model_references("a" * 32) == ["Subflow reusable v1 / node model"]
     assert service.model_references("b" * 32) == ["Subflow reusable v2 / node model"]
+
+
+def _nested_demo_bundle():
+    from pathlib import Path
+
+    return json.loads(
+        (
+            Path(__file__).parents[1] / "examples/workflows/three-level-nested-subflows.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
+def _assigned_demo_graph(service, bundle=None):
+    graph = service.import_bundle(bundle or _nested_demo_bundle())["workflow"]
+    graph["camera_ids"] = ["demo-camera"]
+    graph["nodes"][0]["params"]["camera_id"] = "demo-camera"
+    return graph
+
+
+def test_three_level_demo_expands_with_unique_paths_and_stays_disabled(service):
+    graph = _assigned_demo_graph(service)
+    compiled = service.compile_graph(graph)
+    assert graph["enabled"] is False
+    assert len(compiled["nodes"]) == 16
+    assert len({node["id"] for node in compiled["nodes"]}) == 16
+    assert sum(node["type"] == "subflow" for node in compiled["nodes"]) == 3
+    assert max(map(len, compiled["_paths"].values())) == 4
+    cooldown_path = next(
+        compiled["_paths"][node["id"]] for node in compiled["nodes"] if node["type"] == "cooldown"
+    )
+    assert cooldown_path == ["call_level_1", "call_level_2", "call_level_3", "cooldown"]
+
+
+def test_three_level_demo_filters_and_cooldown_execute_in_temporary_storage(service):
+    graph = _assigned_demo_graph(service)
+
+    def evaluate(label, confidence, now, camera="demo-camera"):
+        service._evaluate(
+            graph,
+            camera,
+            {"engine": "insightface", "detections": [{"label": label, "confidence": confidence}]},
+            now,
+        )
+        return len(service.event_store.list()["events"])
+
+    assert evaluate("person", 0.95, 100) == 0
+    assert evaluate("face", 0.4, 101) == 0
+    assert evaluate("face", 0.9, 102, camera="another-camera") == 0
+    assert evaluate("face", 0.9, 103) == 1
+    assert evaluate("face", 0.9, 104) == 1
+    assert evaluate("face", 0.9, 109) == 2
+    events = service.event_store.list()["events"]
+    assert all(event["message"] == "Three-level subflow demo matched" for event in events)
+    assert all(not event.get("media") for event in events)
+
+
+def test_three_level_demo_middle_count_gate_and_outer_override(service):
+    bundle = _nested_demo_bundle()
+    middle = next(item for item in bundle["subflows"] if item["id"] == "demo-nested-level-2")
+    next(node for node in middle["graph"]["nodes"] if node["id"] == "count")["params"][
+        "minimum"
+    ] = 2
+    middle["parameters"][0]["default"] = 2
+    graph = _assigned_demo_graph(service, bundle)
+    outer = next(node for node in graph["nodes"] if node["type"] == "subflow")
+    outer["params"]["arguments"] = {"min_confidence": 0.8}
+
+    def evaluate(detections, now):
+        service._evaluate(
+            graph, "demo-camera", {"engine": "insightface", "detections": detections}, now
+        )
+        return len(service.event_store.list()["events"])
+
+    face = {"label": "face", "confidence": 0.95}
+    assert evaluate([face], 100) == 0
+    assert evaluate([face, {"label": "face", "confidence": 0.7}], 101) == 0
+    assert evaluate([face, {**face, "bbox": [20, 20, 50, 50]}], 102) == 1
+
+
+def test_three_level_demo_bundle_round_trip_retains_all_exact_versions(service):
+    graph = _assigned_demo_graph(service)
+    exported = service.export_bundle(graph)
+    assert len(exported["subflows"]) == 3
+    assert all(item["version"] == 1 for item in exported["subflows"])
+    # Reimport is idempotent and preserves a disabled parent.
+    imported = service.import_bundle(exported)
+    assert imported["workflow"]["enabled"] is False
+    assert (
+        service.compile_graph(imported["workflow"])["_paths"]
+        == service.compile_graph(graph)["_paths"]
+    )
