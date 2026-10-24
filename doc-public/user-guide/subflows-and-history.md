@@ -11,21 +11,43 @@ workflow. They do not create an additional camera capture or inference worker.
 Named scalar arguments customize settings; arbitrary named data ports are not part
 of this interface. The output bridge takes one upstream connection.
 
-Open **Subflows** in the workflow toolbar to create or edit a definition. Add one
-**Subflow input** and one **Subflow output**, then connect the processing nodes
-between them. Publish a named version. Definitions do not run independently.
+Open **Subflows** in the workflow toolbar. The library shows a graph thumbnail,
+node and exposed-setting counts, and available versions. Search by name, description,
+or ID, sort the list, and use Previous/Next to browse eight definitions at a time.
 
-Add a **Subflow** node to a parent workflow, select a definition and its version,
-and connect the detection stream through it. Double-click the node to configure
-its arguments or open its definition. Return to the parent using the editor's
-return control. Unsaved work requires an explicit discard decision.
+Choose **Blank subflow**, **Confidence + cooldown**, or **Filtered event log** to
+start a draft. Connect processing nodes between exactly one **Subflow input** and
+one **Subflow output**, then publish a named version. Definitions do not run
+independently. The event starter logs a matching detection; it does not attach
+media until you configure the Event node to do so.
+
+Select a version in the library and choose **Add to workflow**. This inserts a call
+node and opens its settings. Connect its IN to the parent's detection stream and
+its OUT to the next processing node. Save and enable the parent workflow when ready.
+Adding a call never starts a camera, runs a model, or enables the workflow by itself.
+
+Double-click a call to edit its settings or open its pinned definition. Nested
+editing keeps a stack of parent drafts; **Return to parent subflow** or **Return to
+workflow** restores the appropriate parent and its undo history. Leaving unpublished
+changes asks for confirmation. Publish first if those changes should become reusable.
 
 ### Parameters and state
 
 Exposed parameters map a named, typed argument to a setting on an internal node.
 For example, expose `confidence` on a Filter and `seconds` on a Cooldown. Each call
-can override the defaults without duplicating the internal graph. Type and final
-node-setting validation both apply: a number is not automatically a valid confidence.
+can override the defaults without duplicating the internal graph. The publishing
+form shows each field's current default and lets you give the exposed setting a
+unique name and compatible scalar type. Bridge nodes and subflow reference fields
+are not offered as exposed settings.
+
+Call settings distinguish **Inherited default** from an **Override for this call**.
+Choose **Use default** to remove an override. Advanced JSON contains only explicit
+overrides; omitted keys inherit the selected version's defaults. Switching versions
+keeps compatible overrides and asks before dropping settings that the new version
+cannot accept. A published version's defaults never change in place.
+
+Type and final node-setting validation both apply: a number is not automatically
+a valid confidence.
 
 Internal node state belongs to the parent workflow, camera, and call path. Two
 calls to the same definition therefore have separate cooldowns. Camera handles and
@@ -43,8 +65,10 @@ recursive references are rejected. Referenced definitions cannot be deleted.
 
 Workflow bundle export includes the workflow and all pinned subflow dependencies.
 It contains configuration, not model weights, camera footage, or the execution
-history database. Import validates dependencies before saving them and leaves the
-imported workflow disabled. An existing, different definition with the same ID and
+history database. Export includes older pinned versions even when newer releases
+exist. Renaming a definition and publishing it creates another version of the same
+definition; existing calls keep their original version. Import validates dependencies
+before saving them and leaves the imported workflow disabled. An existing, different definition with the same ID and
 version is a conflict; imports do not silently replace it.
 
 The general System configuration backup has a separate schema. Use workflow bundle
