@@ -225,3 +225,62 @@ test("three-level demonstration imports and exports all pinned dependencies in t
   assert.equal(exported.subflows.length, 3);
   assert.ok(exported.subflows.every((item) => item.version === 1));
 });
+
+test("callable publication excludes independent camera triggers and unrelated output branches", () => {
+  const { tools } = harness();
+  const graph = tools.createSubflowDraft("confidence");
+  graph.execution = {
+    run_independently: true,
+    allow_calls: true,
+    parameters: [],
+    description: "Both modes",
+  };
+  graph.camera_ids = ["standalone-camera"];
+  graph.nodes.push(
+    { id: "source", type: "detections", x: 0, y: 0, params: { engine: "any" } },
+    {
+      id: "other",
+      type: "event",
+      x: 0,
+      y: 500,
+      params: { message: "Standalone only" },
+    },
+  );
+  graph.edges.push(
+    { from: "source", to: "filter" },
+    { from: "source", to: "other" },
+  );
+  const snapshot = tools.extractCallableGraph(graph);
+  assert.equal(snapshot.execution, undefined);
+  assert.equal(snapshot.camera_ids.length, 0);
+  assert.equal(snapshot.enabled, false);
+  assert.deepEqual(Array.from(snapshot.nodes.map((node) => node.id)), [
+    "input",
+    "filter",
+    "cooldown",
+    "output",
+  ]);
+  assert.equal(
+    graph.nodes.length,
+    6,
+    "editable independent branches remain intact",
+  );
+});
+test("callable publication rejects live bindings to excluded independent nodes", () => {
+  const { tools } = harness();
+  const graph = tools.createSubflowDraft("confidence");
+  graph.nodes.push({
+    id: "independent",
+    type: "detections",
+    x: 0,
+    y: 0,
+    params: { engine: "any" },
+  });
+  graph.nodes[1].bindings = {
+    confidence: { node: "independent", signal: "confidence" },
+  };
+  assert.throws(
+    () => tools.extractCallableGraph(graph),
+    /outside the callable branch/,
+  );
+});

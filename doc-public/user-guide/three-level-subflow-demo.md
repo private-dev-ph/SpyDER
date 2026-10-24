@@ -19,7 +19,8 @@ Level 3: Input -> Cooldown -> Output
 ```
 
 This is three subflow levels beneath the parent, not three nodes in one subflow.
-All calls are pinned to version 1. The parent is named **DEMO · Three-level nested
+All calls are pinned to version 1. Legacy definitions appear as callable-only
+workflows in the unified manager; their IDs and version pins remain intact. The parent is named **DEMO · Three-level nested
 face event**; the definitions are named **DEMO · Level 1 · Face gate**, **DEMO · Level
 2 · Minimum count**, and **DEMO · Level 3 · Cooldown**.
 
@@ -35,7 +36,7 @@ face event**; the definitions are named **DEMO · Level 1 · Face gate**, **DEMO
 ## Inspect the nesting without a camera
 
 1. Import the bundle. The workflow stays disabled.
-2. Double-click the parent Subflow node and open its pinned definition.
+2. Double-click the parent Subflow node and open its workflow.
 3. Repeat for Level 2, then Level 3. Inspect the Cooldown node at the deepest level.
 4. Return through Level 2 and Level 1 to the parent workflow. Each parent draft is
    restored. Leave the definitions unchanged during the first walkthrough.

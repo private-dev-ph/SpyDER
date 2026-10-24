@@ -179,6 +179,30 @@
   color: var(--muted, #726d64);
   background: color-mix(in srgb, var(--muted, #726d64) 12%, transparent);
 }
+.wm-mode,
+.wm-callable-meta,
+.wm-trigger-note {
+  padding: 3px 7px;
+  border-radius: 99px;
+  color: var(--ink, #201d1a);
+  background: color-mix(in srgb, var(--accent, #be1a1a) 12%, transparent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.wm-mode.mode-callable {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-inline-start: 3px solid var(--accent);
+}
+.wm-mode.mode-both {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--gold, #f7d87f) 22%, var(--surface));
+  border-inline-start: 3px solid var(--gold, #f7d87f);
+}
+.wm-trigger-note {
+  color: var(--muted, #726d64);
+  background: color-mix(in srgb, var(--muted, #726d64) 12%, transparent);
+}
 .wm-meta {
   display: grid;
   gap: 3px;
