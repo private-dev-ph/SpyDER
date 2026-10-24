@@ -142,7 +142,18 @@ class SubflowCatalog:
                 if edge["to"] in ancestors and edge["from"] not in ancestors:
                     ancestors.add(edge["from"])
                     changed = True
-        if ins[0]["id"] not in ancestors or ancestors != set(nodes):
+        resource_nodes = {
+            node["id"]
+            for node in graph["nodes"]
+            if node["type"] in ("model", "classifier")
+            and any(
+                edge["from"] == node["id"]
+                and edge["to"] in ancestors
+                and edge.get("input") in ("model", "classifier")
+                for edge in graph["edges"]
+            )
+        }
+        if ins[0]["id"] not in ancestors or ancestors | resource_nodes != set(nodes):
             raise ValueError("Every subflow node must connect from input to output")
         if sum(edge["to"] == outs[0]["id"] for edge in graph["edges"]) != 1:
             raise ValueError("Subflow output bridge must have exactly one input")

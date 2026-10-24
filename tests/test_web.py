@@ -528,6 +528,49 @@ def test_model_and_workflow_routes(server):
         assert response.status == 200
 
 
+def test_unified_callable_publish_route_and_library_mode(server):
+    url, _manager = server
+
+    def post(path, data):
+        return urlopen(
+            Request(
+                url + path,
+                method="POST",
+                data=json.dumps(data).encode(),
+                headers={"Content-Type": "application/json", "X-Spyder-Control": "1"},
+            ),
+            timeout=4,
+        )
+
+    graph = {
+        "id": "callable-route",
+        "name": "Callable route",
+        "enabled": False,
+        "camera_ids": [],
+        "execution": {
+            "run_independently": False,
+            "allow_calls": True,
+            "parameters": [],
+            "description": "",
+        },
+        "nodes": [
+            {"id": "input", "type": "subflow_input", "x": 0, "y": 0, "params": {}},
+            {"id": "output", "type": "subflow_output", "x": 200, "y": 0, "params": {}},
+        ],
+        "edges": [{"from": "input", "to": "output"}],
+    }
+    with post("/api/workflows", {"workflow": graph}) as response:
+        assert json.load(response)["execution"]["allow_calls"] is True
+    with post("/api/workflows/callable-route/publish", {}) as response:
+        assert json.load(response)["version"] == 1
+    with urlopen(url + "/api/workflows/library?mode=callable", timeout=3) as response:
+        library = json.load(response)
+    assert library["items"][0]["id"] == "callable-route"
+    assert library["items"][0]["execution_mode"] == "callable"
+    with post("/api/workflows/callable-route/remove", {}) as response:
+        assert response.status == 200
+
+
 def test_workflow_preview_route_is_guarded_and_does_not_activate_draft(server):
     url, manager = server
     graph = {

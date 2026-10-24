@@ -463,7 +463,16 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         keep_blank_values=True,
                         strict_parsing=True,
                     )
-                    allowed = {"query", "status", "camera", "engine", "sort", "page", "size"}
+                    allowed = {
+                        "query",
+                        "status",
+                        "camera",
+                        "engine",
+                        "mode",
+                        "sort",
+                        "page",
+                        "size",
+                    }
                     if set(query) - allowed or any(len(values) != 1 for values in query.values()):
                         raise ValueError("Invalid workflow library query")
                     values = {key: items[0] for key, items in query.items()}
@@ -483,6 +492,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                             status=values.get("status", ""),
                             camera=values.get("camera", ""),
                             engine=values.get("engine", ""),
+                            mode=values.get("mode", ""),
                             sort=values.get("sort", "name"),
                             page=integer_param("page", 1),
                             size=integer_param("size", 25),
@@ -1118,6 +1128,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     if set(data) != {"subflow"}:
                         raise ValueError("Send a subflow definition")
                     self.json(200, workflows.publish_subflow(data["subflow"]))
+                elif (
+                    len(parts) == 4 and parts[:2] == ["api", "workflows"] and parts[3] == "publish"
+                ):
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(200, workflows.publish_workflow(parts[2]))
                 elif (
                     len(parts) == 5
                     and parts[:3] == ["api", "workflows", "subflows"]

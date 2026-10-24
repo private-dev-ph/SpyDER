@@ -114,14 +114,12 @@ def _finite(value: Any) -> bool:
 
 
 def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) != {
-        "id",
-        "name",
-        "enabled",
-        "camera_ids",
-        "nodes",
-        "edges",
-    }:
+    fields = {"id", "name", "enabled", "camera_ids", "nodes", "edges"}
+    if not isinstance(raw, dict) or set(raw) not in (
+        fields,
+        fields | {"execution"},
+        fields | {"execution", "callable_version"},
+    ):
         raise ValueError(
             "Workflow must contain exactly id, name, enabled, camera_ids, nodes and edges"
         )
@@ -140,7 +138,33 @@ def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
         raise ValueError("Invalid camera_ids")
     if len(set(cams)) != len(cams):
         raise ValueError("Duplicate camera id")
+    execution = raw.get("execution")
+    if execution is not None:
+        if not isinstance(execution, dict) or set(execution) != {
+            "run_independently",
+            "allow_calls",
+            "parameters",
+            "description",
+        }:
+            raise ValueError("Invalid workflow execution settings")
+        if (
+            type(execution["run_independently"]) is not bool
+            or type(execution["allow_calls"]) is not bool
+            or not isinstance(execution["parameters"], list)
+            or len(execution["parameters"]) > 64
+            or not isinstance(execution["description"], str)
+            or len(execution["description"]) > 1000
+        ):
+            raise ValueError("Invalid workflow execution settings")
+        execution = copy.deepcopy(execution)
+    if "callable_version" in raw and (
+        type(raw["callable_version"]) is not int or raw["callable_version"] < 1
+    ):
+        raise ValueError("Invalid callable version")
     nodes, edges = raw["nodes"], raw["edges"]
+    # Explicit execution records may be saved while either bridge is being edited.
+    # Publication enforces the complete callable contract.
+    allow_bridges = allow_bridges or execution is not None
     if (
         not isinstance(nodes, list)
         or len(nodes) > 64
@@ -423,7 +447,7 @@ def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
         ):
             raise ValueError("Each detections node can receive only one classifier")
     _validate_bindings(clean_nodes, clean_edges)
-    return {
+    result = {
         "id": raw["id"],
         "name": raw["name"],
         "enabled": raw["enabled"],
@@ -431,6 +455,11 @@ def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
         "nodes": clean_nodes,
         "edges": clean_edges,
     }
+    if execution is not None:
+        result["execution"] = execution
+    if "callable_version" in raw:
+        result["callable_version"] = raw["callable_version"]
+    return result
 
 
 def _validate_bindings(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
@@ -522,6 +551,7 @@ class WorkflowService:
         self._summary_cache: list[dict[str, Any]] = []
         try:
             self._graphs = self._load()
+            self._migrate_callable_workflows()
             self._rebuild_summary_cache()
         except (OSError, ValueError) as exc:
             self._graphs = {}
@@ -550,11 +580,69 @@ class WorkflowService:
         self._sync_pre_event_buffer()
         self._thread.start()
 
+    def _migrate_callable_workflows(self) -> None:
+        """Expose legacy callable definitions as disabled records in workflow storage."""
+        if self.subflows.storage_error:
+            self._storage_error = "Callable workflow migration is unavailable"
+            return
+        additions: dict[str, dict[str, Any]] = {}
+        for versions in self.subflows._items.values():
+            definition = next((item for item in reversed(versions) if item is not None), None)
+            if definition is None:
+                continue
+            ident = definition["id"]
+            existing = self._graphs.get(ident)
+            if existing is not None:
+                if "callable_version" in existing:
+                    if existing["callable_version"] != definition["version"]:
+                        additions[ident] = {
+                            **existing,
+                            "callable_version": definition["version"],
+                        }
+                    continue
+                self._storage_error = f"Callable workflow ID collision: {ident}"
+                return
+            additions[ident] = {
+                **copy.deepcopy(definition["graph"]),
+                "id": ident,
+                "name": definition["name"],
+                "enabled": False,
+                "camera_ids": [],
+                "execution": {
+                    "run_independently": False,
+                    "allow_calls": True,
+                    "parameters": copy.deepcopy(definition["parameters"]),
+                    "description": definition["description"],
+                },
+                "callable_version": definition["version"],
+            }
+        if not additions:
+            return
+        if len(self._graphs) + len(additions) > _MAX_WORKFLOWS:
+            self._storage_error = "Workflow limit exceeded during callable migration"
+            return
+        prior = self._graphs
+        self._graphs = {**prior, **additions}
+        try:
+            self._persist()
+        except (OSError, ValueError, TypeError) as exc:
+            self._graphs = prior
+            self._storage_error = str(exc)[:200] or "Callable workflow migration failed"
+
+    @staticmethod
+    def _independent_active(graph: dict[str, Any]) -> bool:
+        execution = graph.get("execution")
+        return graph["enabled"] and (execution is None or execution["run_independently"])
+
     @staticmethod
     def _inference_camera_ids(graph: dict[str, Any]) -> set[str]:
         """Only detector inputs need CV; a raw camera/preview branch does not."""
         nodes = {node["id"]: node for node in graph["nodes"]}
         cameras = set()
+        if graph.get("execution", {}).get("run_independently") and any(
+            node["type"] == "subflow_input" for node in graph["nodes"]
+        ):
+            cameras.update(graph["camera_ids"])
         for node in graph["nodes"]:
             if node["type"] != "detections":
                 continue
@@ -577,7 +665,7 @@ class WorkflowService:
         if publish is not None:
             cameras = set()
             for graph in self._graphs.values():
-                if graph["enabled"]:
+                if self._independent_active(graph):
                     try:
                         cameras.update(self._inference_camera_ids(self.compile_graph(graph)))
                     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
@@ -591,7 +679,7 @@ class WorkflowService:
             return
         requirements: dict[str, int] = {}
         for graph in self._graphs.values():
-            if not graph["enabled"]:
+            if not self._independent_active(graph):
                 continue
             try:
                 graph = self.compile_graph(graph)
@@ -675,6 +763,16 @@ class WorkflowService:
                     "engines": sorted(engines),
                     "node_count": len(graph["nodes"]),
                     "edge_count": len(graph["edges"]),
+                    "execution_mode": self._execution_mode(graph),
+                    "callable_version": self._latest_callable_version(graph["id"]),
+                    "caller_count": self._callers(graph["id"]),
+                    "versions": [
+                        index
+                        for index, definition in enumerate(
+                            self.subflows._items.get(graph["id"], []), 1
+                        )
+                        if definition is not None
+                    ],
                 }
             )
         self._summary_cache.sort(key=lambda item: (item["name"].casefold(), item["id"]))
@@ -684,9 +782,49 @@ class WorkflowService:
         enabled = sum(item["enabled"] for item in self._summary_cache)
         return {"total": total, "enabled": enabled, "disabled": total - enabled}
 
-    def library(self, *, query="", status="", camera="", engine="", sort="name", page=1, size=25):
+    @staticmethod
+    def _execution_mode(graph: dict[str, Any]) -> str:
+        execution = graph.get("execution")
+        independent = execution is None or execution["run_independently"]
+        callable_ = bool(execution and execution["allow_calls"])
+        return "both" if independent and callable_ else "independent" if independent else "callable"
+
+    def _latest_callable_version(self, workflow_id: str) -> int | None:
+        definitions = self.subflows._items.get(workflow_id, [])
+        return next(
+            (
+                definition["version"]
+                for definition in reversed(definitions)
+                if definition is not None
+            ),
+            None,
+        )
+
+    def _callers(self, workflow_id: str) -> int:
+        caller_ids = set()
+        for graph in self._graphs.values():
+            for node in graph["nodes"]:
+                if node["type"] == "subflow" and node["params"].get("subflow_id") == workflow_id:
+                    caller_ids.add(graph["id"])
+        for defs in self.subflows._items.values():
+            for definition in defs:
+                if definition is None:
+                    continue
+                for node in definition["graph"]["nodes"]:
+                    if (
+                        node["type"] == "subflow"
+                        and node["params"].get("subflow_id") == workflow_id
+                    ):
+                        caller_ids.add(definition["id"])
+        return len(caller_ids)
+
+    def library(
+        self, *, query="", status="", camera="", engine="", mode="", sort="name", page=1, size=25
+    ):
         if sort not in ("name", "name_desc", "enabled"):
             raise ValueError("Invalid workflow sort")
+        if mode not in ("", "independent", "callable", "both"):
+            raise ValueError("Invalid workflow mode")
         page = max(1, page)
         size = min(50, max(1, size))
         with self._lock:
@@ -717,6 +855,13 @@ class WorkflowService:
             ]
             rows = [item for item in rows if not camera or camera in item["camera_ids"]]
             rows = [item for item in rows if not engine or engine in item["engines"]]
+            rows = [
+                item
+                for item in rows
+                if not mode
+                or item["execution_mode"] == mode
+                or (mode in ("independent", "callable") and item["execution_mode"] == "both")
+            ]
             if sort == "name_desc":
                 rows.sort(key=lambda item: item["id"])
                 rows.sort(key=lambda item: item["name"].casefold(), reverse=True)
@@ -1126,9 +1271,16 @@ class WorkflowService:
         if type(disable_motion) is not bool:
             raise ValueError("disable_motion must be boolean")
         normalized = _validate_graph(graph)
-        if any(node["type"] in ("subflow_input", "subflow_output") for node in normalized["nodes"]):
+        if normalized.get("execution") is None and any(
+            node["type"] in ("subflow_input", "subflow_output") for node in normalized["nodes"]
+        ):
             raise ValueError("Input and output bridge nodes belong in subflow definitions")
         with self._lock:
+            latest_version = self._latest_callable_version(normalized["id"])
+            if latest_version is None:
+                normalized.pop("callable_version", None)
+            else:
+                normalized["callable_version"] = latest_version
             compiled = self.compile_graph(normalized)
             if self._storage_error:
                 raise RuntimeError("Workflow storage is unavailable")
@@ -1136,6 +1288,21 @@ class WorkflowService:
                 raise ValueError("Workflow limit exceeded")
             snapshot = self._graphs.copy()
             previous = self._graphs.get(normalized["id"])
+            if (
+                normalized.get("execution")
+                and not normalized["execution"]["run_independently"]
+                and normalized["enabled"]
+            ):
+                raise ValueError("Callable-only workflows cannot be enabled independently")
+            if (
+                previous
+                and previous.get("execution", {}).get("allow_calls")
+                and not normalized.get("execution", {}).get("allow_calls", False)
+                and self._callers(normalized["id"])
+            ):
+                raise ValueError(
+                    "Workflow is referenced by callers; allow_calls cannot be disabled"
+                )
             old_settings: dict[str, dict[str, Any] | None] = {}
             options: dict[str, dict[str, Any]] = {}
             old_analysis: dict[str, dict[str, Any]] = {}
@@ -1610,12 +1777,27 @@ class WorkflowService:
         with self._lock:
             if self._storage_error:
                 raise RuntimeError("Workflow storage is unavailable")
+            if self._callers(workflow_id):
+                raise ValueError("Workflow is referenced by a saved workflow or pinned snapshot")
             snapshot = self._graphs.copy()
+            callable_snapshot = workflow_id in self.subflows._items
+            prior_subflows = copy.deepcopy(self.subflows._items) if callable_snapshot else None
+            if callable_snapshot:
+                self.subflows.delete(workflow_id)
             self._graphs.pop(workflow_id, None)
             try:
                 self._persist()
             except Exception:
                 self._graphs = snapshot
+                if callable_snapshot:
+                    try:
+                        self.subflows._write(prior_subflows)
+                        self.subflows._items = prior_subflows
+                    except Exception as restore_error:
+                        self._storage_error = (
+                            "Could not restore callable snapshots after workflow deletion"
+                        )
+                        raise RuntimeError(self._storage_error) from restore_error
                 raise
             self._rebuild_summary_cache()
             self._release_workflow_recordings(workflow_id)
@@ -1753,7 +1935,7 @@ class WorkflowService:
         with self._lock:
             graphs = []
             for graph in self._graphs.values():
-                if not graph["enabled"]:
+                if not self._independent_active(graph):
                     continue
                 try:
                     graphs.append(self.compile_graph(copy.deepcopy(graph)))
@@ -1884,7 +2066,131 @@ class WorkflowService:
         with self._lock:
             if isinstance(raw, dict) and "id" not in raw:
                 raw = {**raw, "id": "subflow-" + uuid.uuid4().hex[:16]}
-            return self.subflows.publish(raw)
+            if isinstance(raw, dict) and raw.get("id") in self._graphs:
+                current = self._graphs[raw["id"]]
+                if not current.get("execution", {}).get("allow_calls"):
+                    raise ValueError("Workflow ID belongs to a non-callable workflow")
+            definition = self.subflows.publish(raw)
+            self._store_callable_definition(definition)
+            return definition
+
+    def _store_callable_definition(self, definition: dict[str, Any]) -> None:
+        ident = definition["id"]
+        current = self._graphs.get(ident)
+        if current is not None and not current.get("execution", {}).get("allow_calls"):
+            self._storage_error = f"Callable workflow ID collision: {ident}"
+            raise ValueError(self._storage_error)
+        graph = {
+            **copy.deepcopy(definition["graph"]),
+            "id": ident,
+            "name": definition["name"],
+            "enabled": current["enabled"] if current else False,
+            "camera_ids": current["camera_ids"] if current else [],
+            "execution": {
+                "run_independently": current.get("execution", {}).get("run_independently", False)
+                if current
+                else False,
+                "allow_calls": True,
+                "parameters": copy.deepcopy(definition["parameters"]),
+                "description": definition["description"],
+            },
+            "callable_version": definition["version"],
+        }
+        self._graphs[ident] = _validate_graph(graph)
+        try:
+            self._persist()
+        except Exception as exc:
+            if current is None:
+                self._graphs.pop(ident, None)
+            else:
+                self._graphs[ident] = current
+            self._storage_error = str(exc)[:200] or "Callable workflow storage is unavailable"
+            raise
+        self._rebuild_summary_cache()
+
+    def _callable_snapshot_graph(self, graph: dict[str, Any]) -> dict[str, Any]:
+        nodes = {node["id"]: node for node in graph["nodes"]}
+        inputs = [node["id"] for node in graph["nodes"] if node["type"] == "subflow_input"]
+        outputs = [node["id"] for node in graph["nodes"] if node["type"] == "subflow_output"]
+        if len(inputs) != 1 or len(outputs) != 1:
+            raise ValueError("Callable workflow requires one input and one output bridge")
+        outgoing: dict[str, set[str]] = {ident: set() for ident in nodes}
+        incoming: dict[str, set[str]] = {ident: set() for ident in nodes}
+        for edge in graph["edges"]:
+            outgoing[edge["from"]].add(edge["to"])
+            incoming[edge["to"]].add(edge["from"])
+
+        def closure(seed: str, links: dict[str, set[str]]) -> set[str]:
+            found, pending = set(), [seed]
+            while pending:
+                ident = pending.pop()
+                if ident in found:
+                    continue
+                found.add(ident)
+                pending.extend(links[ident] - found)
+            return found
+
+        keep = closure(inputs[0], outgoing) & closure(outputs[0], incoming)
+        if inputs[0] not in keep or outputs[0] not in keep:
+            raise ValueError("Workflow input must connect to workflow output")
+        if sum(edge["to"] == outputs[0] for edge in graph["edges"]) != 1:
+            raise ValueError("Workflow output bridge must have exactly one input")
+        for ident in list(keep):
+            node = nodes[ident]
+            if node["type"] != "detections":
+                continue
+            keep.update(
+                edge["from"]
+                for edge in graph["edges"]
+                if edge["to"] == ident
+                and edge.get("input") in ("model", "classifier")
+                and nodes[edge["from"]]["type"] in ("model", "classifier")
+            )
+        for ident in keep:
+            for binding in nodes[ident].get("bindings", {}).values():
+                if binding["node"] not in keep:
+                    raise ValueError("Callable workflow binding depends on an excluded node")
+        snapshot = {
+            "id": graph["id"],
+            "name": graph["name"],
+            "enabled": False,
+            "camera_ids": [],
+            "nodes": [copy.deepcopy(node) for node in graph["nodes"] if node["id"] in keep],
+            "edges": [
+                copy.deepcopy(edge)
+                for edge in graph["edges"]
+                if edge["from"] in keep and edge["to"] in keep
+            ],
+        }
+        return _validate_graph(snapshot, allow_bridges=True)
+
+    def publish_workflow(self, workflow_id: str) -> dict[str, Any]:
+        """Publish current saved callable draft as new immutable snapshot."""
+        with self._lock:
+            graph = self._graphs.get(workflow_id)
+            if graph is None:
+                raise KeyError(workflow_id)
+            execution = graph.get("execution")
+            if not execution or not execution["allow_calls"]:
+                raise ValueError("Workflow does not allow calls")
+            snapshot = self._callable_snapshot_graph(graph)
+            definition = self.subflows.publish(
+                {
+                    "id": workflow_id,
+                    "name": graph["name"],
+                    "description": execution["description"],
+                    "graph": snapshot,
+                    "parameters": execution["parameters"],
+                }
+            )
+            graph["callable_version"] = definition["version"]
+            try:
+                self._persist()
+            except Exception as exc:
+                self._storage_error = str(exc)[:200] or "Callable workflow storage is unavailable"
+                raise
+            self._rebuild_summary_cache()
+            return definition
 
     def get_subflow(self, subflow_id: str, version: int | None = None) -> dict[str, Any]:
         """Read one consistent immutable subflow version."""
@@ -1894,7 +2200,11 @@ class WorkflowService:
     def import_subflows(self, definitions: Any, *, graph: Any = None) -> list[dict[str, Any]]:
         """Validate and persist pinned dependencies under the workflow service lock."""
         with self._lock:
-            return self.subflows.import_definitions(definitions, graph=graph)
+            imported = self.subflows.import_definitions(definitions, graph=graph)
+            if imported:
+                self._migrate_callable_workflows()
+                self._rebuild_summary_cache()
+            return imported
 
     def _report_compile_error(self, graph: dict[str, Any], error: Exception) -> None:
         message = str(error)[:200]
@@ -1933,18 +2243,12 @@ class WorkflowService:
     def remove_subflow(self, subflow_id: str) -> dict[str, Any]:
         """Delete a definition only when no saved workflow or pinned version uses it."""
         with self._lock:
-            referenced = any(
-                node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
-                for graph in self._graphs.values()
-                for node in graph["nodes"]
-            ) or any(
-                node["type"] == "subflow" and node["params"].get("subflow_id") == subflow_id
-                for versions in self.subflows._items.values()
-                for definition in versions
-                if definition is not None
-                for node in definition["graph"]["nodes"]
-            )
-            return self.subflows.delete(subflow_id, referenced=referenced)
+            if self._callers(subflow_id):
+                raise ValueError("Subflow is referenced by a saved workflow or subflow")
+            if subflow_id in self._graphs:
+                self.remove(subflow_id)
+                return {"deleted": subflow_id}
+            return self.subflows.delete(subflow_id)
 
     @staticmethod
     def _camera_ids(graph: dict[str, Any]) -> list[str]:
@@ -2188,6 +2492,45 @@ class WorkflowService:
                     model_descriptors[nid] = self._model_descriptor(p["model_id"])
             elif kind == "camera":
                 result = list(cv.get("detections", [])) if p["camera_id"] == camera_id else []
+            elif kind == "subflow_input":
+                paths = graph.get("_paths", {})
+                root_inputs = [
+                    ident
+                    for ident, item in nodes.items()
+                    if item["type"] == "subflow_input" and len(paths.get(ident, [ident])) == 1
+                ]
+                root_outputs = [
+                    ident
+                    for ident, item in nodes.items()
+                    if item["type"] == "subflow_output" and len(paths.get(ident, [ident])) == 1
+                ]
+
+                def reachable(seeds, links):
+                    reached, pending = set(), list(seeds)
+                    while pending:
+                        current = pending.pop()
+                        if current in reached:
+                            continue
+                        reached.add(current)
+                        pending.extend(links[current])
+                    return reached
+
+                input_descendants = reachable(root_inputs, outgoing)
+                return_ancestors = reachable(root_outputs, incoming)
+                root_bridge = len(paths.get(nid, [nid])) == 1
+                source_nodes = {"camera", "model", "classifier", "detections"}
+                independent_source = any(
+                    item["type"] in source_nodes
+                    and ident in return_ancestors
+                    and ident not in input_descendants
+                    for ident, item in nodes.items()
+                )
+                independent = graph.get("execution", {}).get("run_independently", False)
+                result = (
+                    list(cv.get("detections", []))
+                    if root_bridge and independent and not independent_source
+                    else upstream
+                )
             elif kind in ("model", "classifier"):
                 try:
                     descriptor = (
