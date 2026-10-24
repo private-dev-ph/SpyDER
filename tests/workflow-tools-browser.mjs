@@ -125,8 +125,8 @@ try {
     return result.result.value;
   }
 
-  async function until(expression) {
-    for (let i = 0; i < 100; i++) {
+  async function until(expression, attempts = 100) {
+    for (let i = 0; i < attempts; i++) {
       if (await evaluate(expression)) return;
       await delay(100);
     }
@@ -159,7 +159,7 @@ try {
     { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
     sessionId,
   );
-  await until("!!window.spyderWorkflows && spyder.cameras().length===2");
+  await until("!!window.spyderWorkflows && spyder.cameras().length===2", 300);
   await evaluate(
     "window.templateErrors=[];window.addEventListener('error',e=>templateErrors.push(e.message));navigator.mediaDevices.getUserMedia=()=>{throw new Error('Unexpected camera access')};location.hash='vision-lab'",
   );
@@ -201,7 +201,7 @@ try {
   await evaluate("document.querySelector('[data-publish-subflow]').click()");
   await until("!!document.querySelector('[data-pub-submit]')");
   await evaluate(`(() => {
-    const row=[...document.querySelectorAll('.wt-parameter-list label')].find(r=>r.textContent.includes('filter · confidence'));
+    const row=[...document.querySelectorAll('.wt-parameter-row')].find(r=>r.textContent.includes('filter · confidence'));
     if(!row) throw new Error('Confidence parameter missing');
     row.querySelector('[data-pub-param]').checked=true;
     row.querySelector('[data-pub-param-name]').value='minConfidence';
@@ -224,9 +224,9 @@ try {
     await evaluate("!!document.querySelector('[data-add=subflow_input]')"),
     false,
   );
-  await evaluate(
-    "document.querySelector('[data-add=subflow]').click();document.querySelector('.we-node-subflow').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
-  );
+  await evaluate("document.querySelector('[data-open-subflows]').click()");
+  await until("!!document.querySelector('[data-wt-insert]')");
+  await evaluate("document.querySelector('[data-wt-insert]').click()");
   await until("!!document.querySelector('[data-subflow-id]')");
   const identifier = await evaluate(
     "JSON.parse(localStorage.getItem('spyder.workflow.subflows.v1'))[0].id",
@@ -262,7 +262,122 @@ try {
     ),
     0.85,
   );
+  await evaluate(
+    "document.querySelector('[data-reset-subflow-arg=minConfidence]').click()",
+  );
+  assert.equal(
+    await evaluate(
+      "Number(document.querySelector('[data-subflow-arg=minConfidence]').value)",
+    ),
+    0.5,
+  );
+  assert.ok(
+    await evaluate(
+      "document.querySelector('[data-subflow-inheritance]').textContent.includes('Inherited')",
+    ),
+  );
+  await evaluate(
+    "document.querySelector('[data-open-subflow-definition]').click()",
+  );
+  await until("!!document.querySelector('[data-publish-subflow]')");
+  await evaluate("document.querySelector('[data-publish-subflow]').click()");
+  await until("!!document.querySelector('[data-pub-name]')");
+  await evaluate(
+    "document.querySelector('[data-pub-name]').value='Renamed reusable branch';document.querySelector('[data-pub-submit]').click()",
+  );
+  await until(
+    "JSON.parse(localStorage.getItem('spyder.workflow.subflows.v1')).length===2",
+  );
+  assert.equal(
+    await evaluate(
+      "new Set(JSON.parse(localStorage.getItem('spyder.workflow.subflows.v1')).map(item=>item.id)).size",
+    ),
+    1,
+  );
+  await evaluate(
+    "document.querySelector('[data-wt-close]').click();document.querySelector('[data-subflow-back]').click()",
+  );
+  await evaluate(
+    "document.querySelector('.we-node-subflow').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-subflow-version]').value"),
+    "1",
+  );
+  const exported = await evaluate(
+    "spyderWorkflowTools.exportBundle(JSON.parse(localStorage.getItem('spyder.workflow-editor.draft')))",
+  );
+  assert.equal(exported.subflows.length, 1);
+  assert.equal(exported.subflows[0].version, 1);
   await evaluate("document.querySelector('[data-close-settings]').click()");
+  await evaluate(`(async()=>{
+    const graph=JSON.parse(localStorage.getItem('spyder.workflow-editor.draft'));
+    await spyderWorkflowStore.save({...graph,id:'protected-subflow-test',name:'Protected reusable branch'});
+    window.hasSavedReference=await spyderWorkflowStore.referencesSubflow(${JSON.stringify(identifier)});
+    window.originalSubflows=JSON.parse(localStorage.getItem('spyder.workflow.subflows.v1'));
+    const source=originalSubflows[0];
+    const extra=Array.from({length:55},(_,index)=>({...structuredClone(source),id:'subflow-fixture-'+index,name:'Fixture '+String(index).padStart(3,'0')}));
+    localStorage.setItem('spyder.workflow.subflows.v1',JSON.stringify([...originalSubflows,...extra]));
+    document.querySelector('[data-open-subflows]').click();
+  })()`);
+  assert.ok(await evaluate("window.hasSavedReference"));
+  await until("document.querySelectorAll('.wt-subflow-row').length===8");
+  assert.ok(
+    await evaluate(
+      "document.querySelector('[data-wt-page]').textContent.includes('56 subflows')",
+    ),
+  );
+  await evaluate("document.querySelector('[data-wt-next]').click()");
+  assert.ok(
+    await evaluate(
+      "document.querySelector('[data-wt-page]').textContent.includes('Page 2')",
+    ),
+  );
+  await evaluate(
+    "const search=document.querySelector('[data-wt-search]');search.value='Fixture 054';search.dispatchEvent(new Event('input',{bubbles:true}))",
+  );
+  assert.equal(
+    await evaluate("document.querySelectorAll('.wt-subflow-row').length"),
+    1,
+  );
+  await evaluate("document.querySelector('[data-wt-close]').click()");
+  await evaluate(
+    `spyderWorkflowTools.openDefinition(${JSON.stringify(identifier)},1)`,
+  );
+  await until("!!document.querySelector('[data-subflow-back]')");
+  await evaluate("document.querySelector('[data-open-subflows]').click()");
+  await until("!!document.querySelector('[data-wt-new]')");
+  await evaluate("document.querySelector('[data-wt-new]').click()");
+  assert.equal(
+    await evaluate("document.querySelector('[data-subflow-back]').textContent"),
+    "Return to parent subflow",
+  );
+  await evaluate("document.querySelector('[data-subflow-back]').click()");
+  assert.equal(
+    await evaluate("document.querySelector('[data-name]').value"),
+    "Reusable passthrough",
+  );
+  await evaluate("document.querySelector('[data-publish-subflow]').click()");
+  await until("!!document.querySelector('[data-pub-submit]')");
+  assert.equal(
+    await evaluate(
+      "[...document.querySelectorAll('[data-pub-param-name]')].some(input=>input.value==='minConfidence')",
+    ),
+    true,
+    "return from nested draft preserves exposed setting names",
+  );
+  await evaluate("document.querySelector('[data-wt-close]').click()");
+  await evaluate(
+    "document.querySelector('[data-name]').value='Unpublished test';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}));window.confirm=()=>false;document.querySelector('[data-subflow-back]').click()",
+  );
+  assert.ok(await evaluate("!!document.querySelector('[data-subflow-back]')"));
+  await evaluate(
+    "window.confirm=()=>true;document.querySelector('[data-subflow-back]').click()",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('[data-name]').value"),
+    "Unfinished parent",
+  );
   for (const viewport of [
     { width: 1280, height: 800 },
     { width: 390, height: 700 },
@@ -291,6 +406,54 @@ try {
       await evaluate(
         "document.querySelector('.wt-history [data-wt-close]').click()",
       );
+      await evaluate("document.querySelector('[data-open-subflows]').click()");
+      await until("!!document.querySelector('.wt-subflows')");
+      const libraryFits = await evaluate(
+        "(()=>{const d=document.querySelector('.wt-subflows'),r=d.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&d.scrollWidth<=d.clientWidth+1})()",
+      );
+      assert.ok(
+        libraryFits,
+        `${JSON.stringify(viewport)}/${theme}: subflow library fits`,
+      );
+      await command(
+        "Page.captureScreenshot",
+        { format: "png", captureBeyondViewport: false },
+        sessionId,
+      ).then(async (shot) =>
+        writeFile(
+          path.join(assets, `subflow-library-${viewport.width}-${theme}.png`),
+          Buffer.from(shot.data, "base64"),
+        ),
+      );
+      await evaluate(
+        "document.querySelector('.wt-subflows [data-wt-close]').click()",
+      );
+      await evaluate(
+        `spyderWorkflowTools.openDefinition(${JSON.stringify(identifier)},1)`,
+      );
+      await until("!!document.querySelector('[data-publish-subflow]')");
+      await evaluate(
+        "document.querySelector('[data-publish-subflow]').click()",
+      );
+      await until("!!document.querySelector('.wt-publish')");
+      assert.ok(
+        await evaluate(
+          "(()=>{const d=document.querySelector('.wt-publish'),r=d.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&d.scrollWidth<=d.clientWidth+1})()",
+        ),
+        `${JSON.stringify(viewport)}/${theme}: publisher fits`,
+      );
+      await evaluate(
+        "document.querySelector('.wt-publish').scrollTop=document.querySelector('.wt-publish').scrollHeight",
+      );
+      assert.ok(
+        await evaluate(
+          "(()=>{const d=document.querySelector('.wt-publish').getBoundingClientRect(),b=document.querySelector('[data-pub-submit]').getBoundingClientRect();return b.top>=d.top&&b.bottom<=d.bottom+1})()",
+        ),
+        "publish action remains reachable",
+      );
+      await evaluate(
+        "document.querySelector('.wt-publish [data-wt-close]').click();document.querySelector('[data-subflow-back]').click()",
+      );
     }
   }
   assert.deepEqual(await evaluate("workflowToolErrors"), []);
@@ -299,7 +462,7 @@ try {
     false,
   );
   console.log(
-    "PASS: browser-owned subflow publish/version/call, parent draft preservation, bridge palette isolation, history layout in six viewport/theme cases, SVG icon alignment, no API requests or runtime errors",
+    "PASS: subflow library insertion/search/pagination, version pins/rename/export, inherited settings/reset, saved reference checks, nested draft restoration/discard guard, library/publisher/history responsive themes, zero API requests or runtime errors",
   );
 } finally {
   socket?.close();

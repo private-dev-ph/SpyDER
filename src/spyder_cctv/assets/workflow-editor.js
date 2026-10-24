@@ -1119,7 +1119,7 @@
         graphRevision = 0,
         notice = "",
         subflowEditing = null,
-        rootDraft = null,
+        subflowParents = [],
         subflowCatalog = [],
         workflows = [],
         workflowCounts = { total: 0, enabled: 0, disabled: 0 },
@@ -1203,19 +1203,64 @@
       window.spyderWorkflowTools?.mount?.({
         demo,
         getGraph: () => clone(graph),
+        validateGraph: (value) => {
+          decodeWorkflow(JSON.stringify(value));
+        },
+        getDrafts: () =>
+          [graph, ...subflowParents.map((parent) => parent.graph)].map(clone),
+        onInsertSubflow: (definition) => {
+          if (busy || activationBusy || activationReview)
+            throw Error(
+              "Wait for the current workflow operation before adding a subflow.",
+            );
+          if (graph.nodes.length >= 64)
+            throw Error(
+              "This workflow already has 64 nodes. Remove a node before adding a subflow.",
+            );
+          subflowCatalog = [
+            ...subflowCatalog.filter(
+              (item) =>
+                !(
+                  item.id === definition.id &&
+                  item.version === definition.version
+                ),
+            ),
+            definition,
+          ];
+          add("subflow");
+          const call = graph.nodes.find((item) => item.id === selected);
+          call.params = {
+            subflow_id: definition.id,
+            version: definition.version,
+            arguments: {},
+          };
+          settingsNode = call.id;
+          issue(
+            `${definition.name} v${definition.version} added. Connect its IN to detections and its OUT to the next node.`,
+          );
+          changed();
+        },
         onEdit: (definition) => {
           if (!graph || !definition?.graph) return;
-          rootDraft = clone(graph);
+          subflowParents.push({
+            graph: clone(graph),
+            editing: subflowEditing ? clone(subflowEditing) : null,
+            dirty,
+            undo: clone(undoStack),
+            redo: clone(redoStack),
+          });
           subflowEditing = {
             id: definition.id,
             name: definition.name,
             version: definition.version,
+            definition: clone(definition),
           };
           controller?.abort();
           debugController?.abort();
           graph = clone(definition.graph);
           graph.enabled = false;
           graph.camera_ids = [];
+          subflowEditing.baseline = JSON.stringify(graph);
           selected = "";
           settingsNode = "";
           undoStack = [];
@@ -1226,11 +1271,18 @@
             ?.focus?.({ preventScroll: true });
         },
         onCreateSubflow: (draft) => {
-          rootDraft = clone(graph);
+          subflowParents.push({
+            graph: clone(graph),
+            editing: subflowEditing ? clone(subflowEditing) : null,
+            dirty,
+            undo: clone(undoStack),
+            redo: clone(redoStack),
+          });
           subflowEditing = { id: "", name: draft.name, version: 0 };
           controller?.abort();
           debugController?.abort();
           graph = clone(draft);
+          subflowEditing.baseline = JSON.stringify(graph);
           selected = "";
           settingsNode = "";
           undoStack = [];
@@ -1245,8 +1297,10 @@
             id: definition.id,
             name: definition.name,
             version: definition.version,
+            definition: clone(definition),
           };
           graph.name = definition.name;
+          subflowEditing.baseline = JSON.stringify(graph);
           window.spyderWorkflowTools
             ?.listSubflows?.()
             .then((items) => {
@@ -2327,6 +2381,18 @@
           return "Face · Is unknown";
         if (n.type === "event" && n.params.attachment === "recording")
           return `Record · ${n.params.pre_event_seconds || 0}s before · ${n.params.duration_seconds}s after`;
+        if (n.type === "subflow") {
+          const definition = subflowCatalog.find(
+            (item) =>
+              item.id === n.params.subflow_id &&
+              item.version === n.params.version,
+          );
+          return definition
+            ? `${definition.name} · v${n.params.version}`
+            : n.params.subflow_id
+              ? `Pinned v${n.params.version} · definition unavailable`
+              : "Choose a reusable subflow";
+        }
         if (n.type === "preview")
           return "Live branch monitor · CAM / DATA input";
         if (n.type === "camera")
@@ -2395,7 +2461,16 @@
               item.id === n.params.subflow_id &&
               Number(item.version) === Number(n.params.version),
           );
-          const definitions = subflowCatalog;
+          const definitions = [
+            ...subflowCatalog
+              .reduce((items, item) => {
+                const prior = items.get(item.id);
+                if (!prior || Number(item.version) > Number(prior.version))
+                  items.set(item.id, item);
+                return items;
+              }, new Map())
+              .values(),
+          ].sort((a, b) => a.name.localeCompare(b.name));
           const args = Object.fromEntries(
             (definition?.parameters || []).map((parameter) => [
               parameter.name,
@@ -2410,10 +2485,14 @@
                 type === "boolean"
                   ? `<input type="checkbox" data-subflow-arg="${esc(parameter.name)}" data-subflow-type="boolean" ${value ? "checked" : ""}>`
                   : `<input type="${["number", "integer"].includes(type) ? "number" : "text"}" ${type === "number" ? 'step="any"' : type === "integer" ? 'step="1"' : ""} data-subflow-arg="${esc(parameter.name)}" data-subflow-type="${esc(type)}" value="${esc(value)}">`;
-              return `<label>${esc(parameter.name)} · ${esc(parameter.node_id)}.${esc(parameter.field)}${control}</label>`;
+              const overridden = Object.hasOwn(
+                n.params.arguments || {},
+                parameter.name,
+              );
+              return `<div class="we-subflow-argument"><label>${esc(parameter.name)}${control}</label><div class="we-subflow-argument-meta"><small data-subflow-inheritance>${overridden ? "Override for this call" : "Inherited default"} · ${esc(parameter.field)}</small><button type="button" class="button secondary" data-reset-subflow-arg="${esc(parameter.name)}" ${overridden ? "" : "disabled"}>Use default</button></div></div>`;
             })
             .join("");
-          return `<label>Subflow<select data-subflow-id><option value="">Choose subflow</option>${definitions.map((item) => `<option value="${esc(item.id)}" data-version="${esc(item.version)}" ${item.id === n.params.subflow_id ? "selected" : ""}>${esc(item.name)} · latest v${esc(item.version)}</option>`).join("")}</select></label><p>Call pins a specific version. Inference and camera context are shared with the parent workflow.</p>${latest ? `<label>Version<select data-subflow-version>${[...(latest.versions || [latest.version])].map((version) => `<option value="${esc(version)}" ${Number(version) === Number(n.params.version) ? "selected" : ""}>v${esc(version)}${Number(version) === Number(latest.version) ? " · latest" : ""}</option>`).join("")}</select></label>` : ""}${definition ? `<fieldset class="we-subflow-arguments"><legend>Arguments</legend>${argumentFields || "<p>This version exposes no arguments.</p>"}<details><summary>Advanced JSON</summary><label>Arguments JSON<textarea data-subflow-arguments spellcheck="false">${esc(JSON.stringify(args, null, 2))}</textarea></label></details><p>${esc(definition.description || "No description")}</p><button type="button" class="button secondary" data-open-subflow-definition>Open pinned definition</button></fieldset>` : `<p>${n.params.subflow_id ? `Pinned version v${esc(n.params.version)} is unavailable in the editor.` : "Choose a published subflow."}</p>${n.params.subflow_id ? `<button type="button" class="button secondary" data-load-pinned-subflow>Load pinned version v${esc(n.params.version)}</button>` : ""}`}`;
+          return `<label>Subflow<select data-subflow-id><option value="">Choose subflow</option>${definitions.map((item) => `<option value="${esc(item.id)}" data-version="${esc(item.version)}" ${item.id === n.params.subflow_id ? "selected" : ""}>${esc(item.name)} · latest v${esc(item.version)}</option>`).join("")}</select></label><p>Call pins a specific version. Inference and camera context are shared with the parent workflow.</p>${latest ? `<label>Version<select data-subflow-version>${[...(latest.versions || [latest.version])].map((version) => `<option value="${esc(version)}" ${Number(version) === Number(n.params.version) ? "selected" : ""}>v${esc(version)}${Number(version) === Number(latest.version) ? " · latest" : ""}</option>`).join("")}</select></label>` : ""}${definition ? `<fieldset class="we-subflow-arguments"><legend>Arguments</legend>${argumentFields || "<p>This version exposes no arguments.</p>"}<details><summary>Advanced JSON</summary><label>Arguments JSON<textarea data-subflow-arguments spellcheck="false">${esc(JSON.stringify(n.params.arguments || {}, null, 2))}</textarea></label></details><p>${esc(definition.description || "No description")}</p><button type="button" class="button secondary" data-open-subflow-definition>Open pinned definition</button></fieldset>` : `<p>${n.params.subflow_id ? `Pinned version v${esc(n.params.version)} is unavailable in the editor.` : "Choose a published subflow."}</p>${n.params.subflow_id ? `<button type="button" class="button secondary" data-load-pinned-subflow>Load pinned version v${esc(n.params.version)}</button>` : ""}`}`;
         }
         if (n.type === "subflow_input" || n.type === "subflow_output")
           return `<p>${n.type === "subflow_input" ? "Entry point for detections from the calling workflow." : "Return this branch's detections to the calling workflow."}</p>`;
@@ -2708,7 +2787,7 @@
                 "",
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
-        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar">${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing subflow: ${esc(subflowEditing.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>Return to workflow</button><button class="button primary" data-publish-subflow>Publish new version</button></div>` : ""}<div class="we-toolbar-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${subflowEditing || rootBridgePresent || busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><label>Name<input data-name maxlength="128" value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || subflowEditing || rootBridgePresent || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${subflowEditing ? "Subflow draft" : graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops actions. Inference idles when no workflow or active preview needs it; model settings are preserved.</span></div><button type="button" class="button secondary" data-open-subflows>Subflows</button><button type="button" class="button secondary" data-open-history>Execution history</button><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${subflowEditing || rootBridgePresent || busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${subflowEditing || rootBridgePresent || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
+        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar">${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing subflow: ${esc(subflowEditing.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent subflow" : "Return to workflow"}</button><button class="button primary" data-publish-subflow>Publish new version</button></div>` : ""}<div class="we-toolbar-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${subflowEditing || rootBridgePresent || busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><label>Name<input data-name maxlength="128" value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || subflowEditing || rootBridgePresent || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${subflowEditing ? "Subflow draft" : graph.enabled ? "Workflow enabled" : "Workflow disabled"}</strong></div><span>Disabling stops actions. Inference idles when no workflow or active preview needs it; model settings are preserved.</span></div><button type="button" class="button secondary" data-open-subflows>Subflows</button><button type="button" class="button secondary" data-open-history>Execution history</button><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${subflowEditing || rootBridgePresent || busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${subflowEditing || rootBridgePresent || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
           events
             .slice(-5)
             .reverse()
@@ -3562,12 +3641,7 @@
           if (!n || n.type !== "subflow") return;
           n.params.subflow_id = t.value;
           n.params.version = version;
-          n.params.arguments = Object.fromEntries(
-            (definition?.parameters || []).map((parameter) => [
-              parameter.name,
-              parameter.default ?? "",
-            ]),
-          );
+          n.params.arguments = {};
           changed();
           return;
         }
@@ -3583,7 +3657,8 @@
                   : t.value;
           if (
             ["number", "integer"].includes(type) &&
-            (!Number.isFinite(value) ||
+            (!t.value.trim() ||
+              !Number.isFinite(value) ||
               (type === "integer" && !Number.isInteger(value)))
           ) {
             t.setCustomValidity?.("Enter a valid numeric value.");
@@ -3593,31 +3668,80 @@
           n.params.arguments[t.dataset.subflowArg] = value;
           const json = root.querySelector("[data-subflow-arguments]");
           if (json) json.value = JSON.stringify(n.params.arguments, null, 2);
+          const row = t.closest(".we-subflow-argument");
+          if (row) {
+            row.querySelector("[data-subflow-inheritance]").textContent =
+              "Override for this call";
+            row.querySelector("[data-reset-subflow-arg]").disabled = false;
+          }
           mark();
           return;
         }
         if (t.matches("[data-subflow-version]")) {
           const n = graph.nodes.find((item) => item.id === selected);
           if (!n) return;
-          n.params.version = Math.max(1, Number(t.value) || 1);
-          mark();
-          if (
-            subflowCatalog.some(
-              (item) =>
-                item.id === n.params.subflow_id &&
-                Number(item.version) === n.params.version,
+          const version = Number(t.value),
+            previous = n.params.version,
+            currentGraph = graph;
+          const apply = (definition) => {
+            if (
+              !mounted ||
+              graph !== currentGraph ||
+              n.params.version !== previous ||
+              !definition
             )
-          )
-            render(true);
-          else
-            window.spyderWorkflowTools
-              ?.getSubflow?.(n.params.subflow_id, n.params.version)
-              .then((definition) => {
-                if (!mounted || !definition) return;
-                subflowCatalog.push(definition);
-                render(true);
-              })
-              .catch((error) => issue(error.message));
+              return;
+            const compatible = (parameter) => {
+              const value = n.params.arguments?.[parameter.name];
+              return parameter.type === "boolean"
+                ? typeof value === "boolean"
+                : parameter.type === "integer"
+                  ? Number.isInteger(value)
+                  : parameter.type === "number"
+                    ? typeof value === "number" && Number.isFinite(value)
+                    : typeof value === "string";
+            };
+            const accepted = new Set(
+              definition.parameters
+                .filter(compatible)
+                .map((parameter) => parameter.name),
+            );
+            const dropped = Object.keys(n.params.arguments || {}).filter(
+              (name) => !accepted.has(name),
+            );
+            if (
+              dropped.length &&
+              !window.confirm(
+                `Version ${version} cannot use these overrides: ${dropped.join(", ")}. Switch version and use its defaults for those settings?`,
+              )
+            ) {
+              render(true);
+              return;
+            }
+            remember();
+            n.params.version = version;
+            n.params.arguments = Object.fromEntries(
+              Object.entries(n.params.arguments || {}).filter(([name]) =>
+                accepted.has(name),
+              ),
+            );
+            subflowCatalog = [
+              ...subflowCatalog.filter(
+                (item) =>
+                  !(item.id === definition.id && item.version === version),
+              ),
+              definition,
+            ];
+            changed();
+          };
+          t.disabled = true;
+          window.spyderWorkflowTools
+            ?.getSubflow?.(n.params.subflow_id, version)
+            .then(apply)
+            .catch((error) => {
+              issue(error.message);
+              render(true);
+            });
           return;
         }
         if (t.matches("[data-subflow-arguments]")) {
@@ -3629,12 +3753,7 @@
               throw Error();
             n.params.arguments = value;
             t.setCustomValidity?.("");
-            root.querySelectorAll("[data-subflow-arg]").forEach((control) => {
-              const v = value[control.dataset.subflowArg];
-              if (control.type === "checkbox") control.checked = !!v;
-              else control.value = v ?? "";
-            });
-            mark();
+            changed();
           } catch {
             t.setCustomValidity?.("Enter a JSON object.");
           }
@@ -3870,6 +3989,15 @@
           closeSettings();
           return;
         }
+        if (b.dataset.resetSubflowArg !== undefined) {
+          const n = graph.nodes.find((item) => item.id === selected);
+          if (n?.type === "subflow") {
+            remember();
+            delete n.params.arguments[b.dataset.resetSubflowArg];
+            changed();
+          }
+          return;
+        }
         if (b.dataset.openSubflows !== undefined) {
           window.spyderWorkflowTools?.setSubflowId?.(subflowEditing?.id);
           if (!demo)
@@ -3905,17 +4033,30 @@
           window.spyderWorkflowTools?.setSubflowId?.(subflowEditing?.id);
           window.spyderWorkflowTools?.openPublish?.(clone(graph));
         } else if (b.dataset.subflowBack !== undefined) {
-          if (rootDraft) {
-            graph = rootDraft;
-            rootDraft = null;
-            subflowEditing = null;
+          if (subflowParents.length) {
+            if (
+              subflowEditing?.baseline !== JSON.stringify(graph) &&
+              !window.confirm(
+                "Leave this subflow's unpublished changes? Publish a version first to keep them. Parent workflow edits will be restored.",
+              )
+            )
+              return;
+            const parent = subflowParents.pop();
+            graph = parent.graph;
+            subflowEditing = parent.editing;
             selected = "";
             settingsNode = "";
-            undoStack = [];
-            redoStack = [];
-            changed();
-            poll();
-            visibilityChanged();
+            undoStack = parent.undo;
+            redoStack = parent.redo;
+            dirty = parent.dirty;
+            window.spyderWorkflowTools?.restoreSubflowContext?.(
+              subflowEditing?.definition || null,
+            );
+            render();
+            if (!subflowEditing) {
+              poll();
+              visibilityChanged();
+            }
           }
         } else if (b.dataset.import !== undefined)
           root.querySelector("[data-import-file]").click();
