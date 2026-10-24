@@ -582,6 +582,8 @@ class WorkflowService:
 
     def _migrate_callable_workflows(self) -> None:
         """Expose legacy callable definitions as disabled records in workflow storage."""
+        if self._storage_error:
+            return
         if self.subflows.storage_error:
             self._storage_error = "Callable workflow migration is unavailable"
             return
@@ -593,8 +595,10 @@ class WorkflowService:
             ident = definition["id"]
             existing = self._graphs.get(ident)
             if existing is not None:
-                if "callable_version" in existing:
-                    if existing["callable_version"] != definition["version"]:
+                if "callable_version" in existing or existing.get("execution", {}).get(
+                    "allow_calls"
+                ):
+                    if existing.get("callable_version") != definition["version"]:
                         additions[ident] = {
                             **existing,
                             "callable_version": definition["version"],
@@ -618,7 +622,7 @@ class WorkflowService:
             }
         if not additions:
             return
-        if len(self._graphs) + len(additions) > _MAX_WORKFLOWS:
+        if len(set(self._graphs) | set(additions)) > _MAX_WORKFLOWS:
             self._storage_error = "Workflow limit exceeded during callable migration"
             return
         prior = self._graphs
@@ -2047,19 +2051,42 @@ class WorkflowService:
     def replay_history(self, ident: str) -> dict[str, Any]:
         return self.features.replay_history(ident)
 
+    def _validate_call_permissions(self, graphs: list[dict[str, Any]]) -> None:
+        """A published snapshot remains readable, but disabled call permission blocks new calls."""
+        for graph in graphs:
+            if not isinstance(graph, dict) or not isinstance(graph.get("nodes", []), list):
+                continue
+            for node in graph.get("nodes", []):
+                if not isinstance(node, dict) or node.get("type") != "subflow":
+                    continue
+                params = node.get("params")
+                if not isinstance(params, dict) or not isinstance(params.get("subflow_id"), str):
+                    continue
+                target = self._graphs.get(params["subflow_id"])
+                if target is not None and not target.get("execution", {}).get("allow_calls", False):
+                    raise ValueError(f"Workflow {target['id']} does not accept workflow calls")
+
     def compile_graph(self, graph: dict[str, Any]) -> dict[str, Any]:
         """Expand pinned subflow calls into evaluator graph with stable internal paths."""
         with self._lock:
             if graph.get("_compiled") is True:
                 return self.subflows.compile(graph)
             compiled = self.subflows.compile(_validate_graph(graph))
+            self._validate_call_permissions([compiled])
             _validate_bindings(compiled["nodes"], compiled["edges"])
             return compiled
 
     def subflow_catalog(self) -> dict[str, Any]:
         """Read one consistent latest-version catalog snapshot."""
         with self._lock:
-            return self.subflows.list()
+            catalog = self.subflows.list()
+            catalog["subflows"] = [
+                item
+                for item in catalog["subflows"]
+                if item["id"] not in self._graphs
+                or self._graphs[item["id"]].get("execution", {}).get("allow_calls", False)
+            ]
+            return catalog
 
     def publish_subflow(self, raw: Any) -> dict[str, Any]:
         """Publish one immutable version after catalog validation."""
@@ -2174,6 +2201,9 @@ class WorkflowService:
             if not execution or not execution["allow_calls"]:
                 raise ValueError("Workflow does not allow calls")
             snapshot = self._callable_snapshot_graph(graph)
+            compiled_snapshot = self.subflows.compile(snapshot)
+            self._validate_call_permissions([compiled_snapshot])
+            _validate_bindings(compiled_snapshot["nodes"], compiled_snapshot["edges"])
             definition = self.subflows.publish(
                 {
                     "id": workflow_id,

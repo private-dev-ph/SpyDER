@@ -153,8 +153,138 @@
         );
     });
   }
+  const SNAPSHOTS_KEY = "spyder.workflow.subflows.v1";
+  let migratedText = null,
+    migration = Promise.resolve();
+  function snapshots() {
+    const text = localStorage.getItem(SNAPSHOTS_KEY) || "[]";
+    if (new TextEncoder().encode(text).byteLength > 8 * 1024 * 1024)
+      throw Error("Published workflow storage exceeds 8 MiB.");
+    const values = JSON.parse(text);
+    if (!Array.isArray(values))
+      throw Error("Published workflow storage is invalid.");
+    return values;
+  }
+  async function refreshUnifiedSummaries() {
+    const db = await database();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(
+          ["graphs", "summaries", "meta"],
+          "readwrite",
+        ),
+        meta = transaction.objectStore("meta");
+      const marker = meta.get("unified-summary-version");
+      marker.onsuccess = () => {
+        if (marker.result === 1) return;
+        const cursor = transaction.objectStore("graphs").openCursor();
+        cursor.onsuccess = () => {
+          const row = cursor.result;
+          if (!row) {
+            meta.put(1, "unified-summary-version");
+            return;
+          }
+          transaction.objectStore("summaries").put({
+            ...window.spyderWorkflowManager.summarizeWorkflow(row.value),
+            stored_bytes: new TextEncoder().encode(JSON.stringify(row.value))
+              .byteLength,
+          });
+          row.continue();
+        };
+      };
+      transaction.oncomplete = resolve;
+      transaction.onabort = transaction.onerror = () =>
+        reject(
+          transaction.error ||
+            Error(
+              "Workflow metadata migration failed; original graphs were preserved.",
+            ),
+        );
+    });
+  }
+  function ensureUnified() {
+    let text;
+    try {
+      text = localStorage.getItem(SNAPSHOTS_KEY) || "[]";
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (text === migratedText) return migration;
+    migratedText = text;
+    migration = migration
+      .catch(() => {})
+      .then(async () => {
+        await refreshUnifiedSummaries();
+        const latest = new Map();
+        for (const definition of snapshots()) {
+          if (
+            !definition ||
+            typeof definition.id !== "string" ||
+            !definition.graph ||
+            !Array.isArray(definition.parameters)
+          )
+            throw Error(
+              "A published workflow definition is invalid; original storage was preserved.",
+            );
+          if (
+            !latest.has(definition.id) ||
+            latest.get(definition.id).version < definition.version
+          )
+            latest.set(definition.id, definition);
+        }
+        for (const definition of latest.values()) {
+          const existing = await read("graphs", definition.id);
+          if (existing) {
+            if (!existing.execution?.allow_calls && !existing.callable_version)
+              throw Error(
+                `Workflow ID collision for ${definition.id}. Existing workflows and published versions were preserved.`,
+              );
+            if (existing.callable_version !== definition.version) {
+              existing.callable_version = definition.version;
+              await write(existing, existing.id);
+            }
+            continue;
+          }
+          const graph = JSON.parse(JSON.stringify(definition.graph));
+          graph.id = definition.id;
+          graph.name = definition.name;
+          graph.enabled = false;
+          graph.camera_ids = [];
+          graph.callable_version = definition.version;
+          graph.execution = {
+            run_independently: false,
+            allow_calls: true,
+            parameters: definition.parameters,
+            description: definition.description || "",
+          };
+          await write(graph, graph.id);
+        }
+      })
+      .catch((error) => {
+        migratedText = null;
+        throw error;
+      });
+    return migration;
+  }
+  function publishedReferences(id, excluding = null) {
+    return snapshots().some(
+      (definition) =>
+        definition.id !== excluding &&
+        definition.graph.nodes.some(
+          (node) => node.type === "subflow" && node.params?.subflow_id === id,
+        ),
+    );
+  }
   window.spyderWorkflowStore = {
+    migrateCallables: ensureUnified,
+    async callableIds() {
+      await ensureUnified();
+      const rows = await read("summaries");
+      return rows
+        .filter((row) => ["callable", "both"].includes(row.execution_mode))
+        .map((row) => row.id);
+    },
     async referencesSubflow(id) {
+      await ensureUnified();
       const db = await database();
       return new Promise((resolve, reject) => {
         const transaction = db.transaction("graphs", "readonly");
@@ -181,17 +311,47 @@
       });
     },
     async page(options, { signal } = {}) {
-      const summaries = await read("summaries", undefined, signal);
+      await ensureUnified();
+      const stored = await read("summaries", undefined, signal),
+        versions = snapshots();
+      const summaries = stored.map((row) => {
+        const published = versions
+          .filter((item) => item.id === row.id)
+          .map((item) => item.version)
+          .sort((a, b) => a - b);
+        const callers = new Set(
+          stored
+            .filter((item) => item.call_ids?.includes(row.id))
+            .map((item) => item.id),
+        );
+        for (const item of versions)
+          if (
+            item.id !== row.id &&
+            item.graph.nodes.some(
+              (node) =>
+                node.type === "subflow" && node.params?.subflow_id === row.id,
+            )
+          )
+            callers.add(item.id);
+        return {
+          ...row,
+          callable_version: published.at(-1) || 0,
+          versions: published,
+          caller_count: callers.size,
+        };
+      });
       return {
         ...window.spyderWorkflowManager.workflowPage(summaries, options),
         counts: window.spyderWorkflowManager.summarize(summaries),
         storage_error: null,
       };
     },
-    get(id, { signal } = {}) {
+    async get(id, { signal } = {}) {
+      await ensureUnified();
       return read("graphs", id, signal);
     },
     async save(value) {
+      await ensureUnified();
       const graph = JSON.parse(JSON.stringify({ ...value, enabled: false }));
       if (
         typeof graph.id !== "string" ||
@@ -203,10 +363,40 @@
         !Array.isArray(graph.edges)
       )
         throw new Error("Invalid workflow library entry.");
+      const latest = snapshots()
+        .filter((item) => item.id === graph.id)
+        .reduce((version, item) => Math.max(version, item.version), 0);
+      if (latest) graph.callable_version = latest;
+      else delete graph.callable_version;
+      for (const node of graph.nodes)
+        if (node.type === "subflow") {
+          const target = await read("graphs", node.params?.subflow_id);
+          if (target && !target.execution?.allow_calls)
+            throw Error(
+              "The selected workflow does not accept workflow calls.",
+            );
+        }
+      if (graph.execution?.run_independently === false) graph.enabled = false;
+      if (
+        graph.execution?.allow_calls === false &&
+        ((await this.referencesSubflow(graph.id)) ||
+          publishedReferences(graph.id, graph.id))
+      )
+        throw Error(
+          "Other workflows still call this workflow. Remove those references before disabling calls.",
+        );
       return write(graph, graph.id);
     },
-    remove(id) {
-      return write(null, id);
+    async remove(id) {
+      await ensureUnified();
+      if ((await this.referencesSubflow(id)) || publishedReferences(id, id))
+        throw Error(
+          "This workflow is called by another workflow or published version. Remove those references first.",
+        );
+      const remaining = snapshots().filter((item) => item.id !== id);
+      await write(null, id);
+      localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(remaining));
+      migratedText = null;
     },
   };
 })();

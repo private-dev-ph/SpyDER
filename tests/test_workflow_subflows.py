@@ -269,6 +269,20 @@ def test_publish_persistence_error_keeps_snapshot_and_reconciled_version(service
     assert service.get("publish-failure")["callable_version"] == 1
     assert service._storage_error == "workflow store unavailable"
 
+    # The snapshot reached disk but the editable workflow's version pointer did not.
+    # Restart must reconcile this state without treating it as an ID collision,
+    # even when the library is already at capacity.
+    import spyder_cctv.workflow as workflow_module
+
+    monkeypatch.setattr(workflow_module, "_MAX_WORKFLOWS", 1)
+    restored = WorkflowService(_Manager(), _Recorder(), service.storage_dir)
+    try:
+        assert restored._storage_error is None
+        assert restored.get("publish-failure")["callable_version"] == 1
+        assert restored.get("publish-failure")["enabled"] is False
+    finally:
+        restored.close()
+
 
 def test_imported_bundle_dependencies_appear_as_callable_workflows(tmp_path):
     source = WorkflowService(_Manager(), _Recorder(), tmp_path / "source")
@@ -787,3 +801,134 @@ def test_three_level_demo_bundle_round_trip_retains_all_exact_versions(service):
         service.compile_graph(imported["workflow"])["_paths"]
         == service.compile_graph(graph)["_paths"]
     )
+
+
+def test_disabled_call_permission_blocks_new_callers_and_imports_without_changing_snapshots(
+    service,
+):
+    definition = _definition()
+    graph = {
+        **definition["graph"],
+        "id": "permission-gate",
+        "execution": {
+            "run_independently": True,
+            "allow_calls": True,
+            "parameters": [],
+            "description": "",
+        },
+    }
+    service.save(graph)
+    service.publish_workflow(graph["id"])
+    graph = service.get(graph["id"])
+    graph["execution"]["allow_calls"] = False
+    service.save(graph)
+    caller = _workflow()
+    caller["nodes"][1]["params"]["subflow_id"] = graph["id"]
+    with pytest.raises(ValueError, match="does not accept workflow calls"):
+        service.save(caller)
+    assert not service.subflow_catalog()["subflows"]
+    # Historical versions remain readable for inspection.
+    assert service.get_subflow(graph["id"], 1)["version"] == 1
+    before = (service.storage_dir / "subflows.json").read_bytes()
+    bundle = {
+        "format": "spyder-workflow-bundle",
+        "version": 1,
+        "workflow": caller,
+        "subflows": [service.get_subflow(graph["id"], 1)],
+    }
+    with pytest.raises(ValueError, match="does not accept workflow calls"):
+        service.import_bundle(bundle)
+    assert (service.storage_dir / "subflows.json").read_bytes() == before
+
+
+def test_both_mode_has_isolated_independent_and_called_cooldowns(service):
+    graph = {
+        "id": "shared-both",
+        "name": "Shared both",
+        "enabled": False,
+        "camera_ids": ["cam1"],
+        "execution": {
+            "run_independently": True,
+            "allow_calls": True,
+            "parameters": [],
+            "description": "",
+        },
+        "nodes": [
+            _node("input", "subflow_input"),
+            _node("cooldown", "cooldown", {"seconds": 5}),
+            _node("event", "event", {"message": "Both matched"}),
+            _node("output", "subflow_output"),
+        ],
+        "edges": [
+            {"from": "input", "to": "cooldown"},
+            {"from": "cooldown", "to": "event"},
+            {"from": "event", "to": "output"},
+        ],
+    }
+    graph = service.save(graph)
+    service.publish_workflow(graph["id"])
+    parent = _workflow()
+    parent["nodes"][1]["params"]["subflow_id"] = graph["id"]
+    cv = {"engine": "insightface", "detections": [{"label": "face", "confidence": 0.9}]}
+    service._evaluate(graph, "cam1", cv, 100)
+    assert len(service.event_store.list()["events"]) == 1
+    service._evaluate(parent, "cam1", cv, 101)
+    assert len(service.event_store.list()["events"]) == 2
+    service._evaluate(graph, "cam1", cv, 102)
+    service._evaluate(parent, "cam1", cv, 102)
+    assert len(service.event_store.list()["events"]) == 2
+    graph["execution"]["run_independently"] = False
+    service.save(graph)
+    service._evaluate(parent, "cam1", cv, 108)
+    assert len(service.event_store.list()["events"]) == 3
+
+
+def test_import_never_overwrites_corrupt_workflows_during_callable_migration(service):
+    service.subflows.publish(_definition())
+    workflow_path = service.storage_dir / "workflows.json"
+    original = b'{"workflows": [broken-but-important'
+    workflow_path.write_bytes(original)
+    catalog_path = service.storage_dir / "subflows.json"
+    catalog_before = catalog_path.read_bytes()
+    restored = WorkflowService(_Manager(), _Recorder(), service.storage_dir)
+    try:
+        assert restored._storage_error
+        bundle = {
+            "format": "spyder-workflow-bundle",
+            "version": 1,
+            "workflow": {
+                "id": "plain",
+                "name": "Plain",
+                "enabled": False,
+                "camera_ids": [],
+                "nodes": [],
+                "edges": [],
+            },
+            "subflows": [],
+        }
+        with pytest.raises(ValueError, match="storage is invalid"):
+            restored.import_bundle(bundle)
+        assert workflow_path.read_bytes() == original
+        assert catalog_path.read_bytes() == catalog_before
+    finally:
+        restored.close()
+
+
+def test_malformed_dependency_is_rejected_without_changing_catalog(service):
+    plain = {
+        "id": "plain",
+        "name": "Plain",
+        "enabled": False,
+        "camera_ids": [],
+        "nodes": [],
+        "edges": [],
+    }
+    bundle = {
+        "format": "spyder-workflow-bundle",
+        "version": 1,
+        "workflow": plain,
+        "subflows": [{"graph": None}],
+    }
+    with pytest.raises(ValueError):
+        service.import_bundle(bundle)
+    assert not (service.storage_dir / "subflows.json").exists()

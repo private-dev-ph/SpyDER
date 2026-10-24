@@ -190,12 +190,14 @@
   white-space: nowrap;
 }
 .wm-mode.mode-callable {
-  color: #075985;
-  background: #0ea5e91a;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-inline-start: 3px solid var(--accent);
 }
 .wm-mode.mode-both {
-  color: #6b21a8;
-  background: #9333ea1a;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--gold, #f7d87f) 22%, var(--surface));
+  border-inline-start: 3px solid var(--gold, #f7d87f);
 }
 .wm-trigger-note {
   color: var(--muted, #726d64);
