@@ -184,6 +184,8 @@ class WorkflowFeatures:
         with self.service._lock:
             # Catalog validates the whole candidate before its single atomic write.
             self.service.subflows.import_definitions(raw["subflows"], graph=graph)
+            self.service._migrate_callable_workflows()
+            self.service._rebuild_summary_cache()
             self.service.compile_graph(graph)
         return {"workflow": graph, "subflows": raw["subflows"]}
 

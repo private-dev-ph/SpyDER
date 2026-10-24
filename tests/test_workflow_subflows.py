@@ -128,6 +128,228 @@ def test_catalog_versions_are_immutable_and_persist(service, tmp_path):
         restored.close()
 
 
+def test_legacy_catalog_migrates_to_disabled_callable_workflow_idempotently(tmp_path):
+    initial = WorkflowService(_Manager(), _Recorder(), tmp_path)
+    initial._stop.set()
+    initial._thread.join(timeout=2)
+    initial.subflows.publish(_definition())
+    initial.close()
+
+    restored = WorkflowService(_Manager(), _Recorder(), tmp_path)
+    try:
+        workflow = restored.get("reusable")
+        assert workflow["enabled"] is False
+        assert workflow["execution"]["run_independently"] is False
+        assert workflow["execution"]["allow_calls"] is True
+        assert workflow["callable_version"] == 1
+        assert restored.library(mode="callable")["total"] == 1
+        restored._migrate_callable_workflows()
+        assert restored.get("reusable") == workflow
+    finally:
+        restored.close()
+
+
+def test_corrupt_legacy_catalog_is_not_replaced_during_migration(tmp_path):
+    catalog = tmp_path / "subflows.json"
+    original = b'{"subflows":[{"damaged":true}]}'
+    catalog.write_bytes(original)
+    service = WorkflowService(_Manager(), _Recorder(), tmp_path)
+    try:
+        assert service.subflows.storage_error
+        assert service._storage_error == "Callable workflow migration is unavailable"
+        assert catalog.read_bytes() == original
+    finally:
+        service.close()
+
+
+def test_publish_workflow_extracts_callable_path_and_preserves_pins(service):
+    graph = {
+        "id": "dual",
+        "name": "Dual",
+        "enabled": False,
+        "camera_ids": ["cam1"],
+        "execution": {
+            "run_independently": True,
+            "allow_calls": True,
+            "description": "Reusable branch",
+            "parameters": [],
+        },
+        "nodes": [
+            _node("camera", "camera", {"camera_id": "cam1"}),
+            _node("detect", "detections"),
+            _node("input", "subflow_input"),
+            _node("filter", "filter"),
+            _node("event", "event", {"message": "Seen"}),
+            _node("output", "subflow_output"),
+        ],
+        "edges": [
+            {"from": "camera", "to": "detect", "input": "camera"},
+            {"from": "detect", "to": "filter"},
+            {"from": "input", "to": "filter"},
+            {"from": "filter", "to": "event"},
+            {"from": "event", "to": "output"},
+        ],
+    }
+    saved = service.save(graph)
+    first = service.publish_workflow("dual")
+    assert first["version"] == 1
+    assert {node["id"] for node in first["graph"]["nodes"]} == {
+        "input",
+        "filter",
+        "event",
+        "output",
+    }
+    assert first["graph"]["camera_ids"] == []
+    assert service.get("dual")["enabled"] is False
+    second = service.publish_workflow("dual")
+    assert second["version"] == 2
+    assert service.get_subflow("dual", 1) == first
+    assert service.get("dual")["callable_version"] == 2
+    assert service.library(mode="both")["items"][0]["callable_version"] == 2
+    assert service.library(mode="both")["items"][0]["versions"] == [1, 2]
+    assert service.library(mode="callable")["total"] == 1
+    assert service.library(mode="independent")["total"] == 1
+    assert saved["execution"]["allow_calls"] is True
+    forged = service.get("dual")
+    forged["callable_version"] = 999
+    assert service.save(forged)["callable_version"] == 2
+    caller = {
+        "id": "pinned-parent",
+        "name": "Pinned parent",
+        "enabled": False,
+        "camera_ids": [],
+        "nodes": [_node("call", "subflow", {"subflow_id": "dual", "version": 1})],
+        "edges": [],
+    }
+    service.save(caller)
+    assert service.compile_graph(caller)["_paths"]["call"] == ["call"]
+    assert service.get("pinned-parent")["nodes"][0]["params"]["version"] == 1
+
+
+def test_disabling_calls_rejected_while_snapshot_caller_exists(service):
+    service.publish_subflow(_definition())
+    caller = _workflow()
+    service.save(caller)
+    record = service.get("reusable")
+    record["execution"]["allow_calls"] = False
+    with pytest.raises(ValueError, match="referenced by callers"):
+        service.save(record)
+    with pytest.raises(ValueError, match="referenced"):
+        service.remove("reusable")
+    service.remove("outer")
+    service.remove("reusable")
+    with pytest.raises(KeyError):
+        service.get_subflow("reusable", 1)
+
+
+def test_publish_persistence_error_keeps_snapshot_and_reconciled_version(service, monkeypatch):
+    graph = {
+        "id": "publish-failure",
+        "name": "Publish failure",
+        "enabled": False,
+        "camera_ids": [],
+        "execution": {
+            "run_independently": False,
+            "allow_calls": True,
+            "description": "",
+            "parameters": [],
+        },
+        "nodes": [_node("input", "subflow_input"), _node("output", "subflow_output")],
+        "edges": [{"from": "input", "to": "output"}],
+    }
+    service.save(graph)
+
+    def fail_persist():
+        raise OSError("workflow store unavailable")
+
+    monkeypatch.setattr(service, "_persist", fail_persist)
+    with pytest.raises(OSError, match="workflow store unavailable"):
+        service.publish_workflow("publish-failure")
+    assert service.get_subflow("publish-failure", 1)["version"] == 1
+    assert service.get("publish-failure")["callable_version"] == 1
+    assert service._storage_error == "workflow store unavailable"
+
+
+def test_imported_bundle_dependencies_appear_as_callable_workflows(tmp_path):
+    source = WorkflowService(_Manager(), _Recorder(), tmp_path / "source")
+    target = WorkflowService(_Manager(), _Recorder(), tmp_path / "target")
+    try:
+        source.subflows.publish(_definition())
+        bundle = source.export_bundle(_workflow())
+        result = target.import_bundle(bundle)
+        assert result["workflow"]["id"] == "outer"
+        migrated = target.get("reusable")
+        assert migrated["execution"]["allow_calls"] is True
+        assert migrated["execution"]["run_independently"] is False
+        assert target.compile_graph(result["workflow"])["_compiled"] is True
+    finally:
+        source.close()
+        target.close()
+
+
+def test_callable_input_seeds_camera_cv_only_without_independent_sources(service):
+    graph = {
+        "id": "input-only",
+        "name": "Input only",
+        "enabled": True,
+        "camera_ids": ["cam1"],
+        "execution": {
+            "run_independently": True,
+            "allow_calls": True,
+            "description": "",
+            "parameters": [],
+        },
+        "nodes": [_node("input", "subflow_input"), _node("output", "subflow_output")],
+        "edges": [{"from": "input", "to": "output"}],
+    }
+    compiled = service.compile_graph(graph)
+    cv = {"detections": [{"label": "person"}]}
+    observed = []
+    original = service._node_signals
+    service._node_signals = lambda kind, result, *args: observed.append((kind, result)) or {}
+    try:
+        service._evaluate_graph(compiled, "cam1", cv, 1.0)
+    finally:
+        service._node_signals = original
+    assert next(result for kind, result in observed if kind == "subflow_input") == cv["detections"]
+    assert service._inference_camera_ids(compiled) == {"cam1"}
+
+    graph["nodes"].extend([_node("model", "model"), _node("detect", "detections")])
+    graph["edges"] = [
+        {"from": "input", "to": "detect"},
+        {"from": "model", "to": "detect", "input": "model"},
+        {"from": "detect", "to": "output"},
+    ]
+    compiled = service.compile_graph(graph)
+    observed = []
+    service._node_signals = lambda kind, result, *args: observed.append((kind, result)) or {}
+    try:
+        service._evaluate_graph(compiled, "cam1", cv, 1.0)
+    finally:
+        service._node_signals = original
+    assert next(result for kind, result in observed if kind == "subflow_input") == []
+    assert next(result for kind, result in observed if kind == "detections") == []
+
+
+def test_callable_only_workflow_never_runs_when_saved_enabled_flag_is_stale(service):
+    service._graphs["stale-callable"] = {
+        "id": "stale-callable",
+        "name": "Stale callable",
+        "enabled": True,
+        "camera_ids": [],
+        "execution": {
+            "run_independently": False,
+            "allow_calls": True,
+            "parameters": [],
+            "description": "",
+        },
+        "nodes": [],
+        "edges": [],
+    }
+    service._tick_locked({}, now=1.0)
+    assert "stale-callable" not in service._runtime
+
+
 def test_compile_pins_arguments_namespaces_each_caller_and_runtime_executes(service):
     service.subflows.publish(_definition())
     service.subflows.publish(_definition(camera="cam2"))
