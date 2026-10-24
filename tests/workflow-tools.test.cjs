@@ -206,3 +206,22 @@ test("demo rejects malformed node schemas before modifying browser storage", asy
     1,
   );
 });
+
+test("three-level demonstration imports and exports all pinned dependencies in the static demo", async () => {
+  const bundle = JSON.parse(
+    fs.readFileSync(
+      path.join(
+        __dirname,
+        "../examples/workflows/three-level-nested-subflows.json",
+      ),
+      "utf8",
+    ),
+  );
+  const { tools } = harness();
+  const graph = await tools.importBundle(JSON.stringify(bundle));
+  assert.equal(graph.enabled, false);
+  assert.equal((await tools.listSubflows()).length, 3);
+  const exported = await tools.exportBundle(graph);
+  assert.equal(exported.subflows.length, 3);
+  assert.ok(exported.subflows.every((item) => item.version === 1));
+});

@@ -8,6 +8,13 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const assets = path.resolve(process.argv[2]);
+const nestedDemoBundle = await readFile(
+  new URL(
+    "../examples/workflows/three-level-nested-subflows.json",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const headers = await readFile(path.join(assets, "_headers"), "utf8");
 const policy = headers
   .split("\n")
@@ -456,6 +463,51 @@ try {
       );
     }
   }
+  await evaluate(`(()=>{
+    const picker=document.querySelector('[data-import-file]'),files=new DataTransfer();
+    files.items.add(new File([${JSON.stringify(nestedDemoBundle)}],'three-level-nested-subflows.json',{type:'application/json'}));
+    Object.defineProperty(picker,'files',{configurable:true,value:files.files});
+    picker.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
+  await until(
+    "document.querySelector('[data-name]').value==='DEMO · Three-level nested face event'",
+  );
+  for (const name of [
+    "DEMO · Level 1 · Face gate",
+    "DEMO · Level 2 · Minimum count",
+    "DEMO · Level 3 · Cooldown",
+  ]) {
+    await evaluate(
+      "document.querySelector('.we-node-subflow').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
+    );
+    await until("!!document.querySelector('[data-open-subflow-definition]')");
+    await evaluate(
+      "document.querySelector('[data-open-subflow-definition]').click()",
+    );
+    await until(
+      `document.querySelector('[data-name]').value===${JSON.stringify(name)}`,
+    );
+  }
+  assert.equal(
+    await evaluate("document.querySelectorAll('.we-node-cooldown').length"),
+    1,
+  );
+  for (const name of [
+    "DEMO · Level 2 · Minimum count",
+    "DEMO · Level 1 · Face gate",
+    "DEMO · Three-level nested face event",
+  ]) {
+    await evaluate("document.querySelector('[data-subflow-back]').click()");
+    assert.equal(
+      await evaluate("document.querySelector('[data-name]').value"),
+      name,
+    );
+  }
+  assert.ok(
+    await evaluate(
+      "document.querySelector('[data-workflow-state]').textContent.includes('disabled')",
+    ),
+  );
   assert.deepEqual(await evaluate("workflowToolErrors"), []);
   assert.equal(
     networkPaths.some((url) => url.startsWith("/api/")),
