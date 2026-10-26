@@ -250,7 +250,15 @@ test("callable publication excludes independent camera triggers and unrelated ou
     { from: "source", to: "filter" },
     { from: "source", to: "other" },
   );
+  graph.history = {
+    enabled: false,
+    states: ["error"],
+    min_interval_seconds: 60,
+    always_save_errors: true,
+  };
   const snapshot = tools.extractCallableGraph(graph);
+  assert.equal(snapshot.history, undefined);
+  assert.equal(graph.history.enabled, false);
   assert.equal(snapshot.execution, undefined);
   assert.equal(snapshot.camera_ids.length, 0);
   assert.equal(snapshot.enabled, false);

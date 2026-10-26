@@ -180,6 +180,40 @@ try {
   await until(
     "document.querySelector('[data-workflow-count]').textContent.includes('1 saved')",
   );
+  await evaluate(`(()=>{
+    document.querySelector('.we-history-settings').open=true;
+    const preset=document.querySelector('[data-history-preset]');preset.value='errors';preset.dispatchEvent(new Event('change',{bubbles:true}));
+    const interval=document.querySelector('[data-history-interval]');interval.value='60';interval.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
+  assert.equal(
+    await evaluate("document.querySelector('.we-history-settings').open"),
+    true,
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[data-history-state=completed]').checked",
+    ),
+    false,
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[data-history-state=error]').checked",
+    ),
+    true,
+  );
+  await evaluate("document.querySelector('[data-save]').click()");
+  await until(
+    "document.querySelector('.we-issues').textContent.includes('saved')",
+  );
+  const storedPolicy = await evaluate(
+    "(async()=>{const page=await spyderWorkflowStore.page({query:'Saved parent'});return (await spyderWorkflowStore.get(page.items[0].id)).history})()",
+  );
+  assert.deepEqual(storedPolicy, {
+    enabled: true,
+    states: ["error"],
+    min_interval_seconds: 60,
+    always_save_errors: true,
+  });
   await evaluate(
     "document.querySelector('[data-open-workflow-manager]').click()",
   );
