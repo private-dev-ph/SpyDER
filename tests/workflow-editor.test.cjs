@@ -2795,7 +2795,7 @@ test("toolbar rows, grouped scrollable palette and camera section render indepen
   await h.flush();
   assert.match(
     h.root.innerHTML,
-    /we-studio-toolbar[\s\S]*we-studio-identity[\s\S]*data-workflow[\s\S]*we-studio-primary[\s\S]*we-activation-main[\s\S]*data-activate[\s\S]*data-save/,
+    /we-studio-toolbar[\s\S]*we-studio-identity[\s\S]*data-workflow[\s\S]*we-studio-primary[\s\S]*data-save[\s\S]*we-activation-main[\s\S]*data-activate[\s\S]*data-workflow-state/,
   );
   assert.match(h.root.innerHTML, /data-studio-panel="settings"[\s\S]*data-name/);
   assert.match(h.root.innerHTML, /data-studio-open="nodes"/);
