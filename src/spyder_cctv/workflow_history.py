@@ -43,6 +43,25 @@ _GRAPH_SECRET_KEYS = _SECRET_KEYS | {"frame_data", "image_data", "raw_frame", "r
 _STATUSES = {"completed", "filtered", "error"}
 
 
+def _history_bound(value: str, *, upper: bool) -> str:
+    """Validate an ISO date/time filter and include whole date-only end days."""
+    raw = str(value).strip()
+    try:
+        if len(raw) == 10:
+            parsed_date = datetime.fromisoformat(raw).date()
+            return datetime.combine(
+                parsed_date,
+                datetime.max.time() if upper else datetime.min.time(),
+                tzinfo=UTC,
+            ).isoformat()
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("since and until must be ISO dates or timestamps") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
+
+
 def _clean(value: Any, *, diagnostic: bool, depth: int = 0, key: str = "") -> Any:
     """Convert supported metadata to bounded JSON-safe values."""
     if key.lower() in _SECRET_KEYS:
@@ -372,10 +391,12 @@ class ExecutionHistory:
         workflow_id: str = "",
         camera_id: str = "",
         state: str = "",
+        source: str = "",
         since: str = "",
         until: str = "",
         page: int = 0,
         size: int = 25,
+        sort: str = "newest",
     ) -> dict[str, Any]:
         page = max(0, min(int(page), 1_000_000))
         size = max(1, min(int(size), 200))
@@ -385,16 +406,30 @@ class ExecutionHistory:
             ("workflow_id", workflow_id),
             ("camera_id", camera_id),
             ("state", state),
+            ("source", source),
         ):
             if value:
                 clauses.append(f"{column}=?")
                 args.append(str(value)[:256])
         if since:
+            since = _history_bound(since, upper=False)
             clauses.append("started_at>=?")
             args.append(str(since)[:64])
         if until:
+            until = _history_bound(until, upper=True)
             clauses.append("started_at<=?")
             args.append(str(until)[:64])
+        if state and state not in _STATUSES:
+            raise ValueError("state must be completed, filtered, or error")
+        if source and source not in ("live", "replay"):
+            raise ValueError("source must be live or replay")
+        ordering = {
+            "newest": "started_at DESC, id DESC",
+            "oldest": "started_at ASC, id ASC",
+            "slowest": "CAST(json_extract(summary_json, '$.duration_ms') AS REAL) DESC, started_at DESC, id DESC",
+        }
+        if sort not in ordering:
+            raise ValueError("sort must be newest, oldest, or slowest")
         if query:
             escaped = str(query)[:128].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             clauses.append(
@@ -405,12 +440,21 @@ class ExecutionHistory:
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self._lock:
             total = self._db.execute("SELECT count(*) FROM runs" + where, args).fetchone()[0]
+            page_count = (total + size - 1) // size
+            page = min(page, max(0, page_count - 1))
             rows = self._db.execute(
                 "SELECT summary_json FROM runs"
                 + where
-                + " ORDER BY started_at DESC, id LIMIT ? OFFSET ?",
+                + " ORDER BY " + ordering[sort] + " LIMIT ? OFFSET ?",
                 [*args, size, page * size],
             ).fetchall()
+            state_counts = dict(self._db.execute(
+                "SELECT state,count(*) FROM runs" + where + " GROUP BY state", args
+            ).fetchall())
+            average_duration = self._db.execute(
+                "SELECT avg(CAST(json_extract(summary_json, '$.duration_ms') AS REAL)) FROM runs" + where,
+                args,
+            ).fetchone()[0]
             stats = self._stats_locked()
             settings = dict(self._settings)
         pages = (total + size - 1) // size
@@ -422,6 +466,12 @@ class ExecutionHistory:
             "size": size,
             "settings": settings,
             "stats": stats,
+            "overview": {
+                "completed": state_counts.get("completed", 0),
+                "filtered": state_counts.get("filtered", 0),
+                "error": state_counts.get("error", 0),
+                "average_duration_ms": round(average_duration, 3) if average_duration is not None else 0,
+            },
         }
 
     def get(self, run_id: str) -> dict[str, Any] | None:
