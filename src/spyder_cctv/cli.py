@@ -5,6 +5,7 @@ import errno
 import json
 import logging
 import webbrowser
+import zipfile
 from importlib.metadata import version
 from importlib.resources import files
 from pathlib import Path
@@ -29,6 +30,25 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("vision-info", help="Inspect optional CV packages and local model location")
     showcase = commands.add_parser("export-showcase", help="Export a browser-only static showcase")
     showcase.add_argument("--output", type=Path, default=Path("dist/showcase"))
+    backup = commands.add_parser(
+        "backup", help="Create, inspect, or restore a complete local archive"
+    )
+    backup_commands = backup.add_subparsers(dest="backup_command", required=True)
+    backup_create = backup_commands.add_parser(
+        "create", help="Archive stopped application's local data"
+    )
+    backup_create.add_argument("--output", type=Path, required=True)
+    backup_create.add_argument(
+        "--include-media", action="store_true", help="Include finalized footage"
+    )
+    backup_create.add_argument(
+        "--browser-state", type=Path, help="Optional exported browser-state.json"
+    )
+    backup_inspect = backup_commands.add_parser("inspect", help="Validate archive and checksums")
+    backup_inspect.add_argument("archive", type=Path)
+    backup_restore = backup_commands.add_parser("restore", help="Restore into a new data folder")
+    backup_restore.add_argument("archive", type=Path)
+    backup_restore.add_argument("--destination", type=Path, required=True)
     serve = commands.add_parser("serve", help="Start the local dashboard")
     serve.add_argument("--port", type=int, default=8765)
     gui = commands.add_parser("gui", help="Open the camera control room in your browser")
@@ -39,6 +59,31 @@ def main(argv: list[str] | None = None) -> int:
         args.command, args.port, args.no_browser = "gui", 8765, False
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
+        if args.command == "backup":
+            from spyder_cctv.complete_backup import CompleteBackup
+
+            if args.backup_command == "create":
+                logging.info("Stop SpyDER before CLI backup for a consistent application snapshot")
+                browser_data = None
+                if args.browser_state:
+                    with args.browser_state.open("rb") as stream:
+                        browser_raw = stream.read(8 * 1024 * 1024 + 1)
+                    if len(browser_raw) > 8 * 1024 * 1024:
+                        raise ValueError("Browser state exceeds 8 MiB")
+                    browser_data = json.loads(browser_raw)
+                result = CompleteBackup.create(
+                    args.config.resolve(),
+                    args.output.resolve(),
+                    media_dir=args.media_dir.resolve() if args.media_dir else None,
+                    include_media=args.include_media,
+                    browser_data=browser_data,
+                )
+            elif args.backup_command == "inspect":
+                result = CompleteBackup.inspect(args.archive.resolve())
+            else:
+                result = CompleteBackup.restore(args.archive.resolve(), args.destination.resolve())
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "vision-info":
             print(json.dumps(engine_info(), indent=2))
             return 0
@@ -107,6 +152,6 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 manager.close()
         return 0
-    except (OSError, ValueError, RuntimeError) as error:
+    except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as error:
         logging.error("%s", error)
         return 1

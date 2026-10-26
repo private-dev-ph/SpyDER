@@ -28,7 +28,7 @@ Start with [Getting started](getting-started.md) for a working local installatio
   rules, and manual ownership.
 - [System health](user-guide/system-health.md): current capture, inference, recording,
   and storage issues.
-- [Configuration backups](user-guide/backups.md): reviewed export/import and safe restart-time restore.
+- [Backup and restore](user-guide/backups.md): complete local archives, verification, portable restores, and configuration-only transfer.
 - [Workflow editor tools](user-guide/workflow-tools.md): copy/paste, connection labels,
   validation, and latest node results.
 - [Events and notifications](user-guide/events.md): searchable activity, attachments,

@@ -41,10 +41,12 @@ behavior. See [storage allowances and recovery](../recording-storage.md).
 
 ## Backups
 
-For reviewed settings transfer, use [Configuration backup and restore](../user-guide/backups.md).
-It excludes media, model files, schedules, and browser layouts.
+Use [Backup and restore](../user-guide/backups.md) for complete local ZIP archives or
+configuration-only JSON transfer. Complete archives include models, galleries,
+workflows, events, schedules, and history. Finalized footage is optional; browser
+settings can be included by the GUI. Configuration-only JSON keeps its smaller scope.
 
-Stop active recordings and the server before taking a consistent backup. Back up the
+For a manual filesystem backup, stop active recordings and the server first. Back up the
 configuration data root, all active/archived media folders, and any externally
 registered weights or identity galleries. Use layout export for browser-owned wall
 arrangements. Workflow JSON export contains graph definitions and model references,

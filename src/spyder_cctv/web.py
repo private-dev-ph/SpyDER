@@ -24,6 +24,7 @@ from uuid import uuid4
 import cv2
 
 from spyder_cctv.analysis_preview import AnalysisPreviews
+from spyder_cctv.backup_jobs import BackupJobs, validate_job_request
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
@@ -56,6 +57,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         Path(app_data_dir) / "media" if app_data_dir is not None else manager.media_dir
     )
     detectors = DetectorCatalog()
+    restored_detectors = (
+        Path(app_data_dir) / "models" / "builtin-detectors" if app_data_dir else None
+    )
+    if restored_detectors and restored_detectors.is_dir():
+        # Prefer portable weights while retaining the catalog's shared-cache fallbacks.
+        detectors.root = restored_detectors
     try:
         galleries = FaceEnrollmentService(manager.app_data_dir / "face-galleries")
     except OSError:
@@ -82,6 +89,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         if getattr(manager, "_config_path", None)
         else None
     )
+    backup_jobs = BackupJobs(manager, recorder, workflows, schedules)
     mutation_gate = threading.RLock()
     schedule_stop = threading.Event()
     schedule_error = {"error": None}
@@ -185,6 +193,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             super().server_bind()
 
         def server_close(self) -> None:
+            backup_jobs.close()
             schedule_stop.set()
             if schedule_thread.ident is not None:
                 schedule_thread.join(timeout=6)
@@ -432,6 +441,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 )
                 data["restore_pending"] = bool(backup and backup.pending)
                 self.json(200, data)
+            elif path == "/api/system/backup/jobs":
+                self.json(200, backup_jobs.snapshot())
             elif path == "/api/system/backup":
                 if backup is None:
                     self.json(409, {"error": "Backup requires a persistent configuration"})
@@ -939,9 +950,11 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             parts = urlsplit(self.path).path.strip("/").split("/")
             # Model uploads/installations cannot start capture or alter restored files.
             # Keep their potentially slow I/O outside the camera/restore control gate.
-            if parts[:2] in (["api", "models"], ["api", "faces"], ["api", "onvif"]) or parts[
-                :3
-            ] == ["api", "vision", "detectors"]:
+            if (
+                parts == ["api", "system", "backup", "jobs", "cancel"]
+                or parts[:2] in (["api", "models"], ["api", "faces"], ["api", "onvif"])
+                or parts[:3] == ["api", "vision", "detectors"]
+            ):
                 self._post()
             else:
                 with mutation_gate:
@@ -958,12 +971,54 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(403, {"error": "Control header required"})
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
+            current_backup = backup_jobs.snapshot()
+            if (
+                current_backup.get("state") == "running"
+                and current_backup.get("operation") == "create"
+                and parts != ["api", "system", "backup", "jobs", "cancel"]
+            ):
+                self.json(
+                    409,
+                    {
+                        "error": (
+                            "A complete backup is being created. "
+                            "Wait or cancel it before changing data."
+                        )
+                    },
+                )
+                return
             try:
-                if backup and backup.pending:
+                if parts == ["api", "system", "backup", "jobs", "cancel"]:
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(202, backup_jobs.cancel())
+                elif parts == ["api", "system", "backup", "jobs"]:
+                    data = self.body(9 * 1024 * 1024)
+                    operation, path, destination, include_media, browser_data = (
+                        validate_job_request(data)
+                    )
+                    if backup_jobs.snapshot().get("state") == "running":
+                        raise RuntimeError("A full backup job is already running")
+                    if backup and backup.pending:
+                        raise RuntimeError(
+                            "Configuration restore is pending; restart SpyDER "
+                            "before changing settings"
+                        )
+                    self.json(
+                        202,
+                        backup_jobs.start(
+                            operation,
+                            path,
+                            destination=destination,
+                            include_media=include_media,
+                            browser_data=browser_data,
+                        ),
+                    )
+                elif backup and backup.pending:
                     raise RuntimeError(
                         "Configuration restore is pending; restart SpyDER before changing settings"
                     )
-                if parts[:2] in (["api", "faces"], ["api", "onvif"]):
+                elif parts[:2] in (["api", "faces"], ["api", "onvif"]):
                     self.json(200, devices.post(parts, self.body(12 * 1024 * 1024 + 4096)))
                 elif parts == ["api", "recordings", "schedules"]:
                     data = self.body(262144)
