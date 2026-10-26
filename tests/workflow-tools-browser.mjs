@@ -179,6 +179,23 @@ try {
   };
   const openStudioMenu = () =>
     evaluate("document.querySelector('.we-studio-menu').open=true");
+  const pressEnter = async () => {
+    await command(
+      "Input.dispatchKeyEvent",
+      { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 },
+      sessionId,
+    );
+    await command(
+      "Input.dispatchKeyEvent",
+      { type: "char", key: "Enter", code: "Enter", text: "\r", unmodifiedText: "\r" },
+      sessionId,
+    );
+    await command(
+      "Input.dispatchKeyEvent",
+      { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
+      sessionId,
+    );
+  };
   await command(
     "Emulation.setDeviceMetricsOverride",
     { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
@@ -265,6 +282,56 @@ try {
     document.querySelector('.we-inspector [data-delete-edge="'+input+'|'+output+'"]').click();
     for(const [from,to] of [[input,filter],[filter,output]]){document.querySelector('[data-from]').value=from;document.querySelector('[data-to]').value=to;document.querySelector('[data-connect]').click();}
   })()`);
+  assert.equal(
+    await evaluate("document.querySelector('[data-connections-panel]').open"),
+    false,
+    "Connections disclosure starts closed",
+  );
+  const connectionBaseline = await evaluate(`(() => {
+    const nodes={input:document.querySelector('.we-node-subflow_input').dataset.node,filter:document.querySelector('.we-node-filter').dataset.node,output:document.querySelector('.we-node-subflow_output').dataset.node};
+    const rows=[...document.querySelectorAll('.we-connection-row')].map(row=>({text:row.textContent,remove:row.querySelector('[data-delete-edge]')?.dataset.deleteEdge,aria:row.querySelector('[data-delete-edge]')?.getAttribute('aria-label')}));
+    return {nodes,rows,nodeCount:document.querySelectorAll('.we-canvas [data-node]').length,edgeCount:rows.length,
+      summary:document.querySelector('[data-connections-panel] summary').textContent.trim()};
+  })()`);
+  assert.equal(connectionBaseline.edgeCount, 2, "Connections list includes both graph edges");
+  assert.match(connectionBaseline.summary, /Connections.*2/i, "Disclosure summary reports connection count");
+  const inputFilterRow = connectionBaseline.rows.find(row => row.remove === `${connectionBaseline.nodes.input}|${connectionBaseline.nodes.filter}`);
+  assert.ok(inputFilterRow, "Correct input-to-filter edge has removable row");
+  assert.ok(inputFilterRow.text.toLowerCase().includes("input") && inputFilterRow.text.toLowerCase().includes("filter"), `Connection row describes endpoint types: ${inputFilterRow.text}`);
+  assert.ok(inputFilterRow.text.includes(connectionBaseline.nodes.input) && inputFilterRow.text.includes(connectionBaseline.nodes.filter), "Connection row includes endpoint identifiers");
+  assert.match(inputFilterRow.aria || "", /disconnect/i, "Connection removal control has accessible name");
+  assert.ok(inputFilterRow.aria.includes(connectionBaseline.nodes.input) && inputFilterRow.aria.includes(connectionBaseline.nodes.filter), "Accessible removal name identifies the affected endpoints");
+  await evaluate("document.querySelector('[data-connections-panel] summary').focus()");
+  await pressEnter();
+  assert.equal(
+    await evaluate("document.querySelector('[data-connections-panel]').open"),
+    true,
+    "Keyboard Enter opens the Connections disclosure",
+  );
+  await evaluate(`document.querySelector('[data-connections-panel] [data-delete-edge="${connectionBaseline.nodes.input}|${connectionBaseline.nodes.filter}"]').click()`);
+  await until("document.querySelectorAll('.we-connection-row').length===1");
+  assert.equal(
+    await evaluate("document.querySelector('[data-connections-panel]').open"),
+    true,
+    "Connections disclosure stays open after edge removal rerender",
+  );
+  assert.deepEqual(
+    await evaluate("({nodes:document.querySelectorAll('.we-canvas [data-node]').length,edges:document.querySelectorAll('.we-connection-row').length})"),
+    { nodes: connectionBaseline.nodeCount, edges: 1 },
+    "Removing one connection preserves nodes and other edge",
+  );
+  await evaluate("document.querySelector('[data-undo]').click()");
+  await until("document.querySelectorAll('.we-connection-row').length===2");
+  assert.equal(
+    await evaluate("document.querySelector('[data-connections-panel]').open"),
+    true,
+    "Undo keeps Connections disclosure open",
+  );
+  assert.equal(
+    await evaluate(`!!document.querySelector('[data-connections-panel] [data-delete-edge="${connectionBaseline.nodes.input}|${connectionBaseline.nodes.filter}"]')`),
+    true,
+    "Undo restores the removed edge row",
+  );
   await closeStudioPanel("inspector");
   await openStudioPanel("settings");
   await evaluate("document.querySelector('[data-name]').value='Unified reusable';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}))");

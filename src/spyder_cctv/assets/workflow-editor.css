@@ -2439,15 +2439,39 @@
   min-height: 44px;
 }
 .workflow-editor .we-studio-nodes .we-sidebar {
-  display: block;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
 }
+.workflow-editor .we-studio-nodes .we-studio-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workflow-editor .we-studio-nodes .we-palette-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
 .workflow-editor .we-studio-nodes .we-palette-panel > h3 {
+  flex: 0 0 auto;
   margin: 0 0 10px;
 }
+.workflow-editor .we-studio-nodes .we-palette-search {
+  flex: 0 0 auto;
+  margin-block-end: 9px;
+}
 .workflow-editor .we-studio-nodes .we-palette {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
   gap: 8px;
 }
 .workflow-editor .we-studio-nodes .we-palette button {
@@ -2492,6 +2516,7 @@
   border-radius: 0;
 }
 .workflow-editor .we-studio-inspector .we-connect {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: end;
@@ -2504,19 +2529,225 @@
   grid-column: 1 / -1;
 }
 .workflow-editor .we-studio-inspector .we-inspector {
+  flex: 1 0 auto;
   margin: 0;
+}
+.workflow-editor .we-studio-inspector .we-studio-content,
+.workflow-editor .we-studio-activity .we-studio-content {
+  display: flex;
+  flex-direction: column;
 }
 .workflow-editor .we-studio-inspector .we-inspector > h3:first-child {
   display: none;
 }
 .workflow-editor .we-studio-models .we-library {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   margin: 0;
 }
+.workflow-editor .we-studio-models .we-studio-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .workflow-editor .we-studio-models .we-library-header {
+  flex: 0 0 auto;
   gap: 12px;
 }
 .workflow-editor .we-studio-models .we-library-header h3 {
   margin-block: 0 6px;
+}
+.workflow-editor .we-studio-models .we-library-add,
+.workflow-editor .we-studio-models .we-library-tools,
+.workflow-editor .we-studio-models .we-library > [data-library-status] {
+  flex: 0 0 auto;
+}
+.workflow-editor .we-studio-models .we-library-add {
+  margin-block: 12px;
+}
+.workflow-editor .we-studio-models .we-library-tools {
+  margin-block-end: 8px;
+}
+.workflow-editor .we-studio-models .we-library > [data-library-results] {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.workflow-editor .we-studio-models .we-library-match,
+.workflow-editor .we-studio-models .we-library-pages {
+  flex: 0 0 auto;
+}
+.workflow-editor .we-studio-models .we-library-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  margin-block: 8px;
+}
+.workflow-editor .we-studio-inspector .we-connections-panel {
+  margin-block-start: 18px;
+  border-block-start: 1px solid var(--border);
+}
+.workflow-editor .we-studio-inspector .we-connections-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 8px;
+  margin-inline: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--ink);
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+.workflow-editor .we-studio-inspector .we-connections-panel > summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-inline-end: 2px solid currentColor;
+  border-block-end: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+.workflow-editor .we-studio-inspector .we-connections-panel[open] > summary::before {
+  transform: rotate(45deg);
+}
+.workflow-editor .we-studio-inspector .we-connections-panel > summary:hover {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--gold-soft) 35%, var(--surface));
+}
+.workflow-editor .we-studio-inspector .we-connections-panel > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.workflow-editor .we-studio-inspector .we-connections-panel > summary > span:first-of-type {
+  margin-inline-end: auto;
+}
+.workflow-editor .we-studio-inspector .we-connection-count {
+  display: inline-grid;
+  min-width: 28px;
+  min-height: 28px;
+  place-items: center;
+  padding-inline: 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.workflow-editor .we-studio-inspector .we-connections-help {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.workflow-editor .we-studio-inspector .we-connections-help > p {
+  flex: 1 1 220px;
+  margin: 0;
+}
+.workflow-editor .we-studio-inspector .we-connections-help > .button {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+.workflow-editor .we-studio-inspector .we-connection-list {
+  display: grid;
+  gap: 8px;
+}
+.workflow-editor .we-studio-inspector .we-connection-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 14px;
+  min-width: 0;
+  padding: 10px 0;
+  border-block-end: 1px solid var(--border);
+}
+.workflow-editor .we-studio-inspector .we-connection-route {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.workflow-editor .we-studio-inspector .we-connection-endpoint {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.workflow-editor .we-studio-inspector .we-connection-endpoint strong {
+  color: var(--ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.workflow-editor .we-studio-inspector .we-connection-endpoint small,
+.workflow-editor .we-studio-inspector .we-connection-endpoint code {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.workflow-editor .we-studio-inspector .we-connection-endpoint code {
+  width: fit-content;
+  max-width: 100%;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2, var(--surface));
+  font-variant-numeric: tabular-nums;
+}
+.workflow-editor .we-studio-inspector .we-connection-arrow {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.workflow-editor .we-studio-inspector .we-connection-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  grid-column: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.workflow-editor .we-studio-inspector .we-connection-kind {
+  color: var(--ink);
+  font-weight: 600;
+}
+.workflow-editor .we-studio-inspector .we-connection-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: auto;
+  min-width: 44px;
+  max-width: none;
+  min-height: 44px;
+  padding: 8px 11px;
+  white-space: nowrap;
+}
+.workflow-editor .we-studio-inspector .we-connection-remove .icon {
+  width: 16px;
+  height: 16px;
+}
+.workflow-editor .we-studio-activity .we-events-panel {
+  flex: 1 0 auto;
 }
 .workflow-editor .we-studio-activity .we-events {
   max-height: none;
@@ -2598,6 +2829,52 @@
   .workflow-editor .we-studio-inspector .we-connect b {
     grid-column: 1;
   }
+  .workflow-editor .we-studio-inspector .we-connection-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workflow-editor .we-studio-inspector .we-connection-remove {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+  }
+}
+@media (max-height: 600px) {
+  .workflow-editor .we-studio-models .we-studio-content {
+    display: block;
+    overflow: auto;
+  }
+  .workflow-editor .we-studio-models .we-library {
+    display: block;
+    min-height: 100%;
+    box-sizing: border-box;
+  }
+  .workflow-editor .we-studio-models .we-library > [data-library-results] {
+    display: block;
+  }
+  .workflow-editor .we-studio-models .we-library-list {
+    display: grid;
+    max-height: 38dvh;
+    min-height: 96px;
+    overflow-y: auto;
+  }
+}
+.workflow-editor .we-studio-models .we-studio-content:has(.we-library-add[open]) {
+  display: block;
+  overflow: auto;
+}
+.workflow-editor .we-studio-models .we-studio-content:has(.we-library-add[open]) .we-library {
+  display: block;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+.workflow-editor .we-studio-models .we-studio-content:has(.we-library-add[open]) [data-library-results] {
+  display: block;
+}
+.workflow-editor .we-studio-models .we-studio-content:has(.we-library-add[open]) .we-library-list {
+  display: grid;
+  max-height: 38dvh;
+  min-height: 96px;
+  overflow-y: auto;
 }
 
 /* Overlay viewport controls on the canvas stage to preserve vertical graph space. */
@@ -2684,6 +2961,10 @@
 @media (prefers-reduced-motion: reduce) {
   .workflow-editor .we-studio-menu-items {
     scroll-behavior: auto;
+  }
+  .workflow-editor .we-studio-inspector .we-connections-panel > summary,
+  .workflow-editor .we-studio-inspector .we-connections-panel > summary::before {
+    transition: none;
   }
 }
 @media (forced-colors: active) {

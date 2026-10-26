@@ -1253,7 +1253,8 @@
         templatePickerOpen = false,
         templateQuery = "",
         studioPanel = "",
-        studioReturn = "";
+        studioReturn = "",
+        connectionsOpen = false;
       let activationReview = null,
         activationBusy = false,
         activationStage = "",
@@ -2155,6 +2156,17 @@
           )}</select></label><button class="button secondary" data-library-clear>Clear filters</button></div><div data-library-results>${libraryResults()}</div><p role="status" data-library-status>${esc(libraryMessage)}</p></section>`;
       }
 
+      function restoreModelForm(form, previousFocus = null) {
+        const replacement = root.querySelector(".we-library-add");
+        if (!form?.contains || !form.querySelectorAll || !replacement?.replaceWith) return;
+        const focus = previousFocus || (form.contains(document.activeElement) ? document.activeElement : null);
+        replacement.replaceWith(form);
+        form.querySelectorAll("[data-library-file], [data-upload-model], [data-register-model]").forEach((control) => {
+          control.disabled = demo || libraryBusy;
+        });
+        focus?.focus?.({ preventScroll: true });
+      }
+
       function detectorChoice(n) {
         return n?.type === "model"
           ? builtinModel(n.params.model_id)?.detector || "custom"
@@ -2251,7 +2263,12 @@
           if (data.storage_error) libraryMessage = data.storage_error;
           // Keep active forms, ports, and drags stable while metadata arrives.
           const panel = root.querySelector(".we-library");
-          if (panel) panel.outerHTML = libraryPanel();
+          if (panel) {
+            const form = panel.querySelector?.(".we-library-add");
+            const focus = form?.contains?.(document.activeElement) ? document.activeElement : null;
+            panel.outerHTML = libraryPanel();
+            restoreModelForm(form, focus);
+          }
           refreshSignalPanels();
           loadGalleryModels(active);
         } catch (error) {
@@ -2507,6 +2524,23 @@
           ? `Connection deleted. Cleared ${removed} data link(s) whose source is no longer upstream.`
           : "Connection deleted. Nodes kept.";
         changed();
+      }
+      function connectionPanel() {
+        const endpoint = (id) => {
+          const item = graph.nodes.find((node) => node.id === id);
+          const label = TYPES[item?.type]?.label || item?.type || "Unavailable node";
+          const summary = item ? nodeSummary(item) : "Node unavailable";
+          return `<div class="we-connection-endpoint"><strong>${esc(label)}</strong>${summary !== item?.type && summary !== label ? `<small>${esc(summary)}</small>` : ""}<code title="Node ID: ${esc(id)}">${esc(id)}</code></div>`;
+        };
+        const inputLabels = { camera: "Camera input", model: "Model input", classifier: "Classifier input", detections: "Detection data" };
+        const rows = graph.edges.map((edge) => {
+          const from = graph.nodes.find((item) => item.id === edge.from);
+          const to = graph.nodes.find((item) => item.id === edge.to);
+          const fromLabel = TYPES[from?.type]?.label || edge.from;
+          const toLabel = TYPES[to?.type]?.label || edge.to;
+          return `<article class="we-connection-row" role="listitem"><div class="we-connection-route">${endpoint(edge.from)}<svg class="icon we-connection-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg>${endpoint(edge.to)}</div><div class="we-connection-meta"><span class="we-connection-kind">${esc(inputLabels[inputType(edge, graph.nodes)] || "Data input")}</span>${edge.label ? `<span class="we-connection-label">${esc(edge.label)}</span>` : ""}</div><button type="button" class="button secondary we-edge-delete we-connection-remove" data-delete-edge="${esc(edge.from)}|${esc(edge.to)}" aria-label="Disconnect ${esc(fromLabel)} ${esc(edge.from)} from ${esc(toLabel)} ${esc(edge.to)}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 15 6-6M7 7l-3 3a4 4 0 0 0 6 6l2-2m0-4 2-2a4 4 0 0 1 6 6l-3 3M3 3l18 18"/></svg><span>Disconnect</span></button></article>`;
+        }).join("");
+        return `<details class="we-connections-panel" data-connections-panel data-connections-workflow="${esc(graph.id)}" ${connectionsOpen ? "open" : ""}><summary><span>Connections</span><span class="we-connection-count">${graph.edges.length}</span></summary><div class="we-connections-help"><p>Disconnect removes only the link. Both nodes stay on the canvas.</p><button type="button" class="button secondary" data-undo ${undoStack.length ? "" : "disabled"}>Undo last edit</button></div>${rows ? `<div class="we-connection-list" role="list" aria-label="Workflow connections">${rows}</div>` : '<p class="we-connections-empty">No connections yet. Connect compatible ports on the canvas, or use Connect nodes above.</p>'}</details>`;
       }
       function beginReconnect(edge, e) {
         const source = graph.nodes.find((n) => n.id === edge.from);
@@ -2948,6 +2982,11 @@
         if (!e.target.closest?.(".we-field-tooltip")) closeFieldHelp();
       };
       function render(preserveCanvas = false) {
+        const modelForm = root.querySelector(".we-library-add");
+        const connections = root.querySelector("[data-connections-panel]");
+        if (connections && graph && connections.dataset?.connectionsWorkflow === graph.id)
+          connectionsOpen = !!connections.open;
+        else if (viewGraphId !== graph?.id) connectionsOpen = false;
         const viewportTools = `<div class="we-zoom-controls"><button class="button secondary" data-zoom-out aria-label="Zoom out">−</button><output data-zoom-level>${Math.round(viewScale * 100)}%</output><button class="button secondary" data-zoom-in aria-label="Zoom in">+</button><button class="button secondary" data-zoom-reset>Reset zoom</button><button class="button secondary" data-center>Center workflow</button></div>`;
         const activePanel = root.querySelector("[data-studio-panel][open]");
         if (activePanel)
@@ -3057,9 +3096,9 @@
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
         const menu = `<details class="we-studio-menu"><summary aria-label="Workflow menu" title="Workflow menu"><svg class="icon" aria-hidden="true"><use href="/icons.svg#reorder"/></svg><span>Workflow</span></summary><div class="we-studio-menu-items" role="group" aria-label="Workflow actions"><button type="button" data-studio-open="settings" aria-haspopup="dialog">Workflow settings</button><button type="button" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}>Templates</button><button type="button" data-open-subflows>Call workflow</button><button type="button" data-open-history>Execution history</button><button type="button" data-studio-open="activity" aria-haspopup="dialog">Recent events</button><hr><button type="button" data-import>Import workflow</button><button type="button" data-export>Export workflow</button><button type="button" data-remove ${subflowEditing || rootBridgePresent || busy || activationBusy ? "disabled" : ""}>Delete workflow</button></div></details>`;
-        const footer = `<footer class="we-studio-footer"><div class="we-studio-footer-actions"><button type="button" class="button secondary" data-edit-selected ${selectedNode ? "" : "disabled"}>Edit node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button></div><p data-studio-summary role="status">${esc(notice) || (errors.length ? `${errors.length} validation issue(s). Open Inspector to review.` : `${graph.nodes.length} nodes · ${graph.edges.length} connections · Double-click a node to edit`)}</p></footer>`;
+        const footer = `<footer class="we-studio-footer"><div class="we-studio-footer-actions"><button type="button" class="button secondary" data-edit-selected ${selectedNode ? "" : "disabled"}>Edit node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button></div><p data-studio-summary role="status">${esc(notice) || (errors.length ? `${errors.length} validation issue(s). Use Inspect node to review.` : `${graph.nodes.length} nodes · ${graph.edges.length} connections · Double-click a node to edit`)}</p></footer>`;
         const settingsContent = `<label class="we-studio-name">Workflow name<input data-name maxlength="128" value="${esc(graph.name)}"></label><p>Save keeps your draft. Enable/Disable controls independent runs; calls from other workflows use their published versions.</p><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section>${executionPanel()}${historyPanel()}`;
-        const inspectorContent = `<div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3><div class="we-parameter-fields">${settingsNode ? "<p>Settings open in dialog.</p>" : params}</div><div class="we-inspector-actions"><button type="button" class="button secondary" data-edit-selected ${selectedNode ? "" : "disabled"}>Edit node</button><button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy selected node</button></div><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button type="button" class="button secondary we-edge-delete" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || (errors.length ? `Workflow has ${errors.length} validation issue(s). Review highlighted nodes before activation.` : "")}</p>${
+        const inspectorContent = `<div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3><div class="we-parameter-fields">${settingsNode ? "<p>Settings open in dialog.</p>" : params}</div><div class="we-inspector-actions"><button type="button" class="button secondary" data-edit-selected ${selectedNode ? "" : "disabled"}>Edit node</button><button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy selected node</button></div>${connectionPanel()}<p class="we-issues" role="status">${esc(notice) || (errors.length ? `Workflow has ${errors.length} validation issue(s). Review highlighted nodes before activation.` : "")}</p>${
           errors.length
             ? `<ul class="we-validation-summary">${errors
                 .map((error) => {
@@ -3073,7 +3112,7 @@
                 )}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" class="button secondary" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>`
             : ""
         }<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div>`;
-        root.innerHTML = `<h1 class="sr-only">Models &amp; workflows</h1><div class="we-studio-toolbar">${menu}<div class="we-studio-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><small data-draft-state>${dirty ? "Unsaved changes" : workflows.some((item) => item.id === graph.id) ? "Saved" : "Draft"}${demo ? " · Browser showcase" : " · Local runtime"}</small></div><div class="we-studio-primary"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Independent execution enabled" : "Independent execution disabled"}</strong></div></div><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button></div></div>${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><section class="we-workspace"><div class="we-canvas-tools"><div class="we-studio-tools"><button type="button" class="button primary" data-studio-open="nodes" aria-haspopup="dialog">+ Add node</button><button type="button" class="button secondary" data-studio-open="models" aria-haspopup="dialog">Models</button><button type="button" class="button secondary" data-studio-open="inspector" aria-haspopup="dialog">Inspector</button></div></div>${
+        root.innerHTML = `<h1 class="sr-only">Models &amp; workflows</h1><div class="we-studio-toolbar">${menu}<div class="we-studio-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><small data-draft-state>${dirty ? "Unsaved changes" : workflows.some((item) => item.id === graph.id) ? "Saved" : "Draft"}${demo ? " · Browser showcase" : " · Local runtime"}</small></div><div class="we-studio-primary"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Independent execution enabled" : "Independent execution disabled"}</strong></div></div><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button></div></div>${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><section class="we-workspace"><div class="we-canvas-tools"><div class="we-studio-tools"><button type="button" class="button primary" data-studio-open="nodes" aria-haspopup="dialog">+ Add node</button><button type="button" class="button secondary" data-studio-open="models" aria-haspopup="dialog">Models</button><button type="button" class="button secondary" data-studio-open="inspector" aria-haspopup="dialog">Inspect node</button></div></div>${
           reconnectChoice
             ? `<div class="we-reconnect-choice" role="status"><b>Drag the connection to move its IN end:</b>${graph.edges
                 .filter(
@@ -3089,7 +3128,7 @@
                   "",
                 )}<button class="button secondary" data-cancel-reconnect>Cancel</button></div>`
             : ""
-        }<div class="we-canvas-stage"><div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div>${viewportTools}</div>${footer}</section></div>${studioDialog("nodes", "Add a node", `<aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><p>Click a node to add it, or drag it onto the canvas.</p></aside>`)}${studioDialog("settings", "Workflow settings", settingsContent)}${studioDialog("inspector", "Node & connections", inspectorContent)}${studioDialog("activity", "Recent events", `<section class="we-events-panel"><h3>Events</h3><div class="we-events">${
+        }<div class="we-canvas-stage"><div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div>${viewportTools}</div>${footer}</section></div>${studioDialog("nodes", "Add a node", `<aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><p>Click a node to add it, or drag it onto the canvas.</p></aside>`)}${studioDialog("settings", "Workflow settings", settingsContent)}${studioDialog("inspector", "Inspect node", inspectorContent)}${studioDialog("activity", "Recent events", `<section class="we-events-panel"><h3>Events</h3><div class="we-events">${
           events
             .slice(-5)
             .reverse()
@@ -3144,6 +3183,7 @@
         }
         canvasFocus?.focus?.({ preventScroll: true });
         root.insertAdjacentHTML("beforeend", studioDialog("models", "Model library", libraryPanel()));
+        restoreModelForm(modelForm);
         const settings = graph.nodes.find((n) => n.id === settingsNode);
         if (settings)
           root.insertAdjacentHTML(
@@ -5467,6 +5507,8 @@
         render();
       };
       const toggleDetails = (e) => {
+        if (e.target.matches?.("[data-connections-panel]"))
+          connectionsOpen = e.target.open;
         if (e.target.matches?.("[data-palette-group]") && !paletteQuery) {
           if (e.target.open)
             collapsedPaletteGroups.delete(e.target.dataset.paletteGroup);

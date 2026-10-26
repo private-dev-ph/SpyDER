@@ -160,6 +160,38 @@ try {
       `document.querySelector('dialog[data-studio-panel="${name}"]')?.open`,
     );
   };
+  async function assertDrawerFill(name, selector, context) {
+    const fit = await evaluate(`(() => {
+      const dialog=document.querySelector('dialog[data-studio-panel="${name}"]'),content=dialog.querySelector('.we-studio-content'),panel=dialog.querySelector('${selector}');
+      const p=panel.getBoundingClientRect(),c=content.getBoundingClientRect(),list=panel.querySelector('.we-palette');
+      if(list) list.scrollTop=list.scrollHeight;
+      return {panel:{width:p.width,height:p.height,left:p.left,right:p.right,top:p.top,bottom:p.bottom},content:{width:c.width,height:c.height,left:c.left,right:c.right,top:c.top,bottom:c.bottom},
+        inset:{left:p.left-c.left,right:c.right-p.right,top:p.top-c.top,bottom:c.bottom-p.bottom},
+        palette:list?{clientHeight:list.clientHeight,scrollHeight:list.scrollHeight,scrollTop:list.scrollTop,overflowY:getComputedStyle(list).overflowY}:null};
+    })()`);
+    assert.ok(fit.inset.left >= -1 && fit.inset.left <= 20 && fit.inset.right >= -1 && fit.inset.right <= 20, `${context}: drawer panel should fill content width ${JSON.stringify(fit)}`);
+    assert.ok(fit.inset.top >= -1 && fit.inset.top <= 24 && fit.inset.bottom >= -1 && fit.inset.bottom <= 24, `${context}: drawer panel should use content height ${JSON.stringify(fit)}`);
+    if (fit.palette) {
+      assert.ok(fit.palette.clientHeight > 0, `${context}: palette has no available height`);
+      assert.ok(fit.palette.scrollHeight > fit.palette.clientHeight, `${context}: palette should scroll at available height ${JSON.stringify(fit.palette)}`);
+      assert.ok(fit.palette.scrollTop > 0, `${context}: palette cannot scroll`);
+      assert.ok(["auto", "scroll"].includes(fit.palette.overflowY), `${context}: palette overflow is not scrollable`);
+    }
+  }
+  async function assertLibraryFitsContent(context) {
+    const fit = await evaluate(`(() => {
+      const dialog=document.querySelector('dialog[data-studio-panel="models"]'),content=dialog.querySelector('.we-studio-content'),panel=dialog.querySelector('.we-library');
+      const p=panel.getBoundingClientRect(),c=content.getBoundingClientRect();
+      content.scrollTop=content.scrollHeight;
+      const pages=dialog.querySelector('.we-library-pages').getBoundingClientRect();
+      return {content:{left:c.left,right:c.right,top:c.top,bottom:c.bottom,height:content.clientHeight,scrollHeight:content.scrollHeight,scrollTop:content.scrollTop,overflowY:getComputedStyle(content).overflowY},
+        panel:{left:p.left,right:p.right,top:p.top,bottom:p.bottom},pages:{top:pages.top,bottom:pages.bottom}};
+    })()`);
+    assert.ok(fit.panel.left >= fit.content.left - 2 && fit.panel.right <= fit.content.right + 2, `${context}: model library width exceeds drawer ${JSON.stringify(fit)}`);
+    assert.ok(fit.content.scrollHeight > fit.content.height && fit.content.scrollTop > 0, `${context}: outer drawer cannot scroll to full library ${JSON.stringify(fit)}`);
+    assert.ok(["auto", "scroll"].includes(fit.content.overflowY), `${context}: drawer content overflow is not scrollable`);
+    assert.ok(fit.pages.bottom <= fit.content.bottom + 2, `${context}: model list pagination cannot be reached at drawer bottom ${JSON.stringify(fit)}`);
+  }
   const closeStudioPanel = async (name) => {
     await evaluate(
       `document.querySelector('dialog[data-studio-panel="${name}"] [data-studio-close]').click()`,
@@ -202,11 +234,11 @@ try {
     { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
     sessionId,
   );
-  await until("!!window.spyderWorkflows && spyder.cameras().length===2");
+  await until("!!window.spyder && spyder.cameras().length===2");
   await evaluate(
     "window.templateErrors=[];window.addEventListener('error',e=>templateErrors.push(e.message));navigator.mediaDevices.getUserMedia=()=>{throw new Error('Unexpected camera access')};location.hash='vision-lab'",
   );
-  await until("!!document.querySelector('#vision-workflow-tab')");
+  await until("spyder.cameras().length===2 && !!document.querySelector('#vision-workflow-tab')");
   await evaluate("document.querySelector('#vision-workflow-tab').click()");
   await until("!!document.querySelector('[data-open-templates]')");
   assert.equal(
@@ -223,6 +255,17 @@ try {
   })()`);
   assert.ok(initialCanvas.width >= 500 && initialCanvas.height >= 240, JSON.stringify(initialCanvas));
   await openStudioPanel("nodes");
+  assert.equal(
+    await evaluate("document.querySelector('[data-studio-open=inspector]').textContent.trim()"),
+    "Inspect node",
+    "Visible inspector action is named Inspect node",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('dialog[data-studio-panel=inspector] header h3').textContent.trim()"),
+    "Inspect node",
+    "Inspector dialog title is named Inspect node",
+  );
+  await assertDrawerFill("nodes", ".we-sidebar", "desktop Nodes drawer");
   assert.equal(
     await evaluate("document.querySelector('dialog[data-studio-panel=nodes] [data-palette-search]')!==null"),
     true,
@@ -351,11 +394,24 @@ try {
   await evaluate("document.documentElement.dataset.theme='light'");
   await closeStudioPanel("settings");
   await openStudioPanel("models");
+  await assertDrawerFill("models", ".we-library", "desktop Models drawer");
   const modelCount = await evaluate("document.querySelectorAll('dialog[data-studio-panel=models] [data-library-model]').length");
   assert.equal(
     await evaluate("!!document.querySelector('dialog[data-studio-panel=models] [data-library-search]') && !!document.querySelector('dialog[data-studio-panel=models] [data-library-filter-engine]')"),
     true,
     "Models drawer exposes search and engine filters",
+  );
+  await evaluate(`(() => {
+    const add=document.querySelector('.we-library-add'),register=add.querySelector('details');
+    add.open=true;register.open=true;
+    document.querySelector('[data-library-name]').value='Unfinished registration';
+    const search=document.querySelector('[data-library-search]');search.value='render persistence check';search.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  await until("document.querySelectorAll('dialog[data-studio-panel=models] [data-library-model]').length===0");
+  assert.deepEqual(
+    await evaluate("({addOpen:document.querySelector('.we-library-add').open,registerOpen:document.querySelector('.we-library-add details').open,name:document.querySelector('[data-library-name]').value})"),
+    { addOpen: true, registerOpen: true, name: "Unfinished registration" },
+    "Open Add/Register forms and unsaved name survive model-library rerender",
   );
   await evaluate(`(() => {
     const search=document.querySelector('dialog[data-studio-panel=models] [data-library-search]');
@@ -372,6 +428,7 @@ try {
     modelCount,
     "Clearing model filters restores results",
   );
+  await evaluate("document.querySelector('.we-library-add').open=false;document.querySelector('.we-library-add details').open=false");
   await closeStudioPanel("models");
   async function assertCenteredClose(selector) {
     const result =
@@ -514,14 +571,15 @@ try {
     const panel=document.querySelector('.we-inspector'),rule=panel.querySelector('.we-rule');
     return {widths:[...rule.querySelectorAll('input,select')].map(e=>e.getBoundingClientRect().width),
       removeHeight:panel.querySelector('[data-delete-node]').getBoundingClientRect().height,
-      panelOverflow:panel.scrollWidth>panel.clientWidth+1};
+      panelOverflow:panel.scrollWidth>panel.clientWidth+1,scrollWidth:panel.scrollWidth,clientWidth:panel.clientWidth,
+      children:[...panel.children].map(e=>({class:e.className,width:e.getBoundingClientRect().width,scrollWidth:e.scrollWidth,clientWidth:e.clientWidth}))};
   })()`);
   assert.ok(
     inspectorLayout.widths.every((w) => w >= 100),
     JSON.stringify(inspectorLayout),
   );
   assert.ok(inspectorLayout.removeHeight < 60, JSON.stringify(inspectorLayout));
-  assert.equal(inspectorLayout.panelOverflow, false);
+  assert.equal(inspectorLayout.panelOverflow, false, JSON.stringify(inspectorLayout));
   await evaluate(
     "document.querySelector('.we-inspector').scrollIntoView({block:'start'})",
   );
@@ -914,6 +972,8 @@ try {
   for (const name of ["nodes", "settings", "inspector", "models", "activity"]) {
     await openStudioPanel(name);
     await assertStudioPanelFit(name, `phone ${name}`);
+    if (name === "nodes") await assertDrawerFill(name, ".we-sidebar", "phone Nodes drawer");
+    if (name === "models") await assertDrawerFill(name, ".we-library", "phone Models drawer");
     await closeStudioPanel(name);
   }
   await command(
@@ -938,8 +998,37 @@ try {
   for (const name of ["nodes", "settings", "inspector", "models", "activity"]) {
     await openStudioPanel(name);
     await assertStudioPanelFit(name, `short landscape ${name}`);
+    if (name === "nodes") await assertDrawerFill(name, ".we-sidebar", "short landscape Nodes drawer");
+    if (name === "models") await assertLibraryFitsContent("short landscape Models drawer");
     await closeStudioPanel(name);
   }
+  await command(
+    "Emulation.setDeviceMetricsOverride",
+    { width: 375, height: 720, deviceScaleFactor: 1, mobile: true },
+    sessionId,
+  );
+  await openStudioPanel("nodes");
+  await assertStudioPanelFit("nodes", "375x720 Nodes drawer");
+  await assertDrawerFill("nodes", ".we-sidebar", "375x720 Nodes drawer");
+  await closeStudioPanel("nodes");
+  await openStudioPanel("models");
+  await assertStudioPanelFit("models", "375x720 Models drawer");
+  await assertDrawerFill("models", ".we-library", "375x720 Models drawer");
+  const registerReach = await evaluate(`(() => {
+    const content=document.querySelector('dialog[data-studio-panel=models] .we-studio-content'),outer=document.querySelector('.we-library-add'),inner=outer.querySelector('details');
+    outer.open=true;inner.open=true;content.scrollTop=0;
+    const selectors=['[data-upload-model]','[data-library-file]','[data-library-name]','[data-library-path]','[data-register-model]'];
+    const controls=selectors.map(selector=>{const element=document.querySelector(selector);element.scrollIntoView({block:'center'});const r=element.getBoundingClientRect(),c=content.getBoundingClientRect();return {selector,width:r.width,height:r.height,inside:r.width>0&&r.height>0&&r.top>=c.top-1&&r.bottom<=c.bottom+1,scrollTop:content.scrollTop}});
+    content.scrollTop=content.scrollHeight;
+    const pages=document.querySelector('.we-library-pages').getBoundingClientRect(),c=content.getBoundingClientRect();
+    const library=document.querySelector('.we-library');
+    return {controls,pagesVisible:pages.width>0&&pages.height>0&&pages.bottom<=c.bottom+1,scrollTop:content.scrollTop,scrollHeight:content.scrollHeight,clientHeight:content.clientHeight,overflowY:getComputedStyle(content).overflowY,libraryScroll:[library.scrollTop,library.scrollHeight,library.clientHeight,getComputedStyle(library).overflowY],pagesRect:[pages.top,pages.bottom],contentRect:[c.top,c.bottom],detailsOpen:outer.open&&inner.open};
+  })()`);
+  assert.equal(registerReach.detailsOpen, true, "Add and register sections can both expand on mobile");
+  assert.ok(registerReach.controls.every((control) => control.inside), `Every Add/Register control can be scrolled into view: ${JSON.stringify(registerReach)}`);
+  assert.equal(registerReach.pagesVisible, true, `Model library pagination reachable at drawer end: ${JSON.stringify(registerReach)}`);
+  assert.ok(registerReach.scrollTop > 0 && registerReach.scrollHeight > registerReach.clientHeight, `Model drawer content scrolls naturally: ${JSON.stringify(registerReach)}`);
+  await closeStudioPanel("models");
   await openStudioPanel("inspector");
   await evaluate("location.hash='system'");
   await until("!!document.querySelector('.backup-file-label input[type=file]')");

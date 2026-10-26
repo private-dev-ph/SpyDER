@@ -151,7 +151,7 @@ The canvas is the main workspace. Tools open only when you need them:
 | **Workflow** menu | Workflow settings, templates, called workflows, execution history, recent events, import/export, and deletion. On phones, use the menu icon. |
 | **Add node** | Searchable node palette. Click to add, or drag a node onto the canvas. |
 | **Models** | Model registration/upload, search and filters, labels and metadata, usage checks, and removal. |
-| **Inspector** | Selected-node parameters, manual connections, connection removal, and validation review. |
+| **Inspect node** | Selected-node parameters, manual connections, connection removal, and validation review. |
 | Double-click a node, press Enter on it, or select **Edit node** | Full node settings, IN/OUT signals, bindings, field help, and local code testing. |
 | Canvas corner controls | Zoom in/out, reset zoom, and center the workflow. Drag empty canvas space to pan; arrow keys also pan when the canvas has focus. |
 
@@ -174,6 +174,11 @@ Double-click a node to edit it. Nodes accept multiple compatible connections, bu
 port types still constrain what can connect. Pan and zoom the canvas to navigate.
 Hover a connection and use its delete control to remove the edge without deleting
 nodes. Drag a connected input end to reconnect the existing edge.
+
+For manual removal, open **Inspect node** and expand **Connections**. This list starts
+collapsed and shows each source, destination, input type, and optional connection
+label. **Disconnect** removes that link while keeping both nodes. **Undo last edit**
+restores an accidental disconnection. The list stays expanded while you make edits.
 
 The input/output panels show available signals. Drag an upstream signal into a
 supported setting to create a live binding; fixed class choices remain available.
