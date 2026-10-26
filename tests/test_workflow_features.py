@@ -10,7 +10,7 @@ import pytest
 
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.web import create_server
-from spyder_cctv.workflow import WorkflowService
+from spyder_cctv.workflow import WorkflowService, _validate_graph
 
 
 class Manager:
@@ -71,6 +71,92 @@ def graph():
         ],
         "edges": [{"from": "detect", "to": "filter"}, {"from": "filter", "to": "event"}],
     }
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {
+            "enabled": 1,
+            "states": ["completed"],
+            "min_interval_seconds": 0,
+            "always_save_errors": True,
+        },
+        {"enabled": True, "states": [], "min_interval_seconds": 0, "always_save_errors": True},
+        {
+            "enabled": True,
+            "states": ["completed", "completed"],
+            "min_interval_seconds": 0,
+            "always_save_errors": True,
+        },
+        {
+            "enabled": True,
+            "states": ["unknown"],
+            "min_interval_seconds": 0,
+            "always_save_errors": True,
+        },
+        {
+            "enabled": True,
+            "states": ["completed"],
+            "min_interval_seconds": True,
+            "always_save_errors": True,
+        },
+        {
+            "enabled": True,
+            "states": ["completed"],
+            "min_interval_seconds": 86401,
+            "always_save_errors": True,
+        },
+        {
+            "enabled": True,
+            "states": ["completed"],
+            "min_interval_seconds": 0,
+            "always_save_errors": 1,
+        },
+    ],
+)
+def test_graph_history_policy_is_validated_and_preserved(policy):
+    with pytest.raises(ValueError):
+        _validate_graph({**graph(), "history": policy})
+
+
+def test_legacy_graph_gets_no_materialized_history_policy():
+    assert "history" not in _validate_graph(graph())
+    policy = {
+        "enabled": True,
+        "states": ["error", "completed"],
+        "min_interval_seconds": 60,
+        "always_save_errors": False,
+    }
+    assert _validate_graph({**graph(), "history": policy})["history"] == policy
+
+
+def test_saved_history_policy_round_trips(service):
+    policy = {
+        "enabled": False,
+        "states": ["error"],
+        "min_interval_seconds": 86400,
+        "always_save_errors": False,
+    }
+    saved = service.save({**graph(), "history": policy})
+    assert saved["history"] == policy
+    persisted = json.loads(service._path.read_text(encoding="utf-8"))["workflows"][0]
+    assert _validate_graph(persisted)["history"] == policy
+
+
+def test_compile_error_respects_disabled_workflow_history_policy(service):
+    configured = {
+        **graph(),
+        "history": {
+            "enabled": False,
+            "states": ["completed", "filtered", "error"],
+            "min_interval_seconds": 0,
+            "always_save_errors": True,
+        },
+    }
+    service._report_compile_error(configured, RuntimeError("compile failure"))
+    assert service.history.flush()
+    assert service.history.list()["total"] == 0
 
 
 def subflow():
@@ -152,6 +238,46 @@ def test_diagnostic_replay_isolated_from_events_recordings_and_live_state(servic
     assert service.history.list()["total"] == 2
     replay_record = service.history.list(source="replay")["runs"][0]
     assert replay_record["original_run_id"] == detail["id"]
+
+
+@pytest.mark.parametrize(
+    "current_policy",
+    [
+        None,
+        {"enabled": False, "states": ["completed", "filtered", "error"]},
+        {"enabled": True, "states": ["error"]},
+    ],
+)
+def test_replay_uses_current_saved_history_policy(service, current_policy):
+    service.history.configure({**service.history.settings(), "mode": "diagnostic"})
+    saved = {
+        **graph(),
+        "history": {
+            "enabled": True,
+            "states": ["completed", "filtered", "error"],
+            "min_interval_seconds": 3600,
+            "always_save_errors": True,
+        },
+    }
+    service.save(saved)
+    service._tick(1)
+    assert service.history.flush()
+    archived = service.history.list()["runs"][0]
+    current = (
+        {key: value for key, value in saved.items() if key != "history"}
+        if current_policy is None
+        else {**saved, "history": {**saved["history"], **current_policy}}
+    )
+    service.save(current)
+    replay = service.replay_history(archived["id"])
+    assert replay["run"]["state"] == "completed"
+    assert replay["history_queued"] is (current_policy is None)
+    assert service.history.flush()
+    expected_total = 2 if current_policy is None else 1
+    assert service.history.list()["total"] == expected_total
+    if current_policy is None:
+        replay_record = service.history.list(source="replay")["runs"][0]
+        assert replay_record["original_run_id"] == archived["id"]
 
 
 def test_summary_replay_rejected_and_missing_history_is_explicit(service):
