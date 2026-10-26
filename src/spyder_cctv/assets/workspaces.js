@@ -22,6 +22,12 @@
   const nav = find("#workspace-nav");
   const chooser = find("#workspace-select");
   const page = find("#workspace-page");
+  find(".skip-link")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    const main = find("main");
+    main.focus({ preventScroll: true });
+    main.scrollIntoView({ block: "start" });
+  });
   const message = document.createElement("p");
   message.className = "message workspace-message";
   message.setAttribute("role", "status");

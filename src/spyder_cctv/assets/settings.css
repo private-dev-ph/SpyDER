@@ -37,6 +37,10 @@
   grid-template-columns: minmax(0, 1fr) 260px;
   gap: 30px;
   margin-top: 20px;
+  min-width: 0;
+}
+.settings-layout > * {
+  min-width: 0;
 }
 .settings-side {
   border-left: 1px solid var(--border);
@@ -93,10 +97,12 @@
   gap: 8px;
   font-size: 12px;
   font-weight: 650;
+  min-width: 0;
 }
 .control-heading input {
-  width: 15px;
-  height: 15px;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
   accent-color: var(--accent);
 }
 .control-heading output {
@@ -216,6 +222,9 @@
   gap: 8px;
   margin-top: 22px;
 }
+.settings-actions > .button {
+  min-height: 44px;
+}
 .settings-result {
   font-size: 12px;
   color: var(--muted);
@@ -268,6 +277,17 @@
   }
   .heading-actions {
     flex-wrap: wrap;
+  }
+  #settings-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 18px;
+  }
+  .settings-actions {
+    justify-content: stretch;
+  }
+  .settings-actions > .button {
+    flex: 1 1 130px;
   }
 }
 @media (max-width: 360px) {

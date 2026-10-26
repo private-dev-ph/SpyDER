@@ -1,8 +1,9 @@
 /* Warm neutral surfaces keep the supplied reds and golds readable in both themes. */
 :root {
-  --icon-control-size: 36px;
+  scroll-padding-block-start: 132px;
+  --icon-control-size: 44px;
   --icon-glyph-size: 20px;
-  --dialog-close-size: 40px;
+  --dialog-close-size: 44px;
   color-scheme: light;
   --canvas: #f7f5ef;
   --surface: #fffefa;
@@ -55,6 +56,7 @@ body {
     14px "Segoe UI",
     system-ui,
     sans-serif;
+  line-height: 1.5;
 }
 button,
 input,
@@ -330,6 +332,7 @@ h1 span {
   }
 }
 .button {
+  min-height: 44px;
   border: 1px solid transparent;
   border-radius: 7px;
   padding: 11px 16px;
@@ -556,8 +559,8 @@ h2 {
   background: var(--live-soft);
 }
 .camera-card[data-state="reconnecting"] .camera-state {
-  color: #f7d87f;
-  background: #403822;
+  color: var(--ink);
+  background: var(--gold-soft);
 }
 .camera-card[data-state="error"] .camera-state {
   color: var(--danger);
@@ -677,14 +680,15 @@ select,
 .tile-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 .tile-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  min-height: 32px;
+  min-height: 44px;
+  min-width: 44px;
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: 5px;
@@ -805,7 +809,7 @@ input::placeholder {
 }
 .field-help {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.7;
   margin: 8px 0 0;
 }
@@ -1082,7 +1086,7 @@ kbd {
   gap: 8px;
   font-size: 11px;
   cursor: pointer;
-  min-height: 24px;
+  min-height: 44px;
 }
 .release-toggle input {
   accent-color: var(--accent);
@@ -1166,11 +1170,11 @@ button:disabled {
     --dialog-close-size: 44px;
   }
   .tile-actions button {
-    min-height: 40px;
+    min-height: 44px;
     padding: 7px 9px;
   }
   .release-toggle {
-    min-height: 36px;
+    min-height: 44px;
   }
 }
 /* Keep the camera wall visible on laptop displays and short app windows. */
@@ -1417,4 +1421,192 @@ input[type="search"]::-webkit-search-cancel-button {
   cursor: pointer;
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23BE1A1A' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 6 12 12M6 18 18 6'/%3E%3C/svg%3E")
     center / contain no-repeat;
+}
+
+/* Shared shell: compact phone layout, progressively enhanced for wider screens. */
+.skip-link {
+  position: fixed;
+  inset: 8px auto auto 8px;
+  z-index: 100;
+  padding: 12px 16px;
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  transform: translateY(-160%);
+}
+.skip-link:focus {
+  transform: none;
+}
+#main-content,
+.page-heading > div,
+.dialog-heading > div {
+  min-width: 0;
+}
+#main-content {
+  scroll-margin-top: 130px;
+}
+.wall-controls > .button,
+.wall-controls > .density-label select {
+  min-height: 44px;
+}
+.wall-arrangement {
+  flex-basis: 100%;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.wall-arrangement > summary {
+  width: fit-content;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  color: var(--ink);
+  font-weight: 650;
+  cursor: pointer;
+}
+.wall-arrangement > summary:hover {
+  background: var(--rail);
+}
+#wall-layout-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+#wall-layout-options .density-label {
+  flex: 1 1 100%;
+  justify-content: space-between;
+}
+#wall-layout-options select {
+  flex: 1;
+  min-height: 44px;
+  max-width: none;
+}
+.wall-toolbar .wall-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.wall-controls > .density-label {
+  margin: 0;
+  justify-content: space-between;
+}
+.wall-controls > .density-label select {
+  min-width: 0;
+  max-width: 100%;
+}
+.wall-controls > .wall-arrangement,
+.wall-controls > .layout-rotation-controls {
+  grid-column: 1 / -1;
+}
+.wall-controls > .button {
+  white-space: normal;
+}
+.metric-label {
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  min-block-size: 3em;
+}
+.metric-note {
+  font-size: 11px;
+}
+.metric {
+  min-width: 0;
+}
+@media (min-width: 801px) {
+  .metric-label {
+    min-block-size: 0;
+  }
+  .wall-toolbar {
+    flex-wrap: wrap;
+  }
+  .wall-toolbar .wall-controls {
+    display: flex;
+    flex: 1 1 540px;
+    justify-content: flex-end;
+  }
+  #wall-layout-options .density-label {
+    flex: 0 1 auto;
+    gap: 12px;
+  }
+  #wall-layout-options {
+    justify-content: flex-end;
+  }
+  .wall-arrangement > summary {
+    margin-left: auto;
+  }
+}
+@media (max-width: 800px) {
+  :root .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 16px;
+    padding: 8px max(16px, env(safe-area-inset-right)) 12px
+      max(16px, env(safe-area-inset-left));
+  }
+  :root .top-actions {
+    display: contents;
+  }
+  :root .mobile-workspace {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  :root .mobile-workspace select {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .brand small {
+    font-size: 9px;
+    letter-spacing: 1px;
+  }
+  .page-heading {
+    margin-bottom: 20px;
+  }
+  .page-heading .primary {
+    margin-top: 0;
+  }
+  .overview .metric {
+    padding: 12px 10px;
+  }
+  .overview .metric-label {
+    font-size: 10px;
+  }
+  .overview .metric-note {
+    display: none;
+  }
+  .activity-policy {
+    gap: 0 16px;
+  }
+  #activity-note {
+    font-size: 11px;
+  }
+  dialog .form-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  dialog .dialog-footer {
+    flex-wrap: wrap;
+  }
+  dialog .dialog-footer > .button {
+    flex: 1 1 120px;
+    white-space: normal;
+  }
+  :root input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  :root select,
+  :root textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+}
+:root[data-theme="dark"] select:not([multiple]):not([size]),
+:root[data-theme="dark"] select[size="1"]:not([multiple]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F7D87F' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+@media (forced-colors: active) {
+  :root[data-theme="dark"] select:not([multiple]):not([size]),
+  :root[data-theme="dark"] select[size="1"]:not([multiple]) {
+    background-image: none;
+  }
 }

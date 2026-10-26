@@ -1,10 +1,9 @@
 input[type="number"].themed-number-input {
   appearance: textfield;
   -moz-appearance: textfield;
-  min-height: 42px;
-  padding-inline-end: 5.25rem;
+  min-height: 44px;
+  padding-inline-end: 5.5rem;
 }
-
 input[type="number"].themed-number-input::-webkit-inner-spin-button,
 input[type="number"].themed-number-input::-webkit-outer-spin-button {
   appearance: none;
@@ -15,9 +14,9 @@ input[type="number"].themed-number-input::-webkit-outer-spin-button {
   position: absolute;
   z-index: 2;
   display: grid;
-  grid-template-columns: repeat(2, 40px);
-  width: 5rem;
-  height: 40px;
+  grid-template-columns: repeat(2, 44px);
+  width: 5.5rem;
+  height: 44px;
   pointer-events: none;
 }
 
@@ -27,8 +26,8 @@ input[type="number"].themed-number-input::-webkit-outer-spin-button {
 
 .number-stepper-button {
   display: grid;
-  min-width: 40px;
-  min-height: 40px;
+  min-width: 44px;
+  min-height: 44px;
   place-items: center;
   padding: 0;
   border: 1px solid var(--border, #d8d4ca);
@@ -54,7 +53,7 @@ input[type="number"].themed-number-input::-webkit-outer-spin-button {
 }
 
 .number-stepper-button:hover:not(:disabled) {
-  color: var(--accent-hover, #830000);
+  color: var(--focus, #830000);
   background: var(--rail, #f0eee7);
 }
 

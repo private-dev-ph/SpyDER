@@ -5,6 +5,8 @@
   display: grid;
   place-items: center;
   padding: 1rem;
+  overflow: auto;
+  overscroll-behavior: contain;
   background: rgba(7, 12, 22, 0.76);
   backdrop-filter: blur(6px);
 }
@@ -26,7 +28,9 @@
 .wt-dialog {
   width: min(920px, 96vw);
   max-height: min(88vh, 920px);
+  max-height: min(88dvh, 920px);
   overflow: auto;
+  overscroll-behavior: contain;
   padding: clamp(1rem, 3vw, 2rem);
   border: 1px solid var(--border, #344158);
   border-radius: 18px;
@@ -369,7 +373,18 @@
     grid-template-columns: auto 1fr;
   }
   .wt-dialog {
-    padding: 1rem;
+    width: min(100%, 920px);
+    padding: 0.875rem;
+    border-radius: 14px;
+  }
+  .wt-dialog > header,
+  .wt-dialog footer,
+  .wt-header-actions {
+    flex-wrap: wrap;
+  }
+  .wt-header-actions > *,
+  .wt-dialog footer > button {
+    min-height: 44px;
   }
   .wt-list .wt-subflow-row {
     grid-template-columns: minmax(0, 1fr);
@@ -386,6 +401,24 @@
   }
   .wt-publish .wt-parameter-row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+@media (max-width: 420px) {
+  .wt-backdrop {
+    place-items: start center;
+    padding: max(0.5rem, env(safe-area-inset-top)) 0.5rem
+      max(0.5rem, env(safe-area-inset-bottom));
+  }
+  .wt-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wt-capacity,
+  .wt-pages {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .wt-dialog :is(button, select) {
+    min-height: 44px;
   }
 }
 @media (max-height: 500px) {

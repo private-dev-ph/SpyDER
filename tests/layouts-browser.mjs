@@ -142,11 +142,98 @@ try {
     evaluate(
       "[...document.querySelectorAll('#cameras > .camera-card:not([hidden])')].map(c=>c.dataset.id)",
     );
+  const pressEnter = async () => {
+    await command(
+      "Input.dispatchKeyEvent",
+      {
+        type: "rawKeyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      },
+      sessionId,
+    );
+    await command(
+      "Input.dispatchKeyEvent",
+      {
+        type: "char",
+        key: "Enter",
+        code: "Enter",
+        text: "\r",
+        unmodifiedText: "\r",
+      },
+      sessionId,
+    );
+    await command(
+      "Input.dispatchKeyEvent",
+      {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      },
+      sessionId,
+    );
+  };
   await until("!!window.spyderLayouts && spyder.cameras().length===2");
+  assert.equal(
+    await evaluate("document.querySelector('.wall-arrangement').open"),
+    false,
+    "Arrange wall disclosure starts closed",
+  );
+  assert.deepEqual(
+    await evaluate(`(() => {
+      const details=document.querySelector('.wall-arrangement');
+      const controls=['#wall-layout-choice','#wall-reorder','#wall-activity-priority'];
+      return controls.map(selector=>details.contains(document.querySelector(selector)));
+    })()`),
+    [true, true, true],
+    "Layout, reorder and activity-priority controls belong to Arrange wall",
+  );
+  assert.deepEqual(
+    await evaluate(`['#start-all','#stop-all'].map(selector=>{
+      const rect=document.querySelector(selector).getBoundingClientRect();
+      return rect.width>0&&rect.height>0;
+    })`),
+    [true, true],
+    "Start and pause controls stay visible outside the closed disclosure",
+  );
+  await evaluate("document.querySelector('.wall-arrangement > summary').focus()");
+  await pressEnter();
+  assert.equal(
+    await evaluate("document.querySelector('.wall-arrangement').open"),
+    true,
+    "Keyboard Enter opens Arrange wall",
+  );
+  await evaluate("document.querySelector('.wall-arrangement > summary').focus()");
+  await pressEnter();
+  assert.equal(
+    await evaluate("document.querySelector('.wall-arrangement').open"),
+    false,
+    "Keyboard Enter closes Arrange wall",
+  );
   await evaluate(
     "window.layoutErrors=[];window.addEventListener('error',e=>layoutErrors.push(e.message));navigator.mediaDevices.getUserMedia=()=>{throw new Error('Unexpected camera access')};location.hash='layouts'",
   );
   await until("!!document.querySelector('#dummy-count')");
+  await evaluate("document.querySelector('.skip-link').click()");
+  assert.deepEqual(
+    await evaluate(`({
+      route:location.hash,
+      focused:document.activeElement.id,
+      activeWorkspace:!document.querySelector('#workspace-page').hidden,
+      controlRoomHidden:document.querySelector('#control-room').hidden
+    })`),
+    {
+      route: "#layouts",
+      focused: "main-content",
+      activeWorkspace: true,
+      controlRoomHidden: true,
+    },
+    "Skip link focuses main content without changing active workspace route",
+  );
   await change("layout-viewport", "9 / 16");
   assert.ok(
     await evaluate(

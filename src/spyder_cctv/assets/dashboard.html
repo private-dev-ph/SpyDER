@@ -50,6 +50,7 @@
     <script src="/operations.js" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <header class="topbar">
       <a class="brand" href="/" aria-label="SpyDER home"
         ><img
@@ -112,7 +113,7 @@
           <small>Runs on this computer</small>
         </div>
       </aside>
-      <main>
+      <main id="main-content" tabindex="-1">
         <div id="control-room">
           <section class="page-heading">
             <div>
@@ -206,6 +207,10 @@
                     <use href="/icons.svg#pause" /></svg
                   ><span class="action-label">Pause all</span>
                 </button>
+                <details class="wall-arrangement">
+                  <summary>Arrange wall</summary>
+                  <div id="wall-layout-options"></div>
+                </details>
               </div>
             </div>
             <div class="activity-policy">

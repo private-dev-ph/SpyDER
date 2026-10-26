@@ -1034,8 +1034,9 @@
   const quick = document.createElement("select");
   quick.id = "wall-layout-choice";
   quickLabel.append(quick);
-  $(".wall-controls").prepend(quickLabel);
-  $(".wall-controls").append(
+  const arrangementOptions = $("#wall-layout-options") || $(".wall-controls");
+  arrangementOptions.prepend(quickLabel);
+  arrangementOptions.append(
     button("Edit layouts", () => {
       location.hash = "layouts";
     }),
@@ -1552,7 +1553,7 @@
   const reorderButton = button("Reorder cameras", beginReorder);
   reorderButton.id = "wall-reorder";
   reorderButton.prepend(svgIcon("reorder"));
-  $(".wall-controls").append(reorderButton);
+  arrangementOptions.append(reorderButton);
   const priorityLabel = document.createElement("label");
   priorityLabel.className = "wall-priority-toggle";
   const priorityToggle = document.createElement("input");
@@ -1562,7 +1563,7 @@
     priorityToggle,
     document.createTextNode("Activity first"),
   );
-  $(".wall-controls").append(priorityLabel);
+  arrangementOptions.append(priorityLabel);
   priorityToggle.addEventListener("change", () => {
     try {
       const config = liveConfig();

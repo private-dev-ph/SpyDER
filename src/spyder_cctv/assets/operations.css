@@ -36,9 +36,13 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-height: 44px;
 }
 .operations-panel .operation-check input {
+  flex: 0 0 20px;
   width: auto;
+  min-width: 20px;
+  min-height: 20px;
   margin: 0;
 }
 .schedule-row {
@@ -152,7 +156,7 @@
 }
 .complete-backup-grid input[type="checkbox"] {
   flex: 0 0 auto;
-  accent-color: #be1a1a;
+  accent-color: var(--accent);
 }
 .complete-backup-report {
   white-space: pre-wrap;
@@ -166,7 +170,7 @@
 }
 #complete-backup progress {
   width: 100%;
-  accent-color: #be1a1a;
+  accent-color: var(--accent);
   margin-block: 1rem;
 }
 .complete-backup-report dl {
@@ -274,6 +278,7 @@
   font-size: 0.85rem;
   text-overflow: ellipsis;
   background: var(--surface);
+  border-color: var(--control-border);
 }
 .backup-path-control input[readonly] {
   cursor: default;
@@ -323,6 +328,13 @@
   }
   .complete-backup-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .operations-panel fieldset {
+    padding: 10px;
+  }
+  .schedule-days,
+  .schedule-cameras {
+    gap: 8px 12px;
   }
 }
 
