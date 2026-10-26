@@ -2652,6 +2652,7 @@
   flex-wrap: wrap;
   gap: 8px 12px;
   margin: 0 0 10px;
+  padding-block-start: 12px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
