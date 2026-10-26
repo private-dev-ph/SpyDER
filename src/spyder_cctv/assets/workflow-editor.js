@@ -1251,7 +1251,9 @@
         helpPinned = false,
         importGeneration = 0,
         templatePickerOpen = false,
-        templateQuery = "";
+        templateQuery = "",
+        studioPanel = "",
+        studioReturn = "";
       let activationReview = null,
         activationBusy = false,
         activationStage = "",
@@ -1266,6 +1268,53 @@
       root.className = "workflow-editor";
       root.tabIndex = -1;
       container.replaceChildren(root);
+      const studioScroll = new Map();
+      function studioDialog(name, title, content) {
+        return `<dialog id="we-studio-panel-${name}" class="we-studio-dialog we-studio-${name}" data-studio-panel="${name}" aria-labelledby="we-studio-${name}-title"><header><h3 id="we-studio-${name}-title">${title}</h3><button type="button" class="button secondary dialog-close" data-studio-close aria-label="Close ${title}"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></header><div class="we-studio-content">${content}</div></dialog>`;
+      }
+      function focusStudioOpener() {
+        const opener = studioReturn
+          ? root.querySelector(`[data-studio-open="${studioReturn}"]`)
+          : null;
+        const menu = opener?.closest?.(".we-studio-menu");
+        (opener && (!menu || menu.open)
+          ? opener
+          : root.querySelector(".we-studio-menu > summary"))?.focus?.({
+          preventScroll: true,
+        });
+      }
+      function closeStudio(redraw = false, restoreFocus = true) {
+        const dialog = root.querySelector(`[data-studio-panel="${studioPanel}"]`);
+        if (dialog) {
+          studioScroll.set(studioPanel, dialog.querySelector?.(".we-studio-content")?.scrollTop || 0);
+          dialog.close?.();
+        }
+        studioPanel = "";
+        if (redraw) render(true);
+        if (restoreFocus) focusStudioOpener();
+      }
+      const studioCancel = (event) => {
+        if (!event.target.matches?.("[data-studio-panel]")) return;
+        event.preventDefault();
+        closeStudio(true);
+      };
+      function restoreStudio(focus) {
+        if (!studioPanel) return;
+        const dialog = root.querySelector(`[data-studio-panel="${studioPanel}"]`);
+        if (!dialog?.showModal) return;
+        dialog.showModal();
+        const content = dialog.querySelector(".we-studio-content");
+        content.scrollTop = studioScroll.get(studioPanel) || 0;
+        const target = focus?.selector
+          ? dialog.querySelector(focus.selector)
+          : dialog.querySelector(studioPanel === "nodes" ? "[data-palette-search]" : studioPanel === "settings" ? "[data-name]" : studioPanel === "models" ? "[data-library-search]" : "[data-studio-close]");
+        target?.focus?.({ preventScroll: true });
+        if (focus?.start !== null && focus?.start !== undefined)
+          target?.setSelectionRange?.(focus.start, focus.end);
+      }
+      function focusWorkflowMenu() {
+        root.querySelector(".we-studio-menu > summary")?.focus?.({ preventScroll: true });
+      }
       const cameraList = () => window.spyder?.cameras?.() || cameras,
         fresh = () => ({
           id: `workflow-${Math.random().toString(36).slice(2, 14)}`,
@@ -2598,9 +2647,7 @@
       function closeTemplates() {
         templatePickerOpen = false;
         render(true);
-        root
-          .querySelector("[data-open-templates]")
-          ?.focus?.({ preventScroll: true });
+        focusWorkflowMenu();
       }
       function historyPanel() {
         const policy = workflowHistory(graph);
@@ -2901,6 +2948,17 @@
         if (!e.target.closest?.(".we-field-tooltip")) closeFieldHelp();
       };
       function render(preserveCanvas = false) {
+        const viewportTools = `<div class="we-zoom-controls"><button class="button secondary" data-zoom-out aria-label="Zoom out">−</button><output data-zoom-level>${Math.round(viewScale * 100)}%</output><button class="button secondary" data-zoom-in aria-label="Zoom in">+</button><button class="button secondary" data-zoom-reset>Reset zoom</button><button class="button secondary" data-center>Center workflow</button></div>`;
+        const activePanel = root.querySelector("[data-studio-panel][open]");
+        if (activePanel)
+          studioScroll.set(studioPanel, activePanel.querySelector?.(".we-studio-content")?.scrollTop || 0);
+        const activeElement = document.activeElement;
+        const focusAttribute = activePanel?.contains?.(activeElement)
+          ? [...(activeElement.attributes || [])].find((attribute) => attribute.name.startsWith("data-"))
+          : null;
+        const studioFocus = focusAttribute
+          ? { selector: `[${focusAttribute.name}="${CSS.escape(focusAttribute.value)}"]`, start: activeElement.selectionStart, end: activeElement.selectionEnd }
+          : null;
         const historyOpen = root.querySelector(".we-history-settings")?.open;
         closeFieldHelp();
         const pickerFocus =
@@ -2998,16 +3056,24 @@
                 "",
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
-        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar">${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}<div class="we-toolbar-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><label>Name<input data-name maxlength="128" value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Independent execution enabled" : "Independent execution disabled"}</strong></div><span>Enable/Disable controls independent runs. Calls from other workflows remain available through published versions.</span></div><button type="button" class="button secondary" data-open-subflows>Call workflow</button><button type="button" class="button secondary" data-open-history>Execution history</button><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${subflowEditing || rootBridgePresent || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div>${executionPanel()}${historyPanel()}<div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
-          events
-            .slice(-5)
-            .reverse()
-            .map(
-              (e) =>
-                `<p>${esc(e.message || "Detection event")}<small>${esc(e.camera_id || "")} · ${esc(e.created_at ? new Date(e.created_at * 1000).toLocaleTimeString() : "")}</small></p>`,
-            )
-            .join("") || "<p>No recent events.</p>"
-        }</div></section></aside><section class="we-workspace"><div class="we-canvas-tools"><span>Drag empty space to pan. Middle-drag anywhere on the canvas.</span><div class="we-zoom-controls"><button class="button secondary" data-zoom-out aria-label="Zoom out">−</button><output data-zoom-level>${Math.round(viewScale * 100)}%</output><button class="button secondary" data-zoom-in aria-label="Zoom in">+</button><button class="button secondary" data-zoom-reset>Reset zoom</button><button class="button secondary" data-center>Center workflow</button></div></div>${
+        const menu = `<details class="we-studio-menu"><summary aria-label="Workflow menu" title="Workflow menu"><svg class="icon" aria-hidden="true"><use href="/icons.svg#reorder"/></svg><span>Workflow</span></summary><div class="we-studio-menu-items" role="group" aria-label="Workflow actions"><button type="button" data-studio-open="settings" aria-haspopup="dialog">Workflow settings</button><button type="button" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}>Templates</button><button type="button" data-open-subflows>Call workflow</button><button type="button" data-open-history>Execution history</button><button type="button" data-studio-open="activity" aria-haspopup="dialog">Recent events</button><hr><button type="button" data-import>Import workflow</button><button type="button" data-export>Export workflow</button><button type="button" data-remove ${subflowEditing || rootBridgePresent || busy || activationBusy ? "disabled" : ""}>Delete workflow</button></div></details>`;
+        const footer = `<footer class="we-studio-footer"><div class="we-studio-footer-actions"><button type="button" class="button secondary" data-edit-selected ${selectedNode ? "" : "disabled"}>Edit node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button></div><p data-studio-summary role="status">${esc(notice) || (errors.length ? `${errors.length} validation issue(s). Open Inspector to review.` : `${graph.nodes.length} nodes · ${graph.edges.length} connections · Double-click a node to edit`)}</p></footer>`;
+        const settingsContent = `<label class="we-studio-name">Workflow name<input data-name maxlength="128" value="${esc(graph.name)}"></label><p>Save keeps your draft. Enable/Disable controls independent runs; calls from other workflows use their published versions.</p><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section>${executionPanel()}${historyPanel()}`;
+        const inspectorContent = `<div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3><div class="we-parameter-fields">${settingsNode ? "<p>Settings open in dialog.</p>" : params}</div><div class="we-inspector-actions"><button type="button" class="button secondary" data-edit-selected ${selectedNode ? "" : "disabled"}>Edit node</button><button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy selected node</button></div><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button type="button" class="button secondary we-edge-delete" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || (errors.length ? `Workflow has ${errors.length} validation issue(s). Review highlighted nodes before activation.` : "")}</p>${
+          errors.length
+            ? `<ul class="we-validation-summary">${errors
+                .map((error) => {
+                  const id = graph.nodes.find(
+                    (item) => item.id && error.includes(item.id),
+                  )?.id;
+                  return `<li>${esc(error)}${id ? ` <button type="button" class="button secondary" data-focus-node="${esc(id)}">Review ${esc(TYPES[graph.nodes.find((item) => item.id === id)?.type]?.label || "node")} ${esc(id)}</button>` : ""}</li>`;
+                })
+                .join(
+                  "",
+                )}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" class="button secondary" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>`
+            : ""
+        }<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div>`;
+        root.innerHTML = `<h1 class="sr-only">Models &amp; workflows</h1><div class="we-studio-toolbar">${menu}<div class="we-studio-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><small data-draft-state>${dirty ? "Unsaved changes" : workflows.some((item) => item.id === graph.id) ? "Saved" : "Draft"}${demo ? " · Browser showcase" : " · Local runtime"}</small></div><div class="we-studio-primary"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Independent execution enabled" : "Independent execution disabled"}</strong></div></div><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button></div></div>${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><section class="we-workspace"><div class="we-canvas-tools"><div class="we-studio-tools"><button type="button" class="button primary" data-studio-open="nodes" aria-haspopup="dialog">+ Add node</button><button type="button" class="button secondary" data-studio-open="models" aria-haspopup="dialog">Models</button><button type="button" class="button secondary" data-studio-open="inspector" aria-haspopup="dialog">Inspector</button></div></div>${
           reconnectChoice
             ? `<div class="we-reconnect-choice" role="status"><b>Drag the connection to move its IN end:</b>${graph.edges
                 .filter(
@@ -3023,20 +3089,16 @@
                   "",
                 )}<button class="button secondary" data-cancel-reconnect>Cancel</button></div>`
             : ""
-        }<div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div><div class="we-connect"><b>Connect nodes</b><label>From<select data-from>${options}</select></label><label>To<select data-to>${options}</select></label><button class="button secondary" data-connect ${graph.nodes.length < 2 ? "disabled" : ""}>Connect</button></div><div class="we-inspector"><h3>Node parameters</h3><div class="we-parameter-fields">${settingsNode ? "<p>Settings open in dialog.</p>" : params}</div><div class="we-inspector-actions"><button class="button secondary" data-delete-node ${selectedNode ? "" : "disabled"}>Remove node</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy selected node</button></div><h3>Connections</h3><div>${graph.edges.map((e) => `<p>${esc(graph.nodes.find((n) => n.id === e.from)?.type || e.from)} → ${esc(graph.nodes.find((n) => n.id === e.to)?.type || e.to)} <button type="button" class="button secondary we-edge-delete" data-delete-edge="${esc(e.from)}|${esc(e.to)}" aria-label="Remove connection"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></p>`).join("") || "<p>No connections.</p>"}</div><p class="we-issues" role="status">${esc(notice) || (errors.length ? `Workflow has ${errors.length} validation issue(s). Review highlighted nodes before activation.` : "")}</p>${
-          errors.length
-            ? `<ul class="we-validation-summary">${errors
-                .map((error) => {
-                  const id = graph.nodes.find(
-                    (item) => item.id && error.includes(item.id),
-                  )?.id;
-                  return `<li>${esc(error)}${id ? ` <button type="button" class="button secondary" data-focus-node="${esc(id)}">Review ${esc(TYPES[graph.nodes.find((item) => item.id === id)?.type]?.label || "node")} ${esc(id)}</button>` : ""}</li>`;
-                })
-                .join(
-                  "",
-                )}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" class="button secondary" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>`
-            : ""
-        }<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
+        }<div class="we-canvas-stage"><div class="we-canvas-wrap" tabindex="0" role="region" aria-label="Workflow canvas. Drag background or use arrow keys to pan."><div class="we-canvas" data-canvas><svg class="we-wires" aria-label="Workflow connections">${paths}</svg>${cards || '<p class="we-empty">Add a node to start a workflow.</p>'}</div></div>${viewportTools}</div>${footer}</section></div>${studioDialog("nodes", "Add a node", `<aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><p>Click a node to add it, or drag it onto the canvas.</p></aside>`)}${studioDialog("settings", "Workflow settings", settingsContent)}${studioDialog("inspector", "Node & connections", inspectorContent)}${studioDialog("activity", "Recent events", `<section class="we-events-panel"><h3>Events</h3><div class="we-events">${
+          events
+            .slice(-5)
+            .reverse()
+            .map(
+              (e) =>
+                `<p>${esc(e.message || "Detection event")}<small>${esc(e.camera_id || "")} · ${esc(e.created_at ? new Date(e.created_at * 1000).toLocaleTimeString() : "")}</small></p>`,
+            )
+            .join("") || "<p>No recent events.</p>"
+        }</div></section><button type="button" class="button secondary" data-open-history>Open execution history</button>`)}<input type="file" accept=".json,application/json" data-import-file hidden>${activationModal}`;
         if (historyOpen) root.querySelector(".we-history-settings").open = true;
         if (retainedCanvas) {
           const replacement = root.querySelector("[data-canvas]");
@@ -3081,7 +3143,7 @@
           centerCanvas(graph.nodes[0]);
         }
         canvasFocus?.focus?.({ preventScroll: true });
-        root.insertAdjacentHTML("beforeend", libraryPanel());
+        root.insertAdjacentHTML("beforeend", studioDialog("models", "Model library", libraryPanel()));
         const settings = graph.nodes.find((n) => n.id === settingsNode);
         if (settings)
           root.insertAdjacentHTML(
@@ -3131,9 +3193,16 @@
               );
           }
         }
+        root.querySelectorAll?.("[data-studio-open]")?.forEach((opener) => {
+          opener.setAttribute("aria-controls", `we-studio-panel-${opener.dataset.studioOpen}`);
+          opener.setAttribute("aria-expanded", String(opener.dataset.studioOpen === studioPanel));
+        });
+        restoreStudio(studioFocus);
       }
       const mark = () => {
           dirty = true;
+          const draftState = root.querySelector("[data-draft-state]");
+          if (draftState) draftState.textContent = `Unsaved changes · ${demo ? "Browser showcase" : "Local runtime"}`;
           graphRevision++;
           if (demo)
             try {
@@ -3178,6 +3247,8 @@
           notice = s;
           const el = root.querySelector(".we-issues");
           if (el) el.textContent = s;
+          const summary = root.querySelector("[data-studio-summary]");
+          if (summary) summary.textContent = s;
           const modalStatus = root.querySelector("[data-signal-status]");
           if (modalStatus) modalStatus.textContent = s;
         };
@@ -4164,6 +4235,13 @@
         changed();
       };
       const click = async (e) => {
+        const openMenu = root.querySelector(".we-studio-menu[open]");
+        if (openMenu && !openMenu.contains?.(e.target)) openMenu.open = false;
+        if (e.target.matches?.("[data-studio-panel][open]")) {
+          const bounds = e.target.getBoundingClientRect();
+          if (e.clientX < bounds.left || e.clientX > bounds.right || e.clientY < bounds.top || e.clientY > bounds.bottom) closeStudio(true);
+          return;
+        }
         const help = e.target.closest?.("[data-field-help]");
         if (help) {
           e.preventDefault();
@@ -4198,6 +4276,35 @@
         }
         const b = e.target.closest("button");
         if (!b) return;
+        const menu = b.closest?.(".we-studio-menu");
+        if (menu) {
+          menu.open = false;
+          focusWorkflowMenu();
+        }
+        if (b.dataset.studioOpen) {
+          if (!["nodes", "settings", "inspector", "models", "activity"].includes(b.dataset.studioOpen)) return;
+          closeStudio(false, false);
+          studioPanel = b.dataset.studioOpen;
+          studioReturn = studioPanel;
+          render(true);
+          return;
+        }
+        if (b.dataset.studioClose !== undefined) {
+          closeStudio(true);
+          return;
+        }
+        if (b.dataset.editSelected !== undefined) {
+          if (!selected) return;
+          closeStudio(false, false);
+          modalFocusReturn = root.querySelector(`[data-node="${selected}"]`);
+          settingsNode = selected;
+          if (!demo && graph.nodes.find((item) => item.id === selected)?.type === "notification") window.spyderNotifications?.useNode?.();
+          testPane = false;
+          render(true);
+          root.querySelector("[data-close-settings]")?.focus?.();
+          return;
+        }
+        if (studioPanel && ["openTemplates", "openWorkflowManager", "openSubflows", "openHistory", "publishSubflow", "openSubflowDefinition", "focusNode", "libraryUse", "activate", "remove"].some((key) => b.dataset[key] !== undefined)) closeStudio(false);
         if (b.dataset.refreshDetectors !== undefined) {
           await loadDetectorCatalog();
           return;
@@ -4419,6 +4526,8 @@
           if (created && ["model", "classifier"].includes(created.type)) {
             created.params.model_id = model.id;
             changed();
+            centerCanvas(created);
+            root.querySelector(`[data-node="${created.id}"]`)?.focus?.({ preventScroll: true });
           }
         } else if (b.dataset.requestRemoveModel) {
           if (demo || libraryBusy) return;
@@ -4597,7 +4706,12 @@
           root.querySelector(`[data-node="${selected}"]`)?.focus?.();
         } else if (b.dataset.undo !== undefined) restore(undoStack, redoStack);
         else if (b.dataset.redo !== undefined) restore(redoStack, undoStack);
-        else if (b.dataset.add) add(b.dataset.add);
+        else if (b.dataset.add) {
+          closeStudio(false, false);
+          add(b.dataset.add);
+          centerCanvas(graph.nodes.find((item) => item.id === selected));
+          root.querySelector(`[data-node="${selected}"]`)?.focus?.({ preventScroll: true });
+        }
         else if (b.dataset.codeTest !== undefined) {
           if (demo) return;
           testPane = true;
@@ -4686,9 +4800,7 @@
           activationError = false;
           notice = `${entry.name} draft created. ${entry.setup} Review settings, save, then enable. Undo restores your previous draft.`;
           changed();
-          root
-            .querySelector("[data-open-templates]")
-            ?.focus?.({ preventScroll: true });
+          focusWorkflowMenu();
         } else if (b.dataset.connect !== undefined) {
           connectNodes(
             root.querySelector("[data-from]").value,
@@ -4736,6 +4848,7 @@
         if (e.target.closest(".we-preview")) return;
         const card = e.target.closest("[data-node]");
         if (!card) return;
+        closeStudio(false, false);
         modalFocusReturn = card;
         selected = card.dataset.node;
         settingsNode = selected;
@@ -4761,10 +4874,24 @@
           selectedEdge = e.target.dataset.deleteEdge;
       };
       const keydown = (e) => {
+        if (e.key === "Escape" && root.querySelector(".we-studio-menu")?.open) {
+          e.preventDefault();
+          root.querySelector(".we-studio-menu").open = false;
+          focusWorkflowMenu();
+          return;
+        }
         if (e.key === "Escape" && activeHelp) {
           e.preventDefault();
           e.stopPropagation();
           closeFieldHelp();
+          return;
+        }
+        if (e.key === "Escape" && studioPanel && e.target.closest?.("[data-studio-panel]")) {
+          // An open select picker gets the first Escape; otherwise dismiss the
+          // drawer even when a native search field contains a query.
+          if (root.querySelector("[data-studio-panel][open] select:open")) return;
+          e.preventDefault();
+          closeStudio(true);
           return;
         }
         if (templatePickerOpen) {
@@ -4873,6 +5000,7 @@
         }
         if (e.key === "Enter" && e.target.matches("[data-node]")) {
           e.preventDefault();
+          closeStudio(false, false);
           modalFocusReturn = e.target;
           selected = e.target.dataset.node;
           settingsNode = selected;
@@ -4930,7 +5058,8 @@
         if (
           e.key === "Delete" &&
           selectedEdge &&
-          !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName || "")
+          !/INPUT|TEXTAREA|SELECT|BUTTON|SUMMARY/.test(e.target.tagName || "") &&
+          !e.target.closest?.("[data-studio-panel], [data-settings-modal], [data-template-modal]")
         ) {
           removeConnection(selectedEdge);
           return;
@@ -4938,7 +5067,8 @@
         if (
           e.key === "Delete" &&
           selected &&
-          !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName || "")
+          !/INPUT|TEXTAREA|SELECT|BUTTON|SUMMARY/.test(e.target.tagName || "") &&
+          !e.target.closest?.("[data-studio-panel], [data-settings-modal], [data-template-modal]")
         ) {
           remember();
           graph.nodes = graph.nodes.filter((n) => n.id !== selected);
@@ -4974,6 +5104,9 @@
         }
         const p = e.target.closest("[data-add]"),
           n = e.target.closest("[data-node]");
+        // Keep the native drag source mounted while releasing the canvas from
+        // the modal drawer's inert background for the drop operation.
+        if (p) closeStudio(false, false);
         drag = p
           ? { type: p.dataset.add }
           : n
@@ -5347,6 +5480,7 @@
       };
       document.addEventListener("visibilitychange", visibilityChanged);
       root.addEventListener("toggle", toggleDetails, true);
+      root.addEventListener("cancel", studioCancel, true);
       root.addEventListener("input", input);
       root.addEventListener("change", change);
       root.addEventListener("click", click);
@@ -5447,6 +5581,7 @@
         );
         window.removeEventListener("spyder:cameras", refreshCameras);
         root.removeEventListener("toggle", toggleDetails, true);
+        root.removeEventListener("cancel", studioCancel, true);
         root.removeEventListener("input", input);
         root.removeEventListener("change", change);
         root.removeEventListener("click", click);

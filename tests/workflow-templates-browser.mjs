@@ -124,7 +124,7 @@ try {
   }
 
   async function until(expression) {
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 200; i++) {
       if (await evaluate(expression)) return;
       await delay(100);
     }
@@ -152,6 +152,51 @@ try {
     evaluate(
       "[...document.querySelectorAll('#cameras > .camera-card:not([hidden])')].map(c=>c.dataset.id)",
     );
+  const openStudioPanel = async (name) => {
+    await evaluate(
+      `document.querySelector('.we-studio-menu').open=true;document.querySelector('[data-studio-open="${name}"]').click()`,
+    );
+    await until(
+      `document.querySelector('dialog[data-studio-panel="${name}"]')?.open`,
+    );
+  };
+  const closeStudioPanel = async (name) => {
+    await evaluate(
+      `document.querySelector('dialog[data-studio-panel="${name}"] [data-studio-close]').click()`,
+    );
+    await until(
+      `!document.querySelector('dialog[data-studio-panel="${name}"]')?.open`,
+    );
+  };
+  const openTemplates = async () => {
+    await evaluate("document.querySelector('.we-studio-menu').open=true");
+    await evaluate("document.querySelector('[data-open-templates]').click()");
+    await until("!!document.querySelector('[data-template-modal]')");
+  };
+  const pressEscape = async () => {
+    await command(
+      "Input.dispatchKeyEvent",
+      { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
+      sessionId,
+    );
+    await command(
+      "Input.dispatchKeyEvent",
+      { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
+      sessionId,
+    );
+  };
+  const pressDelete = async () => {
+    await command(
+      "Input.dispatchKeyEvent",
+      { type: "rawKeyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 },
+      sessionId,
+    );
+    await command(
+      "Input.dispatchKeyEvent",
+      { type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 },
+      sessionId,
+    );
+  };
   await command(
     "Emulation.setDeviceMetricsOverride",
     { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
@@ -164,6 +209,110 @@ try {
   await until("!!document.querySelector('#vision-workflow-tab')");
   await evaluate("document.querySelector('#vision-workflow-tab').click()");
   await until("!!document.querySelector('[data-open-templates]')");
+  assert.equal(
+    await evaluate(
+      "[...document.querySelectorAll('dialog[data-studio-panel]')].every(dialog=>!dialog.open)",
+    ),
+    true,
+    "Studio drawers start closed",
+  );
+  const initialCanvas = await evaluate(`(() => {
+    const canvas=document.querySelector('.we-canvas-wrap').getBoundingClientRect();
+    return {width:canvas.width,height:canvas.height,nodes:document.querySelectorAll('.we-canvas [data-node]').length,
+      draft:localStorage.getItem('spyder.workflow-editor.draft')};
+  })()`);
+  assert.ok(initialCanvas.width >= 500 && initialCanvas.height >= 240, JSON.stringify(initialCanvas));
+  await openStudioPanel("nodes");
+  assert.equal(
+    await evaluate("document.querySelector('dialog[data-studio-panel=nodes] [data-palette-search]')!==null"),
+    true,
+    "Node drawer exposes searchable palette",
+  );
+  await evaluate(`(() => {
+    const search=document.querySelector('dialog[data-studio-panel=nodes] [data-palette-search]');
+    search.value='filter';search.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  assert.equal(
+    await evaluate("document.querySelectorAll('dialog[data-studio-panel=nodes] [data-add=filter]').length"),
+    1,
+  );
+  await pressEscape();
+  await until("!document.querySelector('dialog[data-studio-panel=nodes]')?.open");
+  const nodesFocus = await evaluate(`({
+    opener:document.activeElement.matches('[data-studio-open=nodes]'),
+    active:document.activeElement.outerHTML.slice(0,160),
+    menuOpen:document.querySelector('.we-studio-menu').open
+  })`);
+  assert.equal(nodesFocus.opener, true, `Escape returns focus to Nodes opener: ${JSON.stringify(nodesFocus)}`);
+  assert.equal(
+    await evaluate("document.querySelectorAll('.we-canvas [data-node]').length"),
+    initialCanvas.nodes,
+    "Escape closes drawer without changing canvas",
+  );
+  assert.equal(
+    await evaluate("localStorage.getItem('spyder.workflow-editor.draft')"),
+    initialCanvas.draft,
+    "Escape preserves saved draft state",
+  );
+  await openStudioPanel("nodes");
+  await evaluate("document.querySelector('dialog[data-studio-panel=nodes] [data-add=filter]').click()");
+  await until("!document.querySelector('dialog[data-studio-panel=nodes]')?.open");
+  assert.equal(
+    await evaluate("document.querySelectorAll('.we-canvas [data-node]').length"),
+    initialCanvas.nodes + 1,
+    "Choosing a searched node adds it and closes the drawer",
+  );
+  assert.equal(
+    await evaluate("document.activeElement.matches('.we-node-filter')"),
+    true,
+    "New node receives focus after drawer closes",
+  );
+  assert.equal(
+    await evaluate("JSON.parse(localStorage.getItem('spyder.workflow-editor.draft')).nodes.length"),
+    initialCanvas.nodes + 1,
+    "Node addition persists in draft",
+  );
+  await openStudioPanel("inspector");
+  const inspectorCounts = await evaluate("({nodes:document.querySelectorAll('.we-canvas [data-node]').length,edges:document.querySelectorAll('.we-canvas .we-wire').length})");
+  for (const selector of ["[data-edit-selected]", "[data-copy-node]"]) {
+    await evaluate(`document.querySelector('dialog[data-studio-panel=inspector] .we-inspector ${selector}')?.focus()`);
+    await pressDelete();
+    assert.deepEqual(
+      await evaluate("({nodes:document.querySelectorAll('.we-canvas [data-node]').length,edges:document.querySelectorAll('.we-canvas .we-wire').length})"),
+      inspectorCounts,
+      `Delete key while ${selector} is focused preserves selected node and connections`,
+    );
+  }
+  await closeStudioPanel("inspector");
+  await evaluate("document.querySelector('.we-studio-menu').open=true;document.querySelector('[data-undo]').click()");
+  assert.equal(
+    await evaluate("document.querySelectorAll('.we-canvas [data-node]').length"),
+    initialCanvas.nodes,
+    "Undo restores canvas after drawer insertion",
+  );
+  await openStudioPanel("nodes");
+  await evaluate(`(()=>{const search=document.querySelector('dialog[data-studio-panel=nodes] [data-palette-search]');search.value='';search.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+  await until("!!document.querySelector('dialog[data-studio-panel=nodes] [data-add=camera]')");
+  const dragAdd = await evaluate(`(() => {
+    const dialog=document.querySelector('dialog[data-studio-panel=nodes]');
+    const add=dialog.querySelector('[data-add=camera]'),canvas=document.querySelector('[data-canvas]');
+    const transfer=new DataTransfer();
+    add.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+    const closedDuringDrag=!dialog.open;
+    const rect=canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,
+      clientX:rect.left+rect.width/2,clientY:rect.top+rect.height/2}));
+    return {closedDuringDrag,nodes:document.querySelectorAll('.we-canvas [data-node]').length};
+  })()`);
+  assert.equal(dragAdd.closedDuringDrag, true, "Dragging a node closes the palette dialog");
+  assert.equal(dragAdd.nodes, initialCanvas.nodes + 1, "Drag-add still creates a canvas node");
+  await evaluate("document.querySelector('.we-studio-menu').open=true;document.querySelector('[data-undo]').click()");
+  await openStudioPanel("settings");
+  assert.equal(
+    await evaluate("!!(document.querySelector('dialog[data-studio-panel=settings] [data-name]') && document.querySelector('dialog[data-studio-panel=settings] .we-history-settings'))"),
+    true,
+    "Settings drawer retains workflow identity and history controls",
+  );
   for (const theme of ["light", "dark"]) {
     const controls = await evaluate(`(() => {
       document.documentElement.dataset.theme=${JSON.stringify(theme)};
@@ -200,6 +349,30 @@ try {
   assert.equal(forcedControls.select, "auto");
   await command("Emulation.setEmulatedMedia", { features: [] }, sessionId);
   await evaluate("document.documentElement.dataset.theme='light'");
+  await closeStudioPanel("settings");
+  await openStudioPanel("models");
+  const modelCount = await evaluate("document.querySelectorAll('dialog[data-studio-panel=models] [data-library-model]').length");
+  assert.equal(
+    await evaluate("!!document.querySelector('dialog[data-studio-panel=models] [data-library-search]') && !!document.querySelector('dialog[data-studio-panel=models] [data-library-filter-engine]')"),
+    true,
+    "Models drawer exposes search and engine filters",
+  );
+  await evaluate(`(() => {
+    const search=document.querySelector('dialog[data-studio-panel=models] [data-library-search]');
+    search.value='no matching model for drawer regression';search.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  assert.equal(
+    await evaluate("document.querySelectorAll('dialog[data-studio-panel=models] [data-library-model]').length"),
+    0,
+    "Model search filters library rows",
+  );
+  await evaluate("document.querySelector('dialog[data-studio-panel=models] [data-library-clear]').click()");
+  assert.equal(
+    await evaluate("document.querySelectorAll('dialog[data-studio-panel=models] [data-library-model]').length"),
+    modelCount,
+    "Clearing model filters restores results",
+  );
+  await closeStudioPanel("models");
   async function assertCenteredClose(selector) {
     const result =
       await evaluate(`(() => {const b=document.querySelector(${JSON.stringify(selector)}),
@@ -212,9 +385,12 @@ try {
     assert.ok(result.width >= 40 && result.height >= 40);
     assert.ok(result.dx < 1 && result.dy < 1, JSON.stringify(result));
   }
+  await openStudioPanel("settings");
   await evaluate(
-    "document.querySelector('[data-name]').value='Unfinished workflow';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-open-templates]').click()",
+    "document.querySelector('[data-name]').value='Unfinished workflow';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}))",
   );
+  await closeStudioPanel("settings");
+  await openTemplates();
   await assertCenteredClose(
     "[data-template-modal] header [data-close-templates]",
   );
@@ -311,12 +487,11 @@ try {
     true,
   );
   assert.equal(
-    await evaluate("document.activeElement.matches('[data-open-templates]')"),
+    await evaluate("document.activeElement.matches('.we-studio-menu > summary')"),
     true,
   );
-  await evaluate(
-    "document.querySelector('[data-open-templates]').click();document.querySelector('[data-load-template=pre-event-person]').click()",
-  );
+  await openTemplates();
+  await evaluate("document.querySelector('[data-load-template=pre-event-person]').click()");
   const loaded = await evaluate(
     "JSON.parse(localStorage.getItem('spyder.workflow-editor.draft'))",
   );
@@ -334,6 +509,7 @@ try {
   );
   assert.ok(loaded.edges.some((e) => e.input === "classifier"));
   await evaluate("document.querySelector('.we-node-filter').click()");
+  await openStudioPanel("inspector");
   const inspectorLayout = await evaluate(`(() => {
     const panel=document.querySelector('.we-inspector'),rule=panel.querySelector('.we-rule');
     return {widths:[...rule.querySelectorAll('input,select')].map(e=>e.getBoundingClientRect().width),
@@ -360,6 +536,7 @@ try {
     Buffer.from(inspectorShot.data, "base64"),
   );
 
+  await closeStudioPanel("inspector");
   await evaluate(
     "document.querySelector('.we-node-filter').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
   );
@@ -393,21 +570,22 @@ try {
       const r=b.getBoundingClientRect(),i=b.querySelector('svg').getBoundingClientRect(),
         f=b.closest('.we-help-field'),c=f.querySelector('.we-field-label').getBoundingClientRect(),
         input=f.querySelector('input,select,textarea').getBoundingClientRect();
-      return Math.abs(r.x+r.width/2-i.x-i.width/2)<1 && Math.abs(r.y+r.height/2-i.y-i.height/2)<1
+      const aligned=Math.abs(r.x+r.width/2-i.x-i.width/2)<1 && Math.abs(r.y+r.height/2-i.y-i.height/2)<1
         && Math.abs(r.y+r.height/2-c.y-c.height/2)<1 && r.width===${size} && r.height===${size}
-        && r.bottom<=input.top+1 && (!f.querySelector('.we-field-drop')) ? [] : [b.ariaLabel];
+        && r.bottom<=input.top+1 && (!f.querySelector('.we-field-drop'));
+      return aligned ? [] : [{label:b.ariaLabel,field:f.querySelector('.we-field-label').textContent.trim(),button:[r.x,r.y,r.width,r.height],icon:[i.x,i.y,i.width,i.height],caption:[c.x,c.y,c.width,c.height],input:[input.x,input.y,input.width,input.height]}];
     }))()`);
     assert.deepEqual(
       failures,
       [],
-      "Help controls center on icons/captions and stay clear of inputs",
+      `Help controls center on icons/captions and stay clear of inputs: ${JSON.stringify(failures)}`,
     );
   }
   for (const theme of ["light", "dark"]) {
     await evaluate(
       `document.documentElement.dataset.theme=${JSON.stringify(theme)}`,
     );
-    await assertHelpAlignment(36);
+    await assertHelpAlignment(44);
   }
   await evaluate("document.documentElement.dataset.theme='light'");
 
@@ -519,9 +697,9 @@ try {
     "Unfinished workflow",
   );
   // Stepper edits use the same draft and Undo path as typing a numeric value.
-  await evaluate(
-    "document.querySelector('[data-open-templates]').click();document.querySelector('[data-load-template=pre-event-person]').click();document.querySelector('.we-node-event').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
-  );
+  await openTemplates();
+  await evaluate("document.querySelector('[data-load-template=pre-event-person]').click()");
+  await evaluate("document.querySelector('.we-node-event').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))");
   await until(
     "!!document.querySelector('[data-param=duration_seconds].themed-number-input')",
   );
@@ -577,7 +755,7 @@ try {
     await evaluate("document.querySelector('[data-param=message]').disabled"),
     true,
   );
-  await assertHelpAlignment(36);
+  await assertHelpAlignment(44);
   await evaluate(
     "document.querySelector('[data-param=message]').closest('.we-help-field').querySelector('[data-field-help]').click()",
   );
@@ -610,6 +788,23 @@ try {
     })()`);
     assert.deepEqual(failures, [], context);
   }
+  async function assertStudioPanelFit(name, context) {
+    const fit = await evaluate(`(() => {
+      const dialog=document.querySelector('dialog[data-studio-panel="${name}"]'),r=dialog.getBoundingClientRect();
+      dialog.scrollTop=dialog.scrollHeight;
+      return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,
+        pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
+        panelOverflow:dialog.scrollWidth>dialog.clientWidth+1,
+        contentHeight:dialog.clientHeight,scrollHeight:dialog.scrollHeight,scrollTop:dialog.scrollTop};
+    })()`);
+    assert.ok(fit.left >= -1 && fit.right <= fit.viewportWidth + 1 && fit.top >= -1 && fit.bottom <= fit.viewportHeight + 1,
+      `${context}: panel bounds ${JSON.stringify(fit)}`);
+    assert.equal(fit.pageOverflow, false, `${context}: page overflow ${JSON.stringify(fit)}`);
+    assert.equal(fit.panelOverflow, false, `${context}: panel overflow ${JSON.stringify(fit)}`);
+    assert.ok(fit.contentHeight > 0, `${context}: no visible dialog content`);
+    if (fit.scrollHeight > fit.contentHeight + 1)
+      assert.ok(fit.scrollTop > 0, `${context}: dialog content cannot scroll`);
+  }
   const nodeTypes = [
     "camera",
     "model",
@@ -626,11 +821,17 @@ try {
     "code",
   ];
   for (const type of nodeTypes) {
-    await evaluate(`document.querySelector('[data-add=${type}]').click()`);
+    await openStudioPanel("nodes");
+    await evaluate(`document.querySelector('dialog[data-studio-panel=nodes] [data-add=${type}]').click()`);
+    await closeStudioPanel("nodes");
     if (type === "filter")
-      await evaluate(
-        "document.querySelector('[data-add-rule]').click();document.querySelector('[data-add-rule]').click()",
-      );
+      {
+        await openStudioPanel("inspector");
+        await evaluate(
+          "document.querySelector('.we-inspector [data-add-rule]').click();document.querySelector('.we-inspector [data-add-rule]').click()",
+        );
+        await closeStudioPanel("inspector");
+      }
     for (const viewport of [
       { width: 1280, height: 800, mobile: false },
       { width: 960, height: 700, mobile: false },
@@ -649,14 +850,16 @@ try {
         await evaluate(
           "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
         );
+        await openStudioPanel("inspector");
         await assertSettingsFit(
           ".we-inspector",
-          `${type}/inline/${viewport.width}/${theme}`,
+          `${type}/inspector/${viewport.width}/${theme}`,
         );
+        await closeStudioPanel("inspector");
         await evaluate(
           "document.querySelector('.we-node.selected').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))",
         );
-        await assertHelpAlignment(36);
+        await assertHelpAlignment(44);
         await assertSettingsFit(
           ".we-node-settings",
           `${type}/dialog/${viewport.width}/${theme}`,
@@ -677,7 +880,7 @@ try {
     { width: 390, height: 520, deviceScaleFactor: 1, mobile: true },
     sessionId,
   );
-  await evaluate("document.querySelector('[data-open-templates]').click()");
+  await openTemplates();
   assert.equal(
     await evaluate(
       "(() => { const r=document.querySelector('.we-template-modal').getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight;})()",
@@ -705,10 +908,20 @@ try {
   );
   await command(
     "Emulation.setDeviceMetricsOverride",
+    { width: 375, height: 720, deviceScaleFactor: 1, mobile: true },
+    sessionId,
+  );
+  for (const name of ["nodes", "settings", "inspector", "models", "activity"]) {
+    await openStudioPanel(name);
+    await assertStudioPanelFit(name, `phone ${name}`);
+    await closeStudioPanel(name);
+  }
+  await command(
+    "Emulation.setDeviceMetricsOverride",
     { width: 1024, height: 320, deviceScaleFactor: 1, mobile: false },
     sessionId,
   );
-  await evaluate("document.querySelector('[data-open-templates]').click()");
+  await openTemplates();
   assert.equal(
     await evaluate(
       "document.querySelector('.we-template-modal').getBoundingClientRect().bottom<=innerHeight",
@@ -721,11 +934,24 @@ try {
     ),
     true,
   );
-  await evaluate(
-    "document.querySelector('[data-template-modal] footer button').click();location.hash='system'",
+  await evaluate("document.querySelector('[data-template-modal] footer button').click()");
+  for (const name of ["nodes", "settings", "inspector", "models", "activity"]) {
+    await openStudioPanel(name);
+    await assertStudioPanelFit(name, `short landscape ${name}`);
+    await closeStudioPanel(name);
+  }
+  await openStudioPanel("inspector");
+  await evaluate("location.hash='system'");
+  await until("!!document.querySelector('.backup-file-label input[type=file]')");
+  assert.equal(
+    await evaluate("document.querySelectorAll('dialog[data-studio-panel][open]').length"),
+    0,
+    "Leaving Vision Lab removes all open studio dialogs",
   );
-  await until(
-    "!!document.querySelector('.backup-file-label input[type=file]')",
+  assert.equal(
+    await evaluate("document.querySelector('#main-content').querySelector('[inert]')===null"),
+    true,
+    "Leaving Vision Lab does not leave inert content behind",
   );
   for (const theme of ["light", "dark"]) {
     const upload = await evaluate(`(() => {

@@ -161,6 +161,24 @@ try {
     evaluate(
       "[...document.querySelectorAll('#cameras > .camera-card:not([hidden])')].map(c=>c.dataset.id)",
     );
+  const openStudioPanel = async (name) => {
+    await evaluate(
+      `document.querySelector('.we-studio-menu').open=true;document.querySelector('[data-studio-open="${name}"]').click()`,
+    );
+    await until(
+      `document.querySelector('dialog[data-studio-panel="${name}"]')?.open`,
+    );
+  };
+  const closeStudioPanel = async (name) => {
+    await evaluate(
+      `document.querySelector('dialog[data-studio-panel="${name}"] [data-studio-close]').click()`,
+    );
+    await until(
+      `!document.querySelector('dialog[data-studio-panel="${name}"]')?.open`,
+    );
+  };
+  const openStudioMenu = () =>
+    evaluate("document.querySelector('.we-studio-menu').open=true");
   await command(
     "Emulation.setDeviceMetricsOverride",
     { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
@@ -175,11 +193,18 @@ try {
   await until("!!document.querySelector('[data-open-templates]')");
 
   await evaluate(
-    "window.confirm=()=>true;window.workflowToolErrors=[];window.addEventListener('error',e=>workflowToolErrors.push(e.message));document.querySelector('[data-name]').value='Saved parent';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-save]').click()",
+    "window.confirm=()=>true;window.workflowToolErrors=[];window.addEventListener('error',e=>workflowToolErrors.push(e.message))",
   );
+  await openStudioPanel("settings");
+  await evaluate(
+    "document.querySelector('[data-name]').value='Saved parent';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}))",
+  );
+  await closeStudioPanel("settings");
+  await evaluate("document.querySelector('[data-save]').click()");
   await until(
     "document.querySelector('[data-workflow-count]').textContent.includes('1 saved')",
   );
+  await openStudioPanel("settings");
   await evaluate(`(()=>{
     document.querySelector('.we-history-settings').open=true;
     const preset=document.querySelector('[data-history-preset]');preset.value='errors';preset.dispatchEvent(new Event('change',{bubbles:true}));
@@ -201,6 +226,7 @@ try {
     ),
     true,
   );
+  await closeStudioPanel("settings");
   await evaluate("document.querySelector('[data-save]').click()");
   await until(
     "document.querySelector('.we-issues').textContent.includes('saved')",
@@ -228,14 +254,21 @@ try {
     await evaluate("document.querySelector('[data-activate]').disabled"),
     true,
   );
+  await openStudioPanel("nodes");
   await evaluate(`(()=>{
     document.querySelector('[data-add=filter]').click();
+  })()`);
+  await closeStudioPanel("nodes");
+  await openStudioPanel("inspector");
+  await evaluate(`(()=>{
     const input=document.querySelector('.we-node-subflow_input').dataset.node,output=document.querySelector('.we-node-subflow_output').dataset.node,filter=document.querySelector('.we-node-filter').dataset.node;
     document.querySelector('.we-inspector [data-delete-edge="'+input+'|'+output+'"]').click();
     for(const [from,to] of [[input,filter],[filter,output]]){document.querySelector('[data-from]').value=from;document.querySelector('[data-to]').value=to;document.querySelector('[data-connect]').click();}
-    document.querySelector('[data-name]').value='Unified reusable';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}));
-    document.querySelector('[data-publish-subflow]').click();
   })()`);
+  await closeStudioPanel("inspector");
+  await openStudioPanel("settings");
+  await evaluate("document.querySelector('[data-name]').value='Unified reusable';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}))");
+  await evaluate("document.querySelector('[data-publish-subflow]').click()");
   await until("!!document.querySelector('[data-pub-submit]')");
   await evaluate(
     `(()=>{const row=[...document.querySelectorAll('.wt-parameter-row')].find(row=>row.textContent.includes('filter · confidence'));row.querySelector('[data-pub-param]').checked=true;row.querySelector('[data-pub-param-name]').value='minConfidence';document.querySelector('[data-pub-submit]').click()})()`,
@@ -265,6 +298,7 @@ try {
     "[...document.querySelectorAll('.wm-row')].find(row=>row.textContent.includes('Saved parent')).querySelector('[data-action=open]').click()",
   );
   await until("document.querySelector('[data-name]').value==='Saved parent'");
+  await openStudioMenu();
   await evaluate("document.querySelector('[data-open-subflows]').click()");
   await until("!!document.querySelector('.workflow-manager[open]')");
   assert.equal(
@@ -309,6 +343,7 @@ try {
     await evaluate("document.querySelector('[data-save]').disabled"),
     false,
   );
+  await openStudioPanel("settings");
   await evaluate(
     "const mode=document.querySelector('[data-workflow-mode]');mode.value='both';mode.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('[data-publish-subflow]').click()",
   );
@@ -402,13 +437,17 @@ try {
   await until("!!document.querySelector('.workflow-manager[open]')");
   await evaluate("document.querySelector('[data-create]').click()");
   await until("document.querySelector('[data-name]').value==='New workflow'");
+  await openStudioPanel("nodes");
   await evaluate(`(()=>{
     for(const type of ['camera','detections','filter','event']) document.querySelector('[data-add='+type+']').click();
+  })()`);
+  await closeStudioPanel("nodes");
+  await openStudioPanel("settings");
+  await evaluate(`(()=>{
     const ids=Object.fromEntries(['camera','detections','filter','event'].map(type=>[type,document.querySelector('.we-node-'+type).dataset.node]));
     for(const [from,to] of [[ids.camera,ids.detections],[ids.detections,ids.filter],[ids.filter,ids.event]]){document.querySelector('[data-from]').value=from;document.querySelector('[data-to]').value=to;document.querySelector('[data-connect]').click();}
     const mode=document.querySelector('[data-workflow-mode]');mode.value='both';mode.dispatchEvent(new Event('change',{bubbles:true}));
     document.querySelector('[data-prepare-callable]').click();
-    document.querySelector('[data-name]').value='Converted ordinary workflow';document.querySelector('[data-name]').dispatchEvent(new Event('input',{bubbles:true}));
     document.querySelector('[data-publish-subflow]').click();
   })()`);
   await until("!!document.querySelector('[data-pub-submit]')");

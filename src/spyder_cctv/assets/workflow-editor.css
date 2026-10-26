@@ -2108,3 +2108,710 @@
   flex: 0 0 auto;
   accent-color: #be1a1a;
 }
+
+/* Canvas-first workflow studio: keep graph controls visible and put editing tools on demand. */
+.workflow-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.workflow-editor .we-studio-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.workflow-editor .we-studio-menu {
+  position: relative;
+  min-width: 0;
+}
+.workflow-editor .we-studio-menu > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 7px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+}
+.workflow-editor .we-studio-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.workflow-editor .we-studio-menu > summary:hover {
+  background: var(--rail);
+}
+.workflow-editor .we-studio-menu[open] > summary {
+  border-color: var(--focus);
+}
+.workflow-editor .we-studio-menu-items {
+  position: absolute;
+  z-index: 30;
+  inset-block-start: calc(100% + 6px);
+  inset-inline-start: 0;
+  display: grid;
+  gap: 4px;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.workflow-editor .we-studio-menu-items > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.workflow-editor .we-studio-menu-items > button:hover:not(:disabled),
+.workflow-editor .we-studio-menu-items > button:focus-visible {
+  border-color: var(--control-border);
+  background: var(--rail);
+  color: var(--ink);
+}
+.workflow-editor .we-studio-menu-items > button:active:not(:disabled) {
+  background: var(--gold-soft);
+}
+.workflow-editor .we-studio-menu-items > hr {
+  width: calc(100% - 8px);
+  margin: 3px 4px;
+  border: 0;
+  border-block-start: 1px solid var(--border);
+}
+.workflow-editor .we-studio-identity {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.workflow-editor .we-studio-identity > * {
+  min-width: 0;
+}
+.workflow-editor .we-studio-identity label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+.workflow-editor .we-studio-identity [data-draft-state] {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 11px;
+}
+.workflow-editor .we-studio-primary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.workflow-editor .we-studio-primary > .button,
+.workflow-editor .we-studio-primary [data-activate] {
+  min-height: 44px;
+}
+.workflow-editor .we-studio-primary .we-activation-control {
+  display: flex;
+  align-items: center;
+  max-width: none;
+  gap: 8px;
+}
+.workflow-editor .we-studio-primary .we-activation-control > span {
+  display: none;
+}
+.workflow-editor .we-studio-primary .we-activation-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.workflow-editor .we-studio-primary .we-activation-main strong {
+  max-width: 15ch;
+  white-space: normal;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+.workflow-editor .we-studio-toolbar :is(button, input) {
+  min-height: 44px;
+}
+.workflow-editor .we-main {
+  display: block;
+  min-width: 0;
+}
+.workflow-editor .we-workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.workflow-editor .we-canvas-tools {
+  align-items: center;
+  min-height: 44px;
+  margin: 0 0 8px;
+  gap: 10px;
+}
+.workflow-editor .we-studio-tools,
+.workflow-editor .we-zoom-controls,
+.workflow-editor .we-studio-footer,
+.workflow-editor .we-studio-footer-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.workflow-editor .we-studio-tools > button,
+.workflow-editor .we-zoom-controls > button,
+.workflow-editor .we-studio-footer > button,
+.workflow-editor .we-studio-footer-actions > button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.workflow-editor .we-zoom-controls {
+  flex-wrap: nowrap;
+}
+.workflow-editor .we-zoom-controls .button {
+  min-height: 44px;
+}
+.workflow-editor .we-canvas-tools > span {
+  min-width: 0;
+  font-size: 11px;
+}
+.workflow-editor .we-canvas-wrap {
+  flex: 0 0 auto;
+  width: 100%;
+  height: clamp(240px, calc(100dvh - 350px), 920px);
+  min-height: 240px;
+  border-radius: 10px;
+}
+.workflow-editor .we-studio-footer {
+  justify-content: space-between;
+  min-height: 52px;
+  padding-block: 4px;
+}
+.workflow-editor .we-studio-footer-actions {
+  flex: 0 1 auto;
+}
+.workflow-editor [data-studio-summary] {
+  flex: 1 1 14rem;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+/* Native dialogs keep longer forms out of the graph's working area. */
+.workflow-editor dialog.we-studio-dialog {
+  position: fixed;
+  inset-block: 12px;
+  inset-inline: auto 12px;
+  width: min(var(--we-studio-dialog-width, 680px), calc(100vw - 24px));
+  max-width: none;
+  max-height: calc(100dvh - 24px);
+  height: calc(100dvh - 24px);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.workflow-editor dialog.we-studio-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.workflow-editor dialog.we-studio-dialog::backdrop {
+  background: #17100c80;
+}
+.workflow-editor .we-studio-nodes {
+  --we-studio-dialog-width: 380px;
+}
+.workflow-editor .we-studio-settings {
+  --we-studio-dialog-width: 640px;
+}
+.workflow-editor .we-studio-inspector {
+  --we-studio-dialog-width: 700px;
+}
+.workflow-editor .we-studio-models {
+  --we-studio-dialog-width: 1040px;
+}
+.workflow-editor .we-studio-activity {
+  --we-studio-dialog-width: 640px;
+}
+.workflow-editor .we-studio-dialog > header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 60px;
+  padding: 10px 16px;
+  border-block-end: 1px solid var(--border);
+  background: var(--surface);
+}
+.workflow-editor .we-studio-dialog > header h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+}
+.workflow-editor .we-studio-dialog > header .button {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+}
+.workflow-editor .we-studio-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 20px;
+}
+.workflow-editor .we-studio-content > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin-block: 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.workflow-editor .we-studio-content :is(input:not([type="checkbox"]), select, textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--control-border);
+  border-radius: 7px;
+  background-color: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.workflow-editor .we-studio-content .themed-number-input {
+  padding-inline-end: 5.5rem;
+}
+.workflow-editor .we-studio-content > :first-child {
+  margin-block-start: 0;
+}
+.workflow-editor .we-studio-content > :last-child {
+  margin-block-end: 0;
+}
+.workflow-editor .we-studio-content :is(button.button, summary) {
+  min-height: 44px;
+}
+.workflow-editor .we-studio-nodes .we-sidebar {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+.workflow-editor .we-studio-nodes .we-palette-panel > h3 {
+  margin: 0 0 10px;
+}
+.workflow-editor .we-studio-nodes .we-palette {
+  gap: 8px;
+}
+.workflow-editor .we-studio-nodes .we-palette button {
+  align-items: center;
+  min-height: 44px;
+  padding: 9px 11px;
+  cursor: grab;
+}
+.workflow-editor .we-studio-nodes .we-node-group > summary {
+  min-height: 44px;
+  padding: 10px 6px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.workflow-editor .we-studio-settings .we-camera-panel,
+.workflow-editor .we-studio-settings .we-execution-panel,
+.workflow-editor .we-studio-settings .we-history-settings,
+.workflow-editor .we-studio-inspector .we-connect,
+.workflow-editor .we-studio-inspector .we-inspector,
+.workflow-editor .we-studio-models .we-library,
+.workflow-editor .we-studio-activity .we-events-panel {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.workflow-editor .we-studio-settings .we-camera-panel h3,
+.workflow-editor .we-studio-activity .we-events-panel h3 {
+  margin: 0 0 8px;
+}
+.workflow-editor .we-studio-settings .we-camera-panel {
+  margin-block: 14px;
+}
+.workflow-editor .we-studio-settings .we-execution-panel {
+  margin-block: 14px;
+}
+.workflow-editor .we-studio-settings .we-history-settings {
+  margin-block: 14px;
+  padding-block: 12px;
+  border-block-start: 1px solid var(--border);
+  border-radius: 0;
+}
+.workflow-editor .we-studio-inspector .we-connect {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-block: 0 14px;
+  padding: 0 0 14px;
+  border-block-end: 1px solid var(--border);
+}
+.workflow-editor .we-studio-inspector .we-connect b {
+  grid-column: 1 / -1;
+}
+.workflow-editor .we-studio-inspector .we-inspector {
+  margin: 0;
+}
+.workflow-editor .we-studio-inspector .we-inspector > h3:first-child {
+  display: none;
+}
+.workflow-editor .we-studio-models .we-library {
+  margin: 0;
+}
+.workflow-editor .we-studio-models .we-library-header {
+  gap: 12px;
+}
+.workflow-editor .we-studio-models .we-library-header h3 {
+  margin-block: 0 6px;
+}
+.workflow-editor .we-studio-activity .we-events {
+  max-height: none;
+}
+.workflow-editor .we-studio-activity [data-open-history] {
+  margin-block-start: 12px;
+}
+
+@media (max-width: 760px) {
+  .workflow-editor .we-studio-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+  }
+  .workflow-editor .we-studio-identity {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .workflow-editor .we-studio-primary {
+    grid-column: 1 / -1;
+    justify-content: stretch;
+  }
+  .workflow-editor .we-studio-primary > .button {
+    flex: 1 1 120px;
+  }
+  .workflow-editor .we-canvas-tools {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .workflow-editor .we-studio-tools,
+  .workflow-editor .we-zoom-controls {
+    width: 100%;
+  }
+  .workflow-editor .we-studio-tools > button {
+    flex: 1 1 90px;
+  }
+  .workflow-editor .we-zoom-controls {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .workflow-editor .we-canvas-wrap {
+    height: clamp(240px, calc(100dvh - 390px), 820px);
+  }
+  .workflow-editor .we-studio-footer {
+    align-items: flex-start;
+  }
+  .workflow-editor [data-studio-summary] {
+    text-align: start;
+  }
+}
+@media (max-width: 420px) {
+  .workflow-editor .we-studio-toolbar {
+    padding: 7px;
+  }
+  .workflow-editor .we-studio-primary {
+    flex-wrap: wrap;
+  }
+  .workflow-editor .we-studio-primary .we-activation-main {
+    flex: 1 1 100%;
+  }
+  .workflow-editor .we-studio-primary .we-activation-main strong {
+    max-width: none;
+  }
+  .workflow-editor .we-canvas-tools > span {
+    font-size: 10px;
+  }
+  .workflow-editor .we-studio-footer,
+  .workflow-editor .we-studio-footer-actions {
+    width: 100%;
+  }
+  .workflow-editor .we-studio-footer-actions > button {
+    flex: 1 1 72px;
+  }
+  .workflow-editor [data-studio-summary] {
+    flex-basis: 100%;
+  }
+  .workflow-editor .we-studio-inspector .we-connect {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workflow-editor .we-studio-inspector .we-connect b {
+    grid-column: 1;
+  }
+}
+
+/* Overlay viewport controls on the canvas stage to preserve vertical graph space. */
+.workflow-editor .we-canvas-stage {
+  position: relative;
+  min-width: 0;
+}
+.workflow-editor .we-canvas-stage > .we-zoom-controls {
+  position: absolute;
+  z-index: 5;
+  inset-block-end: 12px;
+  inset-inline-end: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background-color: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.workflow-editor .we-canvas-stage > .we-zoom-controls > button {
+  min-width: 44px;
+  min-height: 44px;
+}
+@media (max-width: 760px) {
+  .workflow-editor .we-canvas-tools {
+    align-items: center;
+    flex-direction: row;
+    margin-block-end: 6px;
+  }
+  .workflow-editor .we-studio-tools {
+    flex-wrap: nowrap;
+    width: 100%;
+    gap: 4px;
+  }
+  .workflow-editor .we-studio-tools > button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .workflow-editor .we-canvas-stage > .we-zoom-controls {
+    width: max-content;
+  }
+}
+@media (max-width: 420px) {
+  .workflow-editor .we-canvas-stage > .we-zoom-controls {
+    inset-block-end: 8px;
+    inset-inline-end: 8px;
+    max-width: calc(100% - 16px);
+  }
+}
+@media (forced-colors: active) {
+  .workflow-editor .we-canvas-stage > .we-zoom-controls {
+    border-color: CanvasText;
+  }
+}
+@media (max-height: 600px) {
+  .workflow-editor .we-canvas-wrap {
+    height: max(240px, calc(100dvh - 300px));
+  }
+}
+@media (max-height: 600px) and (max-width: 760px) {
+  .workflow-editor .we-canvas-wrap {
+    height: max(240px, calc(100dvh - 340px));
+  }
+}
+@media (max-width: 760px) {
+  .workflow-editor dialog.we-studio-dialog {
+    inset: 6px;
+    width: auto;
+    max-height: calc(100dvh - 12px);
+    height: calc(100dvh - 12px);
+    border-radius: 12px;
+  }
+  .workflow-editor .we-studio-content {
+    padding: 12px 12px 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workflow-editor .we-studio-menu-items {
+    scroll-behavior: auto;
+  }
+}
+@media (forced-colors: active) {
+  .workflow-editor .we-studio-toolbar,
+  .workflow-editor .we-studio-menu > summary,
+  .workflow-editor dialog.we-studio-dialog {
+    border-color: CanvasText;
+  }
+  .workflow-editor .we-studio-menu-items {
+    border-color: CanvasText;
+  }
+}
+
+/* Give the workflow canvas its viewport, without changing other workspaces. */
+main:has(.workflow-editor) {
+  padding: 8px 12px;
+}
+#workspace-page:has(.workflow-editor) > .page-heading {
+  display: none;
+}
+#workspace-content:has(.workflow-editor) > .recording-actions:has(#vision-workflow-tab) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+#workspace-content:has(.workflow-editor) > .recording-actions:has(#vision-workflow-tab) > .button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  text-align: center;
+}
+
+@media (max-width: 420px) {
+  .workflow-editor .we-studio-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 6px;
+    padding: 6px;
+  }
+  .workflow-editor .we-studio-menu > summary {
+    width: 44px;
+    padding: 0;
+  }
+  .workflow-editor .we-studio-menu > summary > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .workflow-editor .we-studio-identity {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+  .workflow-editor .we-studio-identity > label {
+    display: block;
+    font-size: 0;
+    line-height: 0;
+  }
+  .workflow-editor .we-studio-identity .we-workflow-picker {
+    min-height: 44px;
+    padding: 7px 8px;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+  .workflow-editor .we-studio-identity [data-workflow-count] {
+    display: none;
+  }
+  .workflow-editor .we-studio-identity [data-draft-state] {
+    max-width: 13ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    text-align: end;
+  }
+  .workflow-editor .we-studio-primary {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .workflow-editor .we-studio-primary .we-activation-control,
+  .workflow-editor .we-studio-primary .we-activation-main {
+    display: block;
+    min-width: 0;
+  }
+  .workflow-editor .we-studio-primary .we-activation-main [data-activate],
+  .workflow-editor .we-studio-primary > [data-save] {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 6px;
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: normal;
+  }
+  .workflow-editor .we-studio-primary .we-activation-main strong {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .workflow-editor .we-studio-tools,
+  .workflow-editor .we-zoom-controls {
+    gap: 4px;
+  }
+  .workflow-editor .we-studio-tools > button,
+  .workflow-editor .we-zoom-controls > button {
+    padding-inline: 6px;
+    font-size: 12px;
+  }
+  #workspace-content:has(.workflow-editor) > .recording-actions:has(#vision-workflow-tab) {
+    gap: 4px;
+    margin-block-end: 6px;
+  }
+  #workspace-content:has(.workflow-editor) > .recording-actions:has(#vision-workflow-tab) > .button {
+    padding-inline: 4px;
+    font-size: 12px;
+    line-height: 1.15;
+    white-space: normal;
+  }
+}

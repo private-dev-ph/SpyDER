@@ -51,7 +51,7 @@ Dependency diagnostics do not prove model compatibility or hardware acceleration
 
 ## Add a model
 
-Open **Models & Workflows** in Vision Lab and use the model library to upload trusted
+Open **Models & Workflows** in Vision Lab, choose **Models**, and use the model library to upload trusted
 weights or register an existing local file. Uploads are copied into managed storage;
 registration records a path, so the original file must remain accessible. The library
 persists across restarts with the same application data root. Its current limits are
@@ -142,6 +142,20 @@ Standalone camera workers outside the workflow application retain their explicit
 pipeline behavior. The static showcase continues to perform no server inference.
 
 ## Build a workflow
+
+The canvas is the main workspace. Tools open only when you need them:
+
+| Control | What it opens |
+| --- | --- |
+| Current workflow name | Saved workflow library: open, create, search, filter, duplicate, publish, enable/disable, rename, export, or delete. |
+| **Workflow** menu | Workflow settings, templates, called workflows, execution history, recent events, import/export, and deletion. On phones, use the menu icon. |
+| **Add node** | Searchable node palette. Click to add, or drag a node onto the canvas. |
+| **Models** | Model registration/upload, search and filters, labels and metadata, usage checks, and removal. |
+| **Inspector** | Selected-node parameters, manual connections, connection removal, and validation review. |
+| Double-click a node, press Enter on it, or select **Edit node** | Full node settings, IN/OUT signals, bindings, field help, and local code testing. |
+| Canvas corner controls | Zoom in/out, reset zoom, and center the workflow. Drag empty canvas space to pan; arrow keys also pan when the canvas has focus. |
+
+**Workflow → Workflow settings** contains the name, camera assignments, independent/callable execution mode, callable publishing, and history-saving policy. **Save workflow** keeps draft changes; **Enable workflow** is a separate action that can change active camera processing and may ask for confirmation. Opening a panel does not save or enable a workflow. Escape closes a panel and returns focus to its opener; close an open select picker or field-help tooltip first.
 
 1. Create a workflow and add a **Camera** node for a configured source.
 2. Add a **Model** node and choose the uploaded model or built-in detector.

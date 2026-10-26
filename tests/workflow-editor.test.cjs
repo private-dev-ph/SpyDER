@@ -2795,8 +2795,10 @@ test("toolbar rows, grouped scrollable palette and camera section render indepen
   await h.flush();
   assert.match(
     h.root.innerHTML,
-    /we-toolbar-identity[\s\S]*data-workflow[\s\S]*data-name[\s\S]*we-toolbar-actions[\s\S]*we-activation-main[\s\S]*data-activate[\s\S]*data-workflow-state/,
+    /we-studio-toolbar[\s\S]*we-studio-identity[\s\S]*data-workflow[\s\S]*we-studio-primary[\s\S]*we-activation-main[\s\S]*data-activate[\s\S]*data-save/,
   );
+  assert.match(h.root.innerHTML, /data-studio-panel="settings"[\s\S]*data-name/);
+  assert.match(h.root.innerHTML, /data-studio-open="nodes"/);
   assert.match(h.root.innerHTML, /data-copy-node/);
   assert.match(h.root.innerHTML, /data-paste-node/);
   assert.match(h.root.innerHTML, /data-palette-search/);
@@ -3097,7 +3099,7 @@ test("template picker browses without modifying draft or requesting permissions"
   h.root.dispatch("keydown", search, { key: "Escape" });
   assert.doesNotMatch(h.root.innerHTML, /data-template-modal/);
   assert.equal(h.local.get("spyder.workflow-editor.draft"), before);
-  assert.equal(h.root.querySelector("[data-open-templates]").focused, true);
+  assert.equal(h.root.querySelector(".we-studio-menu > summary").focused, true);
   assert.equal(h.calls.length, 0);
   h.window.spyderWorkflows.unmount();
 });

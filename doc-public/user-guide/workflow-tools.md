@@ -12,7 +12,7 @@ Open either connected node's settings. In the IN or OUT connection list, enter a
 
 The installed app shows each node's latest run state, input and output counts, timestamp, and error when available. Status refreshes only while the editor page is visible. It does not change the workflow draft or mark it unsaved. Showcase mode has no runtime status data.
 
-Before enabling a workflow, review the validation summary. Select an issue to focus its node when the editor can identify one. Fix all reported issues before enabling.
+Before enabling a workflow, open **Inspector** to review the validation summary. Select an issue to focus its node when the editor can identify one. Fix all reported issues before enabling. A validation count also appears beneath the canvas.
 
 Latest status contains counts and errors, not stored frames or a historical input/output log. For workflows with multiple cameras, it reflects the most recent camera evaluation. Status polling updates indicators in place and preserves open settings, typing focus, camera frames, and preview connections. Native status is unavailable in the Cloudflare editor showcase.
 
