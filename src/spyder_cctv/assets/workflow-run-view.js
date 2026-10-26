@@ -72,7 +72,7 @@
         const p = positions.get(node.id),
           record = records.get(node.id),
           state = record?.state || "not retained / not reached";
-        return `<g class="wt-trace-node wt-trace-${tone(state)}" transform="translate(${p.x} ${p.y})"><title>${esc(node.type)} · ${esc(node.id)} · ${esc(state)} · ${count(record?.input_count)} IN / ${count(record?.output_count)} OUT</title><rect width="170" height="64" rx="8"/><text x="10" y="22">${esc(node.type)}</text><text class="wt-trace-caption" x="10" y="44">${esc(state)} · ${count(record?.input_count)} / ${count(record?.output_count)}</text></g>`;
+        return `<g tabindex="0" role="button" data-inspect-node="${esc(node.id)}" aria-label="Inspect ${esc(node.type)} ${esc(node.id)}" class="wt-trace-node wt-trace-${tone(state)}" transform="translate(${p.x} ${p.y})"><title>${esc(node.type)} · ${esc(node.id)} · ${esc(state)} · ${count(record?.input_count)} IN / ${count(record?.output_count)} OUT</title><rect width="170" height="64" rx="8"/><text x="10" y="22">${esc(node.type)}</text><text class="wt-trace-caption" x="10" y="44">${esc(state)} · ${count(record?.input_count)} / ${count(record?.output_count)}</text></g>`;
       })
       .join("");
     return nodes.length
@@ -88,7 +88,11 @@
       return `<details class="wt-media"><summary>View capture · ${esc(media.filename || media.id)}</summary><img loading="lazy" src="${url}" alt="Recorded workflow capture"><a href="${url}" download>Download capture</a></details>`;
     return `<a href="${url}" download>Download attachment</a>`;
   }
-  const api = { renderGraph, renderMedia };
+  function renderNode(record, node) {
+    const id = record?.id || node?.id || "";
+    return `<section class="wt-node-inspector-card"><h4 tabindex="-1">${esc(node?.type || record?.type || "Node")} · ${esc(id)}</h4><p>${esc(record?.state || "Not reached or trace not retained")} · ${count(record?.duration_ms)} ms · ${count(record?.input_count)} IN / ${count(record?.output_count)} OUT</p>${record?.error ? `<p class="wt-error">${esc(record.error)}</p>` : ""}${record?.path ? `<p>Call path: ${esc(Array.isArray(record.path) ? record.path.join(" / ") : record.path)}</p>` : ""}<div class="wt-node-data">${["inputs", "outputs", "signals"].map((key) => `<section><h5>${key === "inputs" ? "IN · recorded input" : key === "outputs" ? "OUT · recorded output" : "Signals"}</h5><pre>${record?.[key] === undefined ? "Payload was not retained. Enable Diagnostic mode before a future run to inspect bounded data." : esc(JSON.stringify(record[key], null, 2))}</pre></section>`).join("")}</div>${node?.params ? `<details><summary>Archived node configuration</summary><pre>${esc(JSON.stringify(node.params, null, 2))}</pre></details>` : ""}</section>`;
+  }
+  const api = { renderGraph, renderMedia, renderNode };
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof window !== "undefined") window.spyderWorkflowRunView = api;
 })();

@@ -159,6 +159,16 @@ class ExecutionHistory:
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
         if "graph_revision" not in columns:
             self._db.execute("ALTER TABLE runs ADD COLUMN graph_revision TEXT NOT NULL DEFAULT ''")
+        if "duration_ms" not in columns:
+            self._db.execute("BEGIN")
+            self._db.execute("ALTER TABLE runs ADD COLUMN duration_ms REAL NOT NULL DEFAULT 0")
+            self._db.execute(
+                "UPDATE runs SET duration_ms=coalesce(json_extract(summary_json,'$.duration_ms'),0)"
+            )
+        self._db.execute("CREATE INDEX IF NOT EXISTS runs_duration_idx ON runs(duration_ms DESC)")
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS runs_source_idx ON runs(source,started_at DESC)"
+        )
         self._db.commit()
         saved = dict(self._db.execute("SELECT key, value FROM settings").fetchall())
         try:
@@ -222,7 +232,9 @@ class ExecutionHistory:
             if not isinstance(run, dict):
                 return None
             identifier = str(run.get("id") or uuid.uuid4())[:64]
-            started = str(run.get("started_at") or datetime.now(UTC).isoformat())[:64]
+            started = _history_bound(
+                str(run.get("started_at") or datetime.now(UTC).isoformat())[:64], upper=False
+            )
             nodes = run.get("nodes", [])
             if not isinstance(nodes, list):
                 nodes = []
@@ -318,7 +330,10 @@ class ExecutionHistory:
                 "name": str(run.get("name", ""))[:256],
                 "camera_id": str(run.get("camera_id", ""))[:128],
                 "started_at": started,
-                "duration_ms": max(0, min(int(run.get("duration_ms", 0) or 0), 2**31 - 1)),
+                "duration_ms": round(
+                    max(0, min(float(run.get("duration_ms", 0) or 0), 2**31 - 1)), 3
+                ),
+                "original_run_id": str(run.get("original_run_id") or "")[:64],
                 "state": state,
                 "source": str(run.get("source", "live"))[:32],
                 "sequence": _clean(run.get("sequence"), diagnostic=diagnostic),
@@ -426,7 +441,7 @@ class ExecutionHistory:
         ordering = {
             "newest": "started_at DESC, id DESC",
             "oldest": "started_at ASC, id ASC",
-            "slowest": "CAST(json_extract(summary_json, '$.duration_ms') AS REAL) DESC, started_at DESC, id DESC",
+            "slowest": "duration_ms DESC, started_at DESC, id DESC",
         }
         if sort not in ordering:
             raise ValueError("sort must be newest, oldest, or slowest")
@@ -445,14 +460,18 @@ class ExecutionHistory:
             rows = self._db.execute(
                 "SELECT summary_json FROM runs"
                 + where
-                + " ORDER BY " + ordering[sort] + " LIMIT ? OFFSET ?",
+                + " ORDER BY "
+                + ordering[sort]
+                + " LIMIT ? OFFSET ?",
                 [*args, size, page * size],
             ).fetchall()
-            state_counts = dict(self._db.execute(
-                "SELECT state,count(*) FROM runs" + where + " GROUP BY state", args
-            ).fetchall())
+            state_counts = dict(
+                self._db.execute(
+                    "SELECT state,count(*) FROM runs" + where + " GROUP BY state", args
+                ).fetchall()
+            )
             average_duration = self._db.execute(
-                "SELECT avg(CAST(json_extract(summary_json, '$.duration_ms') AS REAL)) FROM runs" + where,
+                "SELECT avg(duration_ms) FROM runs" + where,
                 args,
             ).fetchone()[0]
             stats = self._stats_locked()
@@ -470,7 +489,9 @@ class ExecutionHistory:
                 "completed": state_counts.get("completed", 0),
                 "filtered": state_counts.get("filtered", 0),
                 "error": state_counts.get("error", 0),
-                "average_duration_ms": round(average_duration, 3) if average_duration is not None else 0,
+                "average_duration_ms": round(average_duration, 3)
+                if average_duration is not None
+                else 0,
             },
         }
 
@@ -571,7 +592,7 @@ class ExecutionHistory:
                             self._db.execute(
                                 "INSERT OR REPLACE INTO runs(id,workflow_id,camera_id,started_at,"
                                 "state,name,source,summary_json,detail_json,graph_json,size_bytes,"
-                                "graph_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                                "graph_revision,duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (
                                     summary["id"],
                                     summary["workflow_id"],
@@ -585,6 +606,7 @@ class ExecutionHistory:
                                     "{}",
                                     size,
                                     revision,
+                                    summary["duration_ms"],
                                 ),
                             )
                         elif operation == "annotate":

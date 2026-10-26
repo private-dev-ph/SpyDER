@@ -4256,7 +4256,7 @@
               n.params.version,
             );
         } else if (b.dataset.openHistory !== undefined) {
-          window.spyderWorkflowTools?.openHistory?.();
+          window.spyderWorkflowTools?.openHistory?.({ workflow_id: graph.id });
         } else if (b.dataset.publishSubflow !== undefined) {
           window.spyderWorkflowTools?.setSubflowId?.(graph.id);
           window.spyderWorkflowTools?.openPublish?.(clone(graph));

@@ -147,7 +147,11 @@ def test_diagnostic_replay_isolated_from_events_recordings_and_live_state(servic
         service.event_store.list(),
         service.recorder.calls,
     ) == before
-    assert service.history.list()["total"] == 1
+    assert result["history_queued"] is True
+    assert service.history.flush()
+    assert service.history.list()["total"] == 2
+    replay_record = service.history.list(source="replay")["runs"][0]
+    assert replay_record["original_run_id"] == detail["id"]
 
 
 def test_summary_replay_rejected_and_missing_history_is_explicit(service):
@@ -256,6 +260,33 @@ def test_workflow_tools_routes_enforce_control_guard_and_history_validation(tmp_
         )
         assert post("/api/workflows/history/delete", {"ids": []})["deleted"] == 0
         assert post("/api/workflows/history/clear", {})["deleted"] == 0
+        history = instances[0].history
+        assert history.record(
+            {
+                "id": "export-test",
+                "workflow_id": "wf-export",
+                "name": "Export test",
+                "duration_ms": 1.25,
+                "graph": {"nodes": [], "edges": []},
+            }
+        )
+        assert history.flush()
+        filtered = get("/api/workflows/history?source=live&sort=slowest&size=1&page=99")
+        assert filtered["page"] == 0
+        assert filtered["overview"]["average_duration_ms"] == 1.25
+        bundle = post("/api/workflows/history/export", {"ids": ["export-test", "export-test"]})
+        assert bundle["format"] == "spyder-workflow-history"
+        assert len(bundle["runs"]) == 1
+        assert bundle["runs"][0]["graph"] == {"nodes": [], "edges": []}
+        for invalid in ([], ["missing"], ["export-test", "missing"], [False], ["x"] * 501):
+            with pytest.raises(HTTPError) as error:
+                post("/api/workflows/history/export", {"ids": invalid})
+            assert error.value.code == 400
+        with pytest.raises(HTTPError) as error:
+            post("/api/workflows/history/export", {"ids": ["export-test"]}, guard=False)
+        assert error.value.code == 403
+        assert history.list()["total"] == 1
+
     finally:
         server.shutdown()
         server.server_close()

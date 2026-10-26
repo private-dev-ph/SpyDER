@@ -481,3 +481,138 @@
   margin-block: 8px;
   background: #000;
 }
+
+/* Execution history remains usable on narrow and short displays. */
+.wt-history {
+  width: min(1160px, 96vw);
+}
+.wt-history > header,
+.wt-history .wt-header-actions,
+.wt-history-bulk,
+.wt-run-detail > header {
+  flex-wrap: wrap;
+}
+.wt-history .wt-live-toggle,
+.wt-history-bulk label,
+.wt-history .wt-run-select {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+.wt-history-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-block: 1rem;
+}
+.wt-history-overview > div {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--canvas);
+}
+.wt-history-overview strong {
+  font-size: 1.35rem;
+  color: var(--accent);
+}
+.wt-history-overview span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.wt-history-bulk {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding-block: 0.5rem;
+}
+.wt-history-bulk > span {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.wt-history .wt-runs {
+  max-height: min(48vh, 540px);
+  overflow: auto;
+  padding: 2px;
+  scrollbar-gutter: stable;
+}
+.wt-history .wt-runs article > div {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.wt-history .wt-runs article strong {
+  display: inline-block;
+  margin-right: 0.5rem;
+}
+.wt-history .wt-run-select {
+  flex: 0 0 auto;
+}
+.wt-history .wt-runs article:has(input:checked) {
+  border-color: var(--accent);
+}
+.wt-node-inspector-card {
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--canvas);
+  padding: 1rem;
+  margin-block: 1rem;
+}
+.wt-node-data {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 0.7rem;
+}
+.wt-node-data > section {
+  min-width: 0;
+}
+.wt-history pre {
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.wt-trace-node[role="button"] {
+  cursor: pointer;
+}
+.wt-trace-node[role="button"]:hover rect,
+.wt-trace-node[role="button"]:focus rect {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+@media (max-width: 600px) {
+  .wt-history-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .wt-history .wt-runs article {
+    flex-wrap: wrap;
+    padding: 0.7rem;
+    gap: 0.6rem;
+  }
+  .wt-history .wt-runs article > div {
+    flex-basis: calc(100% - 2.5rem);
+  }
+  .wt-history .wt-runs article > button {
+    margin-left: 2rem;
+  }
+  .wt-history-bulk button {
+    flex: 1 1 130px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wt-history * {
+    scroll-behavior: auto;
+  }
+}
+
+.wt-history .wt-timeline {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+.wt-history .wt-run-detail {
+  min-width: 0;
+}
+.wt-history .wt-run-detail h3 {
+  overflow-wrap: anywhere;
+}

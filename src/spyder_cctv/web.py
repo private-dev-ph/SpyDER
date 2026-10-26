@@ -1162,14 +1162,26 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     if set(data) != {"ids"}:
                         raise ValueError("Send execution ids")
                     ids = data["ids"]
-                    if not isinstance(ids, list) or len(ids) > 500 or any(
-                        not isinstance(item, str) or not item or len(item) > 64 for item in ids
+                    if (
+                        not isinstance(ids, list)
+                        or not ids
+                        or len(ids) > 500
+                        or any(
+                            not isinstance(item, str) or not item or len(item) > 64 for item in ids
+                        )
                     ):
                         raise ValueError("Export accepts at most 500 execution IDs")
                     runs = []
+                    export_bytes = 128
                     for ident in dict.fromkeys(ids):
                         try:
-                            runs.append(workflows.history_detail(ident))
+                            run = workflows.history_detail(ident)
+                            export_bytes += (
+                                len(json.dumps(run, ensure_ascii=False).encode("utf-8")) + 2
+                            )
+                            if export_bytes > 16 * 1024 * 1024:
+                                raise ValueError("History export exceeds 16 MiB; select fewer runs")
+                            runs.append(run)
                         except KeyError as error:
                             raise ValueError(f"Unknown execution: {ident}") from error
                     bundle = {
@@ -1177,7 +1189,10 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         "version": 1,
                         "runs": runs,
                     }
-                    if len(json.dumps(bundle, ensure_ascii=False).encode("utf-8")) > 16 * 1024 * 1024:
+                    if (
+                        len(json.dumps(bundle, ensure_ascii=False).encode("utf-8"))
+                        > 16 * 1024 * 1024
+                    ):
                         raise ValueError("History export exceeds 16 MiB")
                     self.json(200, bundle)
                 elif parts == ["api", "workflows", "history", "delete"]:

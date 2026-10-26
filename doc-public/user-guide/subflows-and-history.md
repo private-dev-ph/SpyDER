@@ -42,7 +42,10 @@ model weights are excluded from history storage.
 Dry runs use the archived graph and retained detections. They do not open cameras,
 run models, create events, send notifications, or start recordings. Their cooldown
 state starts empty, so results can differ from a live run that had an active cooldown.
-They cannot reproduce footage or detection inputs that were not retained. Code nodes
+Each replay is queued as a separate `replay` record linked to its original run,
+subject to the current collection settings, retention limits, and storage availability.
+Live and replay records can be filtered separately. They cannot reproduce footage
+or detection inputs that were not retained. Code nodes
 use the existing bounded code runner; external actions remain disabled.
 
 ### Retention and local storage
@@ -70,3 +73,37 @@ The static showcase keeps workflow definitions and published callable versions i
 not execute native workflows or retain server execution history. History controls
 explain this boundary instead of requesting the local API or uploading camera data.
 Local application history stays on the user's computer.
+
+### Monitor and manage retained runs
+
+The toolbar opens history filtered to the current workflow. Choose **All runs / reset filters**
+to browse the whole library. The history window includes totals for completed, filtered, and failed evaluations,
+plus average duration across the current filters. Counts describe workflow
+**evaluations**, not detected people or independent recording clips. A filtered
+result is usually an expected rule outcome rather than an application error.
+
+Search by workflow name or camera, filter by workflow/camera ID, state, source,
+and local calendar date, then choose newest, oldest, or slowest first. Pagination
+and a scrollable list keep the view manageable as history grows. Summary metrics
+cover all matching retained runs rather than only the visible page.
+
+Enable **Live updates** to refresh the newest page every five seconds. Updates
+pause while the tab is hidden, while records are selected, while a run is open,
+or while you are interacting with the list. Older pages and other sort orders
+stay still; use Refresh to fetch them explicitly. Closing the window ends updates.
+
+Open **Details**, expand the execution graph, and select a node with the mouse or
+keyboard to inspect its recorded IN/OUT data, signals, call path, timing, and archived
+configuration. Missing payloads are labelled explicitly. Diagnostic mode must have
+been enabled before that run to retain bounded payloads; enabling it later cannot
+recover old data. The archived configuration is read-only and does not alter the
+current workflow.
+
+Select individual runs or **Select page** for bulk JSON export or deletion, up to
+500 records at a time. Selection can span pages and is cleared when filters change.
+Exports include archived configuration and retained diagnostic data, which may
+contain identity labels or code; treat downloaded files as private. Large exports
+are bounded: reduce the selection if the server reports its export allowance.
+Deletion requires confirmation and removes history only. It never deletes cameras,
+workflow definitions, events, captures, or recordings. Clearing site data in the
+Cloudflare showcase does not affect local application history.

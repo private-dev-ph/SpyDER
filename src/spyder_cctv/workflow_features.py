@@ -270,6 +270,8 @@ class WorkflowFeatures:
             trace=trace,
         )
         result = trace.finish()
+        result["original_run_id"] = ident
+        retained_id = self.service.history.record(result)
         notice = (
             " Some diagnostic inputs were truncated; this dry run uses the retained subset."
             if context.get("inputs_truncated")
@@ -278,6 +280,7 @@ class WorkflowFeatures:
         return {
             "run": result,
             "original_run_id": ident,
+            "history_queued": retained_id is not None,
             "actions_enabled": False,
             "message": (
                 "Dry run over archived detections. Models and actions are not executed; "
