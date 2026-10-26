@@ -17,14 +17,17 @@ const profile = await mkdtemp(
 );
 const requests = [];
 const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="/form-controls.css"><style>
-:root{--accent:#be1a1a;--accent-hover:#830000;--focus:#830000;--ink:#201d1a;--muted:#726d64;--border:#e4dfd4;--surface:#fffefa;--rail:#f0ede4}
-*{box-sizing:border-box}body{font:14px Arial;padding:20px;width:360px}.we-help-field{position:relative;margin:16px 0;padding-top:24px}
+<link rel="stylesheet" href="/form-controls.css"><link rel="stylesheet" href="/dashboard.css"><style>
+*{box-sizing:border-box}body{font:14px Arial;padding:20px;width:100%;max-width:600px}.we-help-field{position:relative;margin:16px 0;padding-top:24px}
 .we-help-field label{display:grid;gap:4px}.we-help-field input[type=number]{display:block;width:100%;height:38px;margin-top:4px;padding:5px;border:1px solid var(--border)}
 .help{position:absolute;right:0;top:0;width:24px;height:24px}.hidden{display:none!important}
 </style><main>
+<label for="theme-select">Choose an especially long option label for responsive menu testing</label><select id="theme-select"><option value="current" selected>Current selection</option><option value="next">A deliberately long option label that remains readable on a narrow phone width</option><optgroup label="Camera group"><option value="disabled" disabled>Unavailable camera</option><option value="grouped">Available camera</option></optgroup></select>
+<label for="size-one-select">Single-row select</label><select id="size-one-select" size="1"><option selected>One</option><option>Two</option></select>
+<label for="multiple-select">Multiple selection listbox</label><select id="multiple-select" multiple><option selected>Alpha</option><option>Beta</option></select>
+<label for="listbox-select">Tall listbox</label><select id="listbox-select" size="3"><option>Alpha</option><option>Beta</option><option>Gamma</option></select>
 <div id="field" class="we-help-field"><button class="help" type="button" aria-label="Field help">?</button><label id="threshold-label">Threshold<input id="threshold" type="number" value="0.2" min="0" max="0.4" step="0.1"></label></div>
-<dialog id="settings"><div id="dialog-field" class="we-help-field"><label>Duration<input id="duration" type="number" value="2" min="1" max="4" step="1"></label></div></dialog>
+<dialog id="settings"><label for="dialog-select">Dialog select</label><select id="dialog-select"><option selected>Open here</option><option>Second</option></select><div id="dialog-field" class="we-help-field"><label>Duration<input id="duration" type="number" value="2" min="1" max="4" step="1"></label></div></dialog>
 </main><script src="/form-controls.js"></script>`;
 const server = http.createServer(async (request, response) => {
   requests.push(request.url);
@@ -36,7 +39,7 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   const asset = name.slice(1);
-  if (!["form-controls.js", "form-controls.css"].includes(asset)) {
+  if (!["form-controls.js", "form-controls.css", "dashboard.css"].includes(asset)) {
     response.writeHead(404).end();
     return;
   }
@@ -143,8 +146,121 @@ try {
       `Timed out: ${expression}; requests=${JSON.stringify(requests)}; state=${JSON.stringify(state)}; runtime=${JSON.stringify(runtimeErrors)}`,
     );
   }
+  async function clickElement(selector) {
+    const point = await evaluate(`(() => {const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await command("Input.dispatchMouseEvent", {type:"mouseMoved",...point}, sessionId);
+    await command("Input.dispatchMouseEvent", {type:"mousePressed",...point,button:"left",clickCount:1}, sessionId);
+    await command("Input.dispatchMouseEvent", {type:"mouseReleased",...point,button:"left",clickCount:1}, sessionId);
+  }
 
   await until("document.querySelectorAll('.number-stepper').length === 2");
+
+  const selectStyle = await evaluate(`(() => {
+    const select=document.querySelector('#theme-select');
+    return {support:CSS.supports('appearance','base-select')&&CSS.supports('selector(::picker(select))'),
+      appearance:getComputedStyle(select).appearance,
+      sizeOne:getComputedStyle(document.querySelector('#size-one-select')).appearance,
+      multiple:getComputedStyle(document.querySelector('#multiple-select')).appearance,
+      listbox:getComputedStyle(document.querySelector('#listbox-select')).appearance};
+  })()`);
+  assert.equal(selectStyle.support, true, "Browser supports customizable select styling");
+  assert.equal(selectStyle.appearance, "base-select", "single select opts into customizable picker");
+  assert.equal(selectStyle.sizeOne, "base-select", "size=1 dropdown opts into customizable picker");
+  assert.equal(selectStyle.multiple, "auto", "multiple select keeps native listbox appearance");
+  assert.equal(selectStyle.listbox, "auto", "tall listbox keeps native appearance");
+
+  const pickerStyle = await evaluate(`(() => {
+    const select=document.querySelector('#theme-select');
+    const picker=getComputedStyle(select,'::picker(select)');
+    const option=select.options[0];
+    const checkmark=getComputedStyle(option,'::checkmark');
+    return {background:picker.backgroundColor,border:picker.borderTopColor,
+      maxHeight:picker.maxHeight,selectedBackground:getComputedStyle(option).backgroundColor,
+      selectedColor:getComputedStyle(option).color,checkmarkDisplay:checkmark.display};
+  })()`);
+  assert.equal(pickerStyle.background, "rgb(255, 254, 250)", "picker uses themed surface");
+  assert.notEqual(pickerStyle.border, "rgba(0, 0, 0, 0)", "picker has visible border");
+  assert.notEqual(pickerStyle.maxHeight, "none", "picker height is bounded");
+  assert.equal(pickerStyle.selectedBackground, "rgb(248, 235, 171)", "selected option uses gold-soft theme token");
+  assert.equal(pickerStyle.selectedColor, "rgb(32, 29, 26)", "selected option uses ink token");
+  assert.notEqual(pickerStyle.checkmarkDisplay, "none", "native selected checkmark remains visible");
+
+  await clickElement("#theme-select");
+  await until("document.querySelector('#theme-select').matches(':open')");
+  await command("Input.dispatchKeyEvent", {type:"keyDown",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  const focusedOption = await evaluate(`(() => {
+    const option=document.querySelector('#theme-select').options[1];
+    const r=option.getBoundingClientRect();
+    return {background:getComputedStyle(option).backgroundColor,color:getComputedStyle(option).color,focused:option.matches(':focus'),x:r.x+r.width/2,y:r.y+r.height/2};
+  })()`);
+  assert.equal(focusedOption.focused, true, "keyboard highlights option in open picker");
+  assert.equal(focusedOption.background, "rgb(190, 26, 26)", "focused option uses accent token");
+  assert.equal(focusedOption.color, "rgb(255, 255, 255)", "focused option has readable white text");
+  await command("Input.dispatchMouseEvent", {type:"mouseMoved",x:focusedOption.x,y:focusedOption.y}, sessionId);
+  const hoveredOption = await evaluate("({background:getComputedStyle(document.querySelector('#theme-select').options[1]).backgroundColor,color:getComputedStyle(document.querySelector('#theme-select').options[1]).color,hovered:document.querySelector('#theme-select').options[1].matches(':hover')})");
+  assert.equal(hoveredOption.hovered, true, "pointer hovers open picker option");
+  assert.equal(hoveredOption.background, "rgb(190, 26, 26)", "hovered option uses accent token");
+  await command("Input.dispatchKeyEvent", {type:"rawKeyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await until("!document.querySelector('#theme-select').matches(':open')");
+
+  await evaluate("document.documentElement.dataset.theme='dark'");
+  const darkSelectStyle = await evaluate(`(() => {
+    const select=document.querySelector('#theme-select');
+    const picker=getComputedStyle(select,'::picker(select)');
+    const selected=getComputedStyle(select.options[0]);
+    return {appearance:getComputedStyle(select).appearance,picker:picker.backgroundColor,
+      selectedBackground:selected.backgroundColor,selectedColor:selected.color};
+  })()`);
+  assert.deepEqual(darkSelectStyle, {
+    appearance:"base-select",picker:"rgb(30, 28, 27)",
+    selectedBackground:"rgb(64, 56, 34)",selectedColor:"rgb(245, 239, 228)"},
+    "dark picker and selected option use dark theme tokens");
+  await clickElement("#theme-select");
+  await until("document.querySelector('#theme-select').matches(':open')");
+  await command("Input.dispatchKeyEvent", {type:"keyDown",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  const darkFocused = await evaluate(`(() => {const o=document.querySelector('#theme-select').options[1];const r=o.getBoundingClientRect();return {background:getComputedStyle(o).backgroundColor,color:getComputedStyle(o).color,focused:o.matches(':focus'),x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+  assert.equal(darkFocused.focused, true, "dark theme option receives keyboard focus");
+  assert.equal(darkFocused.background, "rgb(190, 26, 26)", "dark focused option uses accent");
+  assert.equal(darkFocused.color, "rgb(255, 255, 255)", "dark focused option retains contrast");
+  await command("Input.dispatchMouseEvent", {type:"mouseMoved",x:darkFocused.x,y:darkFocused.y}, sessionId);
+  assert.equal(await evaluate("document.querySelector('#theme-select').options[1].matches(':hover')"), true, "dark option receives actual pointer hover");
+  await command("Input.dispatchKeyEvent", {type:"rawKeyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await until("!document.querySelector('#theme-select').matches(':open')");
+  await evaluate("document.documentElement.dataset.theme='light'");
+
+  await command("Emulation.setDeviceMetricsOverride", {width:375,height:812,deviceScaleFactor:1,mobile:true}, sessionId);
+  const narrowSelect = await evaluate(`(() => {const r=document.querySelector('#theme-select').getBoundingClientRect();return {left:r.left,right:r.right,width:innerWidth,scrollWidth:document.documentElement.scrollWidth}})()`);
+  assert.ok(narrowSelect.left >= 0 && narrowSelect.right <= narrowSelect.width, "select stays within 375px viewport");
+  assert.ok(narrowSelect.scrollWidth <= narrowSelect.width, "long label causes no horizontal page overflow");
+  await command("Emulation.clearDeviceMetricsOverride", {}, sessionId);
+
+  await evaluate("window.selectEvents=[];const s=document.querySelector('#theme-select');s.addEventListener('input',()=>selectEvents.push('input'));s.addEventListener('change',()=>selectEvents.push('change'))");
+  await clickElement("#theme-select");
+  await until("document.querySelector('#theme-select').matches(':open')");
+  await command("Input.dispatchKeyEvent", {type:"keyDown",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"rawKeyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await until("!document.querySelector('#theme-select').matches(':open')");
+  assert.equal(await evaluate("document.querySelector('#theme-select').value"), "current", "Escape cancels picker change");
+  await clickElement("#theme-select");
+  await until("document.querySelector('#theme-select').matches(':open')");
+  await command("Input.dispatchKeyEvent", {type:"keyDown",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"ArrowDown",code:"ArrowDown"}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyDown",key:"Enter",code:"Enter"}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"Enter",code:"Enter"}, sessionId);
+  await until("!document.querySelector('#theme-select').matches(':open')");
+  assert.equal(await evaluate("document.querySelector('#theme-select').value"), "next", "keyboard accepts selected option");
+  assert.deepEqual(await evaluate("selectEvents"), ["input","change"], "keyboard selection emits native input/change events");
+
+  await command("Emulation.setEmulatedMedia", {features:[{name:"forced-colors",value:"active"}]}, sessionId);
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#theme-select')).appearance"), "auto", "forced colors restores native select appearance");
+  await command("Emulation.setEmulatedMedia", {features:[]}, sessionId);
+
   assert.deepEqual(
     await evaluate(`(() => {
     const i=document.querySelector('#threshold'), l=document.querySelector('#threshold-label'), c=i.labels[0].nextElementSibling;
@@ -171,7 +287,7 @@ try {
     "window.fieldEvents=[];const f=document.querySelector('#threshold');f.addEventListener('input',()=>fieldEvents.push('input'));f.addEventListener('change',()=>fieldEvents.push('change'));document.addEventListener('focusin',e=>{if(e.target===f)window.undoFocus=true})",
   );
   const point = await evaluate(
-    `(() => {const r=document.querySelector('#threshold').labels[0].nextElementSibling.lastElementChild.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`,
+    `(() => {document.querySelector('#threshold').scrollIntoView({block:'center'});const r=document.querySelector('#threshold').labels[0].nextElementSibling.lastElementChild.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`,
   );
   await command(
     "Input.dispatchMouseEvent",
@@ -257,6 +373,14 @@ try {
 
   await evaluate("document.querySelector('#settings').showModal()");
   await until("document.querySelector('#settings .number-stepper')");
+  await clickElement("#dialog-select");
+  await until("document.querySelector('#dialog-select').matches(':open')");
+  assert.deepEqual(await evaluate("({modal:document.querySelector('#settings').matches(':modal'),appearance:getComputedStyle(document.querySelector('#dialog-select')).appearance,background:getComputedStyle(document.querySelector('#dialog-select'),'::picker(select)').backgroundColor})"),
+    {modal:true,appearance:"base-select",background:"rgb(255, 254, 250)"},
+    "custom picker opens from a modal dialog and inherits themed surface");
+  await command("Input.dispatchKeyEvent", {type:"rawKeyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await command("Input.dispatchKeyEvent", {type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27}, sessionId);
+  await until("!document.querySelector('#dialog-select').matches(':open')");
   assert.equal(
     await evaluate(
       "document.querySelector('#settings').contains(document.querySelector('#settings .number-stepper'))",

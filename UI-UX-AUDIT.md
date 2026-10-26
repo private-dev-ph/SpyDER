@@ -11,6 +11,7 @@ Changes use `codex/mobile-first-ui-ux` from local `fix/enrollment-focus-controls
 - Standardize shared icon, camera action and number stepper targets at 44px. Increase phone input text to 16px to avoid automatic field zoom.
 - Add a keyboard skip link that preserves the active workspace; reserve scroll clearance for the sticky header. Preserve reduced-motion and forced-color behavior.
 - Theme dark-mode select indicators, camera recovery state, number-control hover, operations accents and video-action states using the existing red/gold palette and semantic tokens. Video canvases retain their intentional dark backgrounds.
+- Theme open dropdown pickers in browsers supporting customizable native selects, including red hover/keyboard focus, gold selection and the native checkmark. Unsupported browsers and forced-color mode retain native pickers. Chrome regressions cover light/dark themes, hover, keyboard acceptance/cancellation, disabled groups, dialog dropdowns and mobile bounds.
 - Let camera settings actions wrap and stack dialog fields on narrow screens. Improve settings checkbox spacing and system/schedule form spacing.
 - Bound workflow dialogs to the dynamic viewport, improve narrow filter/pagination layouts and retain scrolling in short landscape windows.
 - Remove duplicate Vision Lab panel margins where the parent grid already provides a gap. Events already has a single outer panel; System and operations sections are siblings. Their semantic groups were retained.

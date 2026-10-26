@@ -1610,3 +1610,64 @@ input[type="search"]::-webkit-search-cancel-button {
     background-image: none;
   }
 }
+
+/* Style the open native picker too; appearance:none only themes the closed field.
+   Older browsers retain their native menu and keyboard/form behavior. */
+@supports (appearance: base-select) and selector(::picker(select)) {
+  @media (forced-colors: none) {
+    :root select:not([multiple]):not([size]),
+    :root select[size="1"]:not([multiple]),
+    :root select:not([multiple]):not([size])::picker(select),
+    :root select[size="1"]:not([multiple])::picker(select) {
+      appearance: base-select;
+    }
+    /* Keep the existing theme-aware arrow without a second browser arrow. */
+    :root select:not([multiple]):is(:not([size]), [size="1"])::picker-icon {
+      display: none;
+    }
+    :root select:not([multiple]):is(:not([size]), [size="1"])::picker(select) {
+      min-inline-size: anchor-size(width);
+      max-inline-size: calc(100vw - 24px);
+      max-block-size: min(360px, 60dvh);
+      margin-block: 4px;
+      padding: 4px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      border: 1px solid var(--control-border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: var(--shadow);
+      font: inherit;
+      font-size: 14px;
+    }
+    :root select:not([multiple]):is(:not([size]), [size="1"]) option {
+      min-block-size: 44px;
+      padding: 10px 12px;
+      gap: 8px;
+      border-radius: 4px;
+      line-height: 1.5;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      cursor: pointer;
+    }
+    :root select:not([multiple]):is(:not([size]), [size="1"]) option:checked {
+      background: var(--gold-soft);
+      color: var(--ink);
+      font-weight: 650;
+    }
+    :root select:not([multiple]):is(:not([size]), [size="1"])
+      option:not(:disabled):is(:hover, :focus) {
+      background: var(--accent);
+      color: #fff;
+      outline: none;
+    }
+    :root select:not([multiple]):is(:not([size]), [size="1"]) option::checkmark {
+      color: currentColor;
+    }
+    :root select:not([multiple]):is(:not([size]), [size="1"]) option:disabled {
+      color: var(--muted);
+      cursor: not-allowed;
+    }
+  }
+}
