@@ -27,6 +27,7 @@ from spyder_cctv.analysis_preview import AnalysisPreviews
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
+from spyder_cctv.backup_jobs import BackupJobs, validate_job_request
 from spyder_cctv.config import CameraConfig, SettingsProfile, load_app_config
 from spyder_cctv.configuration_backup import ConfigurationBackup
 from spyder_cctv.cv.contracts import VisionUnavailable
@@ -82,6 +83,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         if getattr(manager, "_config_path", None)
         else None
     )
+    backup_jobs = BackupJobs(manager, recorder, workflows, schedules)
     mutation_gate = threading.RLock()
     schedule_stop = threading.Event()
     schedule_error = {"error": None}
@@ -185,6 +187,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             super().server_bind()
 
         def server_close(self) -> None:
+            backup_jobs.close()
             schedule_stop.set()
             if schedule_thread.ident is not None:
                 schedule_thread.join(timeout=6)
@@ -432,6 +435,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 )
                 data["restore_pending"] = bool(backup and backup.pending)
                 self.json(200, data)
+            elif path == "/api/system/backup/jobs":
+                self.json(200, backup_jobs.snapshot())
             elif path == "/api/system/backup":
                 if backup is None:
                     self.json(409, {"error": "Backup requires a persistent configuration"})
@@ -959,11 +964,32 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
             try:
-                if backup and backup.pending:
+                if parts == ["api", "system", "backup", "jobs"]:
+                    data = self.body(9 * 1024 * 1024)
+                    operation, path, destination, include_media, browser_data = (
+                        validate_job_request(data)
+                    )
+                    if backup_jobs.snapshot().get("state") == "running":
+                        raise RuntimeError("A full backup job is already running")
+                    if backup and backup.pending:
+                        raise RuntimeError(
+                            "Configuration restore is pending; restart SpyDER before changing settings"
+                        )
+                    self.json(
+                        202,
+                        backup_jobs.start(
+                            operation,
+                            path,
+                            destination=destination,
+                            include_media=include_media,
+                            browser_data=browser_data,
+                        ),
+                    )
+                elif backup and backup.pending:
                     raise RuntimeError(
                         "Configuration restore is pending; restart SpyDER before changing settings"
                     )
-                if parts[:2] in (["api", "faces"], ["api", "onvif"]):
+                elif parts[:2] in (["api", "faces"], ["api", "onvif"]):
                     self.json(200, devices.post(parts, self.body(12 * 1024 * 1024 + 4096)))
                 elif parts == ["api", "recordings", "schedules"]:
                     data = self.body(262144)
