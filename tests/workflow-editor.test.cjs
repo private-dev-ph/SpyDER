@@ -3586,3 +3586,47 @@ test("execution metadata round-trips for independent, callable, and both modes",
     /execution settings/,
   );
 });
+const {
+  workflowHistory,
+} = require("../src/spyder_cctv/assets/workflow-editor.js");
+test("workflow history rules round-trip and reject ambiguous policies", () => {
+  const base = {
+    id: "history-test",
+    name: "History test",
+    enabled: false,
+    camera_ids: [],
+    nodes: [],
+    edges: [],
+  };
+  assert.equal(workflowHistory(base).enabled, true);
+  assert.equal("history" in decodeWorkflow(JSON.stringify(base)), false);
+  const policy = {
+    enabled: false,
+    states: ["error"],
+    min_interval_seconds: 60,
+    always_save_errors: true,
+  };
+  assert.deepEqual(
+    decodeWorkflow(encodeWorkflow({ ...base, history: policy })).history,
+    policy,
+  );
+  for (const change of [
+    { states: [] },
+    { states: ["error", "error"] },
+    { states: ["failed"] },
+    { min_interval_seconds: -1 },
+    { min_interval_seconds: 0.5 },
+    { min_interval_seconds: 86401 },
+    { enabled: "false" },
+    { always_save_errors: 1 },
+    { unknown: true },
+  ]) {
+    assert.throws(
+      () =>
+        decodeWorkflow(
+          JSON.stringify({ ...base, history: { ...policy, ...change } }),
+        ),
+      /history settings/,
+    );
+  }
+});

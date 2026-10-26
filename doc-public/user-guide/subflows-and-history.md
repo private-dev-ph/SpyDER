@@ -107,3 +107,31 @@ are bounded: reduce the selection if the server reports its export allowance.
 Deletion requires confirmation and removes history only. It never deletes cameras,
 workflow definitions, events, captures, or recordings. Clearing site data in the
 Cloudflare showcase does not affect local application history.
+
+### Per-workflow history rules
+
+Open a workflow and expand **History saving** below Execution mode. These settings
+apply after **Save workflow**, persist with the workflow, and travel with workflow
+imports and exports. Existing workflows continue to save all outcomes by default.
+
+- Turn off **Save execution history for this workflow** to stop collecting its runs.
+  Existing history remains available; cameras, workflow actions, and recordings continue.
+- Choose **Failed / error executions only**, **All executions**, or select a custom
+  combination of completed, filtered, and error outcomes. Keep at least one outcome.
+  A filtered result or an unknown face is not an execution error.
+- Set **Minimum time between saved runs** from 0 to 86,400 seconds. Zero saves every
+  selected outcome. A positive interval is shared across all cameras of that workflow.
+- **Always keep selected errors** lets errors bypass that interval, provided error is
+  among the selected outcomes. Turn it off to rate limit errors as well.
+
+The interval starts only when a record is accepted into the history queue. Intentional
+skips are not reported as dropped records. Interval windows reset when the application
+restarts; the rules themselves persist. Global history collection must also be enabled,
+and global retention, run-count, and size limits continue to apply.
+
+A saved execution contains the whole expanded call trace. Nested callable workflows
+follow the parent execution's history rules rather than creating separate run records.
+Safe diagnostic replays follow the workflow's currently saved history rules, so an
+archived configuration cannot bypass a newer collection opt-out. If the workflow has
+been deleted, its archived rules apply. Disabling history also disables future diagnostic
+payload retention; it does not prevent manually inspecting previously retained runs.

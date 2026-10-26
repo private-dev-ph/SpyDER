@@ -76,6 +76,37 @@
       types: ["preview", "event", "notification", "capture", "record"],
     },
   ];
+  function workflowHistory(graph) {
+    return (
+      graph?.history || {
+        enabled: true,
+        states: ["completed", "filtered", "error"],
+        min_interval_seconds: 0,
+        always_save_errors: true,
+      }
+    );
+  }
+  function validHistory(policy) {
+    return (
+      policy &&
+      typeof policy === "object" &&
+      !Array.isArray(policy) &&
+      Object.keys(policy).sort().join() ===
+        "always_save_errors,enabled,min_interval_seconds,states" &&
+      typeof policy.enabled === "boolean" &&
+      typeof policy.always_save_errors === "boolean" &&
+      Number.isInteger(policy.min_interval_seconds) &&
+      policy.min_interval_seconds >= 0 &&
+      policy.min_interval_seconds <= 86400 &&
+      Array.isArray(policy.states) &&
+      policy.states.length > 0 &&
+      policy.states.length <= 3 &&
+      new Set(policy.states).size === policy.states.length &&
+      policy.states.every((state) =>
+        ["completed", "filtered", "error"].includes(state),
+      )
+    );
+  }
   function workflowExecution(graph) {
     return {
       run_independently: graph.execution?.run_independently ?? true,
@@ -464,10 +495,13 @@
             "edges",
             "execution",
             "callable_version",
+            "history",
           ].includes(k),
       )
     )
       throw Error("Unknown workflow field.");
+    if (graph.history !== undefined && !validHistory(graph.history))
+      throw Error("Invalid workflow history settings.");
     if (
       graph.execution !== undefined &&
       (!graph.execution ||
@@ -1105,6 +1139,7 @@
     module.exports = {
       TYPES,
       workflowExecution,
+      workflowHistory,
       FIELD_HELP,
       fieldHelpMarkup,
       NODE_GROUPS,
@@ -2567,6 +2602,27 @@
           .querySelector("[data-open-templates]")
           ?.focus?.({ preventScroll: true });
       }
+      function historyPanel() {
+        const policy = workflowHistory(graph);
+        const preset =
+          policy.states.length === 3
+            ? "all"
+            : policy.states.length === 1 && policy.states[0] === "error"
+              ? "errors"
+              : "custom";
+        return `<details class="we-history-settings"><summary>History saving · ${!policy.enabled ? "Disabled" : preset === "errors" ? "Failures only" : preset === "all" ? "All outcomes" : "Custom outcomes"}${policy.enabled && policy.min_interval_seconds ? ` · interval ${policy.min_interval_seconds}s${policy.always_save_errors && policy.states.includes("error") ? " + errors always" : ""}` : ""}</summary><p>Applies when you save this workflow. Existing history is kept. Global collection and retention limits still apply. Called nodes are recorded inside the caller's execution, using the caller's rules.</p><div class="we-history-grid"><label class="we-history-check"><input type="checkbox" data-history-enabled ${policy.enabled ? "checked" : ""}>Save execution history for this workflow</label><label>Outcome preset<select data-history-preset><option value="all" ${preset === "all" ? "selected" : ""}>All executions</option><option value="errors" ${preset === "errors" ? "selected" : ""}>Failed / error executions only</option><option value="custom" disabled ${preset === "custom" ? "selected" : ""}>Custom outcomes (checkboxes below)</option></select></label><fieldset><legend>Outcomes to keep</legend>${[
+          ["completed", "Completed"],
+          ["filtered", "Filtered / no match"],
+          ["error", "Failed / error"],
+        ]
+          .map(
+            ([state, label]) =>
+              `<label class="we-history-check"><input type="checkbox" data-history-state="${state}" ${policy.states.includes(state) ? "checked" : ""}>${label}</label>`,
+          )
+          .join(
+            "",
+          )}</fieldset><label>Minimum time between saved runs (seconds)<input type="number" min="0" max="86400" step="1" data-history-interval value="${policy.min_interval_seconds}"><small>0 saves every selected outcome. Shared across this workflow's cameras. The interval window resets when the app restarts.</small></label><label class="we-history-check"><input type="checkbox" data-history-errors ${policy.always_save_errors ? "checked" : ""}>Always keep selected errors, even during the interval</label></div><p>Rule-based skips are intentional and do not count as dropped history. Failures means execution errors, not an unrecognized person or a filter with no match. ${demo ? "Showcase: rules are saved locally with the draft; execution stays disabled." : ""}</p></details>`;
+      }
       function executionPanel() {
         const settings = workflowExecution(graph),
           mode = settings.allow_calls
@@ -2845,6 +2901,7 @@
         if (!e.target.closest?.(".we-field-tooltip")) closeFieldHelp();
       };
       function render(preserveCanvas = false) {
+        const historyOpen = root.querySelector(".we-history-settings")?.open;
         closeFieldHelp();
         const pickerFocus =
           templatePickerOpen &&
@@ -2941,7 +2998,7 @@
                 "",
               )}</ul><p>Connected model selections will be applied. Cameras must be started separately.</p><div class="we-activation-actions"><button class="button secondary" data-activation-cancel ${activationBusy ? "disabled" : ""}>Cancel</button><button class="button primary" data-activation-confirm ${activationBusy ? "disabled" : ""}>${activationBusy ? "Enabling…" : "Confirm and enable workflow"}</button></div></section></div>`
           : "";
-        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar">${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}<div class="we-toolbar-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><label>Name<input data-name maxlength="128" value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Independent execution enabled" : "Independent execution disabled"}</strong></div><span>Enable/Disable controls independent runs. Calls from other workflows remain available through published versions.</span></div><button type="button" class="button secondary" data-open-subflows>Call workflow</button><button type="button" class="button secondary" data-open-history>Execution history</button><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${subflowEditing || rootBridgePresent || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div>${executionPanel()}<div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
+        root.innerHTML = `<header class="we-header"><div><p class="eyebrow">LOCAL RULE BUILDER</p><h2>Workflow editor</h2><p>Connect cameras, models and detection rules. Everything runs on this computer.</p></div><span class="we-badge">${demo ? "Demo editing only" : "Local workflow"}</span></header>${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-toolbar">${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}<div class="we-toolbar-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><label>Name<input data-name maxlength="128" value="${esc(graph.name)}"></label></div><div class="we-toolbar-actions"><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "secondary" : "primary"}" data-activate ${demo || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Independent execution enabled" : "Independent execution disabled"}</strong></div><span>Enable/Disable controls independent runs. Calls from other workflows remain available through published versions.</span></div><button type="button" class="button secondary" data-open-subflows>Call workflow</button><button type="button" class="button secondary" data-open-history>Execution history</button><button type="button" class="button secondary" data-open-templates aria-haspopup="dialog" ${busy || activationBusy || activationReview ? "disabled" : ""}><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#grid"/></svg>Templates</button><button class="button secondary" data-copy-node ${selectedNode ? "" : "disabled"}>Copy node</button><button class="button secondary" data-paste-node ${copiedNode && graph.nodes.length < 64 ? "" : "disabled"}>Paste node</button><button class="button secondary" data-undo>Undo</button><button class="button secondary" data-redo>Redo</button><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><button class="button secondary" data-remove ${subflowEditing || rootBridgePresent || busy || activationBusy ? "disabled" : ""}>Delete workflow</button><button class="button secondary" data-export>Export workflow</button><button class="button secondary" data-import>Import workflow</button><input type="file" accept=".json,application/json" data-import-file hidden></div></div><div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div>${executionPanel()}${historyPanel()}<div class="we-main"><aside class="we-sidebar"><section class="we-palette-panel" aria-labelledby="we-palette-title"><h3 id="we-palette-title">Node palette</h3><label class="we-palette-search">Search nodes<input type="search" data-palette-search value="${esc(paletteQuery)}" placeholder="Find a node or function" autocomplete="off"></label><div class="we-palette" tabindex="0" aria-label="Scrollable node palette">${paletteContents()}</div></section><section class="we-camera-panel"><h3>Cameras</h3><div class="we-cameras">${cams || "<p>No cameras configured.</p>"}</div></section><section class="we-events-panel"><h3>Events</h3><div class="we-events">${
           events
             .slice(-5)
             .reverse()
@@ -2980,6 +3037,7 @@
                 )}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" class="button secondary" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>`
             : ""
         }<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div></section></div>${activationModal}`;
+        if (historyOpen) root.querySelector(".we-history-settings").open = true;
         if (retainedCanvas) {
           const replacement = root.querySelector("[data-canvas]");
           replacement?.replaceWith?.(retainedCanvas);
@@ -3801,6 +3859,60 @@
       };
       const change = (e) => {
         const t = e.target;
+        if (
+          t.matches(
+            "[data-history-enabled],[data-history-state],[data-history-preset],[data-history-interval],[data-history-errors]",
+          )
+        ) {
+          const policy = clone(workflowHistory(graph));
+          if (t.matches("[data-history-enabled]")) policy.enabled = t.checked;
+          else if (t.matches("[data-history-errors]"))
+            policy.always_save_errors = t.checked;
+          else if (t.matches("[data-history-preset]")) {
+            if (t.value === "all")
+              policy.states = ["completed", "filtered", "error"];
+            else if (t.value === "errors") policy.states = ["error"];
+          } else if (t.matches("[data-history-state]")) {
+            policy.states = t.checked
+              ? [...new Set([...policy.states, t.dataset.historyState])]
+              : policy.states.filter(
+                  (state) => state !== t.dataset.historyState,
+                );
+          } else policy.min_interval_seconds = Number(t.value);
+          if (
+            !validHistory(policy) ||
+            (t.matches("[data-history-interval]") && !t.value.trim())
+          ) {
+            issue(
+              "Choose at least one outcome and a whole interval from 0 to 86400 seconds.",
+            );
+            if (t.type === "checkbox") t.checked = !t.checked;
+            else if (t.matches("[data-history-interval]"))
+              t.value = workflowHistory(graph).min_interval_seconds;
+            return;
+          }
+          remember();
+          graph.history = policy;
+          mark();
+          const currentPreset =
+            policy.states.length === 3
+              ? "all"
+              : policy.states.length === 1 && policy.states[0] === "error"
+                ? "errors"
+                : "custom";
+          root.querySelector("[data-history-preset]").value = currentPreset;
+          root
+            .querySelectorAll("[data-history-state]")
+            .forEach(
+              (control) =>
+                (control.checked = policy.states.includes(
+                  control.dataset.historyState,
+                )),
+            );
+          root.querySelector(".we-history-settings summary").textContent =
+            `History saving · ${!policy.enabled ? "Disabled" : currentPreset === "errors" ? "Failures only" : currentPreset === "all" ? "All outcomes" : "Custom outcomes"}${policy.enabled && policy.min_interval_seconds ? ` · interval ${policy.min_interval_seconds}s${policy.always_save_errors && policy.states.includes("error") ? " + errors always" : ""}` : ""}`;
+          return;
+        }
         if (t.matches("[data-workflow-mode]")) {
           remember();
           graph.execution = {

@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,13 @@ _SECRET_KEYS = {
 }
 _GRAPH_SECRET_KEYS = _SECRET_KEYS | {"frame_data", "image_data", "raw_frame", "raw_image"}
 _STATUSES = {"completed", "filtered", "error"}
+_DEFAULT_WORKFLOW_POLICY = {
+    "enabled": True,
+    "states": ("completed", "filtered", "error"),
+    "min_interval_seconds": 0,
+    "always_save_errors": True,
+}
+_MAX_WORKFLOW_INTERVALS = 10_000
 
 
 def _history_bound(value: str, *, upper: bool) -> str:
@@ -105,6 +113,8 @@ class ExecutionHistory:
         self.error: str | None = None
         self._available = True
         self._settings = dict(_DEFAULTS)
+        # Monotonic rate windows live for this process only; restart resets them.
+        self._workflow_record_times: OrderedDict[str, float] = OrderedDict()
         self._last_compact = time.monotonic()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,7 +232,7 @@ class ExecutionHistory:
             raise RuntimeError(f"Cannot persist workflow history settings: {exc}") from exc
         return dict(settings)
 
-    def record(self, run: dict[str, Any]) -> str | None:
+    def record(self, run: dict[str, Any], *, policy: dict[str, Any] | None = None) -> str | None:
         """Queue run safely. Return identifier when accepted; never raise to inference caller."""
         try:
             with self._state_lock:
@@ -231,6 +241,31 @@ class ExecutionHistory:
                 diagnostic = self._settings["mode"] == "diagnostic"
             if not isinstance(run, dict):
                 return None
+            state = str(run.get("state", "completed"))
+            if state not in _STATUSES:
+                state = "error" if state.lower() == "error" else "completed"
+            graph = run.get("graph")
+            graph_policy = (
+                policy
+                if policy is not None
+                else (graph.get("history") if isinstance(graph, dict) else None)
+            )
+            effective_policy = dict(_DEFAULT_WORKFLOW_POLICY)
+            if isinstance(graph_policy, dict):
+                effective_policy.update(graph_policy)
+            if not effective_policy["enabled"]:
+                return None
+            states = effective_policy["states"]
+            if state not in states:
+                return None
+            interval = effective_policy["min_interval_seconds"]
+            workflow_id = str(run.get("workflow_id", ""))[:128]
+            bypass_interval = state == "error" and effective_policy["always_save_errors"]
+            if interval and not bypass_interval:
+                with self._state_lock:
+                    previous = self._workflow_record_times.get(workflow_id)
+                    if previous is not None and time.monotonic() - previous < interval:
+                        return None
             identifier = str(run.get("id") or uuid.uuid4())[:64]
             started = _history_bound(
                 str(run.get("started_at") or datetime.now(UTC).isoformat())[:64], upper=False
@@ -239,7 +274,7 @@ class ExecutionHistory:
             if not isinstance(nodes, list):
                 nodes = []
             nodes = nodes[:_MAX_NODES]
-            raw_graph = run.get("graph", {})
+            raw_graph = graph if graph is not None else {}
             graph_complete = True
             try:
                 graph_json = json.dumps(
@@ -321,9 +356,6 @@ class ExecutionHistory:
                         if isinstance(action, dict)
                     ],
                 }
-            state = str(run.get("state", "completed"))
-            if state not in _STATUSES:
-                state = "error" if state.lower() == "error" else "completed"
             summary = {
                 "id": identifier,
                 "workflow_id": str(run.get("workflow_id", ""))[:128],
@@ -378,7 +410,17 @@ class ExecutionHistory:
             with self._state_lock:
                 if self._closed or not self._settings["enabled"]:
                     return None
+                if interval and not bypass_interval:
+                    previous = self._workflow_record_times.get(workflow_id)
+                    now = time.monotonic()
+                    if previous is not None and now - previous < interval:
+                        return None
                 self._queue.put_nowait(("record", (summary, details, graph_json, encoded_size)))
+                if interval and not bypass_interval:
+                    self._workflow_record_times[workflow_id] = time.monotonic()
+                    self._workflow_record_times.move_to_end(workflow_id)
+                    while len(self._workflow_record_times) > _MAX_WORKFLOW_INTERVALS:
+                        self._workflow_record_times.popitem(last=False)
             return identifier
         except Exception:
             with self._state_lock:

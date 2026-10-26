@@ -635,6 +635,7 @@
     graph.camera_ids = [];
     delete graph.execution;
     delete graph.callable_version;
+    delete graph.history;
     return graph;
   }
   async function openDefinition(id, version) {
@@ -1036,7 +1037,7 @@
                   body: "{}",
                 },
               );
-              result.textContent = `${replay.message ? `Replay notice: ${replay.message}${replay.history_queued ? " Replay queued in execution history." : " Replay was not retained (collection disabled or storage unavailable)."}` : ""}${replay.message ? String.fromCharCode(10, 10) : ""}${JSON.stringify(replay, null, 2)}`;
+              result.textContent = `${replay.message ? `Replay notice: ${replay.message}${replay.history_queued ? " Replay queued in execution history." : " Replay was not retained under the current history rules, collection settings, or storage availability."}` : ""}${replay.message ? String.fromCharCode(10, 10) : ""}${JSON.stringify(replay, null, 2)}`;
             } catch (error) {
               result.textContent = error.message;
             }

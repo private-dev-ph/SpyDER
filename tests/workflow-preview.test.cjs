@@ -480,3 +480,15 @@ test("connection labels are cosmetic and never restart a preview branch", () => 
   after.edges[0].label = "Main camera";
   assert.equal(branchKey(before, "preview"), branchKey(after, "preview"));
 });
+
+test("history saving rules cannot change a live preview branch identity", () => {
+  const workflow = graph();
+  const before = branchKey(workflow, "preview");
+  workflow.history = {
+    enabled: false,
+    states: ["error"],
+    min_interval_seconds: 3600,
+    always_save_errors: false,
+  };
+  assert.equal(branchKey(workflow, "preview"), before);
+});
