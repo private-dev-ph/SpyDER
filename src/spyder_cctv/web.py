@@ -513,10 +513,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                             "workflow_id",
                             "camera_id",
                             "state",
+                            "source",
                             "since",
                             "until",
                             "page",
                             "size",
+                            "sort",
                         }
                         if set(values) - allowed:
                             raise ValueError("Unknown history filter")
@@ -1155,6 +1157,29 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     self.json(200, workflows.import_bundle(data["bundle"]))
                 elif parts == ["api", "workflows", "history", "settings"]:
                     self.json(200, workflows.history.configure(self.body()))
+                elif parts == ["api", "workflows", "history", "export"]:
+                    data = self.body(65536)
+                    if set(data) != {"ids"}:
+                        raise ValueError("Send execution ids")
+                    ids = data["ids"]
+                    if not isinstance(ids, list) or len(ids) > 500 or any(
+                        not isinstance(item, str) or not item or len(item) > 64 for item in ids
+                    ):
+                        raise ValueError("Export accepts at most 500 execution IDs")
+                    runs = []
+                    for ident in dict.fromkeys(ids):
+                        try:
+                            runs.append(workflows.history_detail(ident))
+                        except KeyError as error:
+                            raise ValueError(f"Unknown execution: {ident}") from error
+                    bundle = {
+                        "format": "spyder-workflow-history",
+                        "version": 1,
+                        "runs": runs,
+                    }
+                    if len(json.dumps(bundle, ensure_ascii=False).encode("utf-8")) > 16 * 1024 * 1024:
+                        raise ValueError("History export exceeds 16 MiB")
+                    self.json(200, bundle)
                 elif parts == ["api", "workflows", "history", "delete"]:
                     data = self.body()
                     if set(data) != {"ids"}:
