@@ -24,10 +24,10 @@ from uuid import uuid4
 import cv2
 
 from spyder_cctv.analysis_preview import AnalysisPreviews
+from spyder_cctv.backup_jobs import BackupJobs, validate_job_request
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
-from spyder_cctv.backup_jobs import BackupJobs, validate_job_request
 from spyder_cctv.config import CameraConfig, SettingsProfile, load_app_config
 from spyder_cctv.configuration_backup import ConfigurationBackup
 from spyder_cctv.cv.contracts import VisionUnavailable
@@ -57,6 +57,12 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
         Path(app_data_dir) / "media" if app_data_dir is not None else manager.media_dir
     )
     detectors = DetectorCatalog()
+    restored_detectors = (
+        Path(app_data_dir) / "models" / "builtin-detectors" if app_data_dir else None
+    )
+    if restored_detectors and restored_detectors.is_dir():
+        # Prefer portable weights while retaining the catalog's shared-cache fallbacks.
+        detectors.root = restored_detectors
     try:
         galleries = FaceEnrollmentService(manager.app_data_dir / "face-galleries")
     except OSError:
@@ -944,9 +950,11 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             parts = urlsplit(self.path).path.strip("/").split("/")
             # Model uploads/installations cannot start capture or alter restored files.
             # Keep their potentially slow I/O outside the camera/restore control gate.
-            if parts[:2] in (["api", "models"], ["api", "faces"], ["api", "onvif"]) or parts[
-                :3
-            ] == ["api", "vision", "detectors"]:
+            if (
+                parts == ["api", "system", "backup", "jobs", "cancel"]
+                or parts[:2] in (["api", "models"], ["api", "faces"], ["api", "onvif"])
+                or parts[:3] == ["api", "vision", "detectors"]
+            ):
                 self._post()
             else:
                 with mutation_gate:
@@ -963,8 +971,28 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 self.json(403, {"error": "Control header required"})
                 return
             parts = urlsplit(self.path).path.strip("/").split("/")
+            current_backup = backup_jobs.snapshot()
+            if (
+                current_backup.get("state") == "running"
+                and current_backup.get("operation") == "create"
+                and parts != ["api", "system", "backup", "jobs", "cancel"]
+            ):
+                self.json(
+                    409,
+                    {
+                        "error": (
+                            "A complete backup is being created. "
+                            "Wait or cancel it before changing data."
+                        )
+                    },
+                )
+                return
             try:
-                if parts == ["api", "system", "backup", "jobs"]:
+                if parts == ["api", "system", "backup", "jobs", "cancel"]:
+                    if self.body() != {}:
+                        raise ValueError("Send an empty object")
+                    self.json(202, backup_jobs.cancel())
+                elif parts == ["api", "system", "backup", "jobs"]:
                     data = self.body(9 * 1024 * 1024)
                     operation, path, destination, include_media, browser_data = (
                         validate_job_request(data)
@@ -973,7 +1001,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         raise RuntimeError("A full backup job is already running")
                     if backup and backup.pending:
                         raise RuntimeError(
-                            "Configuration restore is pending; restart SpyDER before changing settings"
+                            "Configuration restore is pending; restart SpyDER "
+                            "before changing settings"
                         )
                     self.json(
                         202,

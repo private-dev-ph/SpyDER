@@ -51,3 +51,65 @@ def test_gui_first_launch_and_default_command(tmp_path, monkeypatch):
     assert main(["gui", "--no-browser"]) == 0
     assert path.read_bytes() == original
     assert len(opened) == 1
+
+
+def test_complete_backup_cli_dispatch_and_browser_state(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    calls = []
+
+    class Core:
+        @staticmethod
+        def create(config, output, **options):
+            calls.append(("create", config, output, options))
+            return {"path": str(output)}
+
+        @staticmethod
+        def inspect(archive):
+            calls.append(("inspect", archive))
+            return {"valid": True}
+
+        @staticmethod
+        def restore(archive, destination):
+            calls.append(("restore", archive, destination))
+            return {"config_path": str(destination / "appdata/config.json")}
+
+    monkeypatch.setitem(
+        sys.modules, "spyder_cctv.complete_backup", SimpleNamespace(CompleteBackup=Core)
+    )
+    config = tmp_path / "custom.json"
+    archive = tmp_path / "backup.zip"
+    browser = tmp_path / "browser-state.json"
+    browser.write_text(json.dumps({"version": 1, "local_storage": {"spyder-theme": "dark"}}))
+    assert (
+        main(
+            [
+                "--config",
+                str(config),
+                "backup",
+                "create",
+                "--output",
+                str(archive),
+                "--include-media",
+                "--browser-state",
+                str(browser),
+            ]
+        )
+        == 0
+    )
+    assert calls[0][1] == config.resolve()
+    assert calls[0][3]["include_media"] is True
+    assert calls[0][3]["browser_data"]["local_storage"]["spyder-theme"] == "dark"
+    assert main(["backup", "inspect", str(archive)]) == 0
+    assert main(["backup", "restore", str(archive), "--destination", str(tmp_path / "new")]) == 0
+    assert [call[0] for call in calls] == ["create", "inspect", "restore"]
+    assert "config_path" in capsys.readouterr().out
+
+
+def test_backup_cli_reports_invalid_archive_without_traceback(tmp_path, caplog):
+    bad = tmp_path / "broken.zip"
+    bad.write_bytes(b"not an archive")
+    assert main(["backup", "inspect", str(bad)]) == 1
+    assert "zip" in caplog.text.lower()

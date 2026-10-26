@@ -50,7 +50,10 @@ def test_job_runs_in_background_and_exposes_bounded_progress():
     assert status["state"] == "completed"
     assert status["progress"]["message"] == "Completed"
     assert status["result"] == {
-        "format": "spyder-fullbackup", "version": 1, "files": 3, "total_bytes": 24
+        "format": "spyder-fullbackup",
+        "version": 1,
+        "files": 3,
+        "total_bytes": 24,
     }
 
 
@@ -76,19 +79,60 @@ def test_request_validation_requires_absolute_paths_and_new_restore_folder(tmp_p
     existing = tmp_path / "existing"
     existing.mkdir()
     with pytest.raises(ValueError, match="new folder"):
-        validate_job_request({
-            "operation": "restore",
-            "path": str(tmp_path / "archive.spyder"),
-            "destination": str(existing),
-        })
+        validate_job_request(
+            {
+                "operation": "restore",
+                "path": str(tmp_path / "archive.spyder"),
+                "destination": str(existing),
+            }
+        )
 
 
 def test_request_validation_rejects_create_only_fields_on_inspect(tmp_path):
     with pytest.raises(ValueError, match="only valid for create"):
-        validate_job_request({
-            "operation": "inspect", "path": str(tmp_path / "archive.spyder"), "include_media": True
-        })
+        validate_job_request(
+            {
+                "operation": "inspect",
+                "path": str(tmp_path / "archive.spyder"),
+                "include_media": True,
+            }
+        )
     with pytest.raises(ValueError, match="only valid for create"):
-        validate_job_request({
-            "operation": "inspect", "path": str(tmp_path / "archive.spyder"), "browser_data": {}
-        })
+        validate_job_request(
+            {"operation": "inspect", "path": str(tmp_path / "archive.spyder"), "browser_data": {}}
+        )
+
+
+def test_archive_io_releases_service_locks_after_preflight(tmp_path, monkeypatch):
+    manager = SimpleNamespace(
+        _mutations=threading.Lock(),
+        _config_path=tmp_path / "config.json",
+        media_dir=tmp_path / "media",
+        _snapshot=lambda: [],
+    )
+    workflows = SimpleNamespace(
+        _lock=threading.Lock(),
+        history=SimpleNamespace(flush=lambda: True),
+        list=lambda: {"workflows": []},
+        _clip_threads=[],
+    )
+    recorder = SimpleNamespace(_thread=None, _writer=None, status=lambda: {"state": "idle"})
+    schedules = SimpleNamespace(snapshot=lambda: {"schedules": []})
+
+    class Core:
+        @staticmethod
+        def create(*args, **kwargs):
+            assert manager._mutations.acquire(blocking=False)
+            manager._mutations.release()
+            assert workflows._lock.acquire(blocking=False)
+            workflows._lock.release()
+            return {"files": 1, "total_bytes": 1}
+
+    monkeypatch.setattr(backup_jobs, "_complete_backup", lambda: Core)
+    jobs = BackupJobs(manager, recorder, workflows, schedules)
+    jobs.start("create", tmp_path / "archive.zip")
+    deadline = time.monotonic() + 2
+    while jobs.snapshot()["state"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert jobs.snapshot()["state"] == "completed", jobs.snapshot()
+    jobs.close()

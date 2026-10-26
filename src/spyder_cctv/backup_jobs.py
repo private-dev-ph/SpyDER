@@ -71,12 +71,12 @@ class BackupJobs:
             return
         progress = {
             "phase": _bounded(update.get("phase"), 40, "working"),
-            "files": _nonnegative_int(update.get("files")),
+            "files": _nonnegative_int(update.get("files", update.get("current"))),
             "bytes": _nonnegative_int(update.get("bytes")),
             "message": _bounded(update.get("message"), 160, "Working"),
         }
         if self._cancel.is_set():
-            raise RuntimeError("Backup operation cancelled because SpyDER is closing")
+            raise RuntimeError("Backup operation cancelled")
         with self._lock:
             if self._status.get("state") == "running":
                 self._status["progress"] = progress
@@ -85,7 +85,8 @@ class BackupJobs:
         try:
             archive_core = _complete_backup()
             if operation == "create":
-                # Freeze the catalog while taking its snapshot. Preserve all running resources.
+                # Preflight is atomic; the HTTP mutation barrier freezes new writes
+                # during create without holding service locks across archive I/O.
                 with self.workflows._lock, self.manager._mutations:
                     self._require_quiescent()
                     config_path = getattr(self.manager, "_config_path", None)
@@ -94,27 +95,27 @@ class BackupJobs:
                     history = getattr(self.workflows, "history", None)
                     if history is not None and not history.flush():
                         raise RuntimeError("Workflow event history did not finish saving")
-                    result = archive_core.create(
-                        Path(config_path),
-                        path,
-                        media_dir=self.manager.media_dir,
-                        include_media=include_media,
-                        browser_data=browser_data,
-                        progress=self._progress,
-                    )
+                result = archive_core.create(
+                    Path(config_path),
+                    path,
+                    media_dir=self.manager.media_dir,
+                    include_media=include_media,
+                    browser_data=browser_data,
+                    progress=self._progress,
+                )
             elif operation == "inspect":
                 result = archive_core.inspect(path, progress=self._progress)
             else:
                 result = archive_core.restore(path, destination, progress=self._progress)
             if self._cancel.is_set():
-                raise RuntimeError("Backup operation cancelled because SpyDER is closing")
+                raise RuntimeError("Backup operation cancelled")
             result = _small_result(result)
             with self._lock:
                 self._status.update(
                     state="completed",
                     progress={
                         "phase": "complete",
-                        "files": _nonnegative_int(result.get("files")),
+                        "files": _nonnegative_int(result.get("files", result.get("file_count"))),
                         "bytes": _nonnegative_int(result.get("total_bytes")),
                         "message": "Completed",
                     },
@@ -140,7 +141,9 @@ class BackupJobs:
             or (writer_thread is not None and writer_thread.is_alive())
             or getattr(self.recorder, "_writer", None) is not None
         ):
-            raise RuntimeError("Stop recordings and wait for finalization before creating a full backup")
+            raise RuntimeError(
+                "Stop recordings and wait for finalization before creating a full backup"
+            )
         for worker in self.manager._snapshot():
             if (
                 worker.status()["state"] not in ("stopped", "error")
@@ -150,13 +153,23 @@ class BackupJobs:
                     for runtime in (worker._retiring_pipeline, worker._retiring_analysis)
                 )
             ):
-                raise RuntimeError("Stop all cameras and wait for processing before creating a full backup")
+                raise RuntimeError(
+                    "Stop all cameras and wait for processing before creating a full backup"
+                )
         if any(graph["enabled"] for graph in self.workflows.list()["workflows"]):
             raise RuntimeError("Disable all workflows before creating a full backup")
         if any(thread.is_alive() for thread in self.workflows._clip_threads):
-            raise RuntimeError("Wait for workflow event clips to finish before creating a full backup")
+            raise RuntimeError(
+                "Wait for workflow event clips to finish before creating a full backup"
+            )
         if any(rule["enabled"] for rule in self.schedules.snapshot()["schedules"]):
             raise RuntimeError("Disable recording schedules before creating a full backup")
+
+    def cancel(self) -> dict[str, Any]:
+        """Request cancellation without making the coordinator unusable."""
+        with self._lock:
+            self._cancel.set()
+            return _copy_status(self._status)
 
     def close(self, timeout: float = 5.0) -> None:
         """Cancel active archive work, then wait briefly without blocking shutdown forever."""
@@ -203,6 +216,8 @@ def _absolute_path(value: Any, name: str) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be an absolute path")
     path = Path(value).expanduser()
+    if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+        raise ValueError(f"{name} cannot be a symbolic link or junction")
     if not path.is_absolute():
         raise ValueError(f"{name} must be an absolute path")
     return path.resolve()
@@ -225,8 +240,19 @@ def _small_result(value: Any) -> dict:
     # Keep archive payload and unbounded metadata out of polling responses.
     result = {}
     for key in (
-        "format", "version", "files", "total_bytes", "include_media",
-        "browser_data_included", "destination", "config_path", "browser_state_path",
+        "format",
+        "version",
+        "application_version",
+        "created_at",
+        "path",
+        "file_count",
+        "files",
+        "total_bytes",
+        "include_media",
+        "browser_data_included",
+        "destination",
+        "config_path",
+        "browser_state_path",
     ):
         item = value.get(key)
         if key in value and isinstance(item, (str, int, bool)):

@@ -254,3 +254,112 @@ def test_source_change_during_snapshot_aborts_and_cleans_temporary_files(tmp_pat
         CompleteBackup.create(config, archive, progress=mutate)
     assert changed and not archive.exists()
     assert not list(tmp_path.glob(".spyder-backup-*"))
+
+
+def test_media_backup_skips_incomplete_journals_and_avoids_recompressing_video(tmp_path):
+    source = tmp_path / "app"
+    source.mkdir()
+    _config(source / "config.json")
+    media = source / "media"
+    media.mkdir()
+    (media / "clip.mp4").write_bytes(b"completed clip")
+    (media / ".camera.active.json").write_text("{}")
+    (media / ".camera.recording.json").write_text("{}")
+    (media / "overlays").mkdir()
+    (media / "overlays" / "timeline.json").write_text("{}")
+    archive = tmp_path / "footage.zip"
+    CompleteBackup.create(source / "config.json", archive, include_media=True)
+    with zipfile.ZipFile(archive) as zipped:
+        assert zipped.getinfo("media/clip.mp4").compress_type == zipfile.ZIP_STORED
+        assert "media/overlays/timeline.json" in zipped.namelist()
+        assert not any(
+            name.endswith((".active.json", ".recording.json")) for name in zipped.namelist()
+        )
+
+
+def test_cancellation_during_sqlite_snapshot_preserves_source_and_removes_partial_archive(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    _config(source / "config.json")
+    database = source / "workflow-history.sqlite3"
+    with sqlite3.connect(database) as db:
+        db.execute("CREATE TABLE entries(value TEXT)")
+        db.execute("INSERT INTO entries VALUES ('keep')")
+
+    def cancel(progress):
+        if progress["phase"] == "snapshot":
+            raise RuntimeError("cancelled")
+
+    output = tmp_path / "cancelled.zip"
+    with pytest.raises(RuntimeError, match="cancelled"):
+        CompleteBackup.create(source / "config.json", output, progress=cancel)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".spyder-backup-*"))
+    with sqlite3.connect(database) as db:
+        assert db.execute("SELECT value FROM entries").fetchone()[0] == "keep"
+
+
+def test_malformed_file_metadata_and_nonportable_entries_are_rejected(tmp_path):
+    import hashlib
+
+    payload = b"{}"
+    malformed = tmp_path / "malformed.zip"
+    with zipfile.ZipFile(malformed, "w") as archive:
+        archive.writestr("appdata/config.json", payload)
+        archive.writestr("appdata/subflows.json", payload)
+        archive.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "format": "spyder-complete-backup",
+                    "version": 1,
+                    "config_filename": "config.json",
+                    "include_media": False,
+                    "files": {
+                        "appdata/config.json": {
+                            "size": 2,
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                        },
+                        "appdata/subflows.json": "bad",
+                    },
+                    "file_count": 2,
+                    "total_bytes": 4,
+                }
+            ),
+        )
+    with pytest.raises(ValueError, match="file metadata"):
+        CompleteBackup.restore(malformed, tmp_path / "never-published")
+    assert not (tmp_path / "never-published").exists()
+    for index, name in enumerate(
+        [
+            "appdata/models/CON",
+            "appdata/models/thing:stream",
+            "appdata/models/trailing.",
+            "appdata/models/a\\b",
+        ]
+    ):
+        archive_path = tmp_path / f"unsafe-{index}.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr(name, b"x")
+        with pytest.raises(ValueError, match="Unsafe archive entry"):
+            CompleteBackup.inspect(archive_path)
+
+
+def test_source_mutation_prevents_archive_publication(tmp_path):
+    source = tmp_path / "app"
+    source.mkdir()
+    _config(source / "config.json")
+    preferences = source / "preferences.json"
+    preferences.write_text('{"version":1,"pause_when_unfocused":true}')
+    changed = False
+
+    def mutate(progress):
+        nonlocal changed
+        if progress["phase"] == "create" and not changed:
+            changed = True
+            preferences.write_text('{"version":1,"pause_when_unfocused":false}')
+
+    output = tmp_path / "unstable.zip"
+    with pytest.raises(ValueError, match="changed during backup"):
+        CompleteBackup.create(source / "config.json", output, progress=mutate)
+    assert changed and not output.exists()

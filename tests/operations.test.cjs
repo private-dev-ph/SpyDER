@@ -27,3 +27,37 @@ test("schedule form requires camera, weekday and distinct times", () => {
   ])
     assert.throws(() => validateSchedule(invalid));
 });
+const {
+  collectBrowserBackup,
+  validateBrowserBackup,
+} = require("../src/spyder_cctv/assets/operations.js");
+test("complete backups collect only namespaced browser settings and bound their size", () => {
+  const rows = new Map([
+    ["spyder.layouts.v1", '{"layouts":[]}'],
+    ["unrelated.auth", "private"],
+    ["spyder-theme", "dark"],
+  ]);
+  const storage = {
+    length: rows.size,
+    key: (index) => [...rows.keys()][index],
+    getItem: (key) => rows.get(key),
+  };
+  assert.deepEqual(collectBrowserBackup(storage), {
+    version: 1,
+    local_storage: {
+      "spyder.layouts.v1": '{"layouts":[]}',
+      "spyder-theme": "dark",
+    },
+  });
+  for (const invalid of [
+    { version: 2, local_storage: {} },
+    { version: 1, local_storage: { other: "bad" } },
+    { version: 1, local_storage: { "spyder.x": {} } },
+    { version: 1, local_storage: [] },
+    { version: 1, local_storage: { "spyder.x": "x".repeat(8 * 1024 * 1024) } },
+  ])
+    assert.throws(
+      () => validateBrowserBackup(invalid),
+      /Invalid browser settings/,
+    );
+});

@@ -11,7 +11,9 @@ import stat
 import tempfile
 import zipfile
 from collections.abc import Callable
-from pathlib import Path, PurePosixPath
+from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 FORMAT = "spyder-complete-backup"
@@ -136,6 +138,12 @@ def _iter_files(
                 if filename.casefold().endswith(tuple(_SKIP_SUFFIXES)):
                     continue
                 folded_filename = filename.casefold()
+                if (
+                    prefix.startswith(("media", "media-archives/"))
+                    and folded_filename.startswith(".")
+                    and folded_filename.endswith((".active.json", ".recording.json"))
+                ):
+                    continue
                 if ".partial." in folded_filename or folded_filename in {
                     ".configuration-restore.json",
                     ".configuration-restore-journal.json",
@@ -182,6 +190,7 @@ def _safe_archive_name(name: str) -> bool:
         not name
         or "\\" in name
         or ":" in name
+        or any(ord(char) < 32 or char in '<>"|?*' for char in name)
         or path.is_absolute()
         or any(part in {"", ".", ".."} for part in name.split("/"))
     ):
@@ -237,27 +246,14 @@ def _db_snapshot(source: Path, temp_root: Path, progress: Callable[..., Any] | N
     target = temp_root / f"db-{hashlib.sha256(str(source).encode()).hexdigest()}.sqlite3"
     src = sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True, timeout=5)
     dst = sqlite3.connect(target)
-    callback_error: list[BaseException] = []
 
     def on_progress(status: int, remaining: int, total: int) -> None:
-        if callback_error:
-            return
-        try:
-            _progress(
-                progress,
-                total - remaining,
-                total,
-                str(source),
-                "snapshot",
-                (total - remaining) * 4096,
-            )
-        except BaseException as error:
-            callback_error.append(error)
+        _progress(
+            progress, total - remaining, total, str(source), "snapshot", (total - remaining) * 4096
+        )
 
     try:
         src.backup(dst, pages=256, progress=on_progress)
-        if callback_error:
-            raise callback_error[0]
     finally:
         dst.close()
         src.close()
@@ -295,7 +291,10 @@ def _previous_media_paths(config_path: Path, active: Path, warnings: list[str]) 
             or type(value["version"]) is not int
             or value["version"] != 1
             or not isinstance(value["media_directory"], str)
-            or not Path(value["media_directory"]).is_absolute()
+            or not (
+                Path(value["media_directory"]).is_absolute()
+                or PureWindowsPath(value["media_directory"]).is_absolute()
+            )
             or not isinstance(previous, list)
             or len(previous) > 32
             or any(not isinstance(item, str) or not Path(item).is_absolute() for item in previous)
@@ -418,7 +417,7 @@ class CompleteBackup:
                         "Registry stays unmodified."
                     )
                 if isinstance(records, list):
-                    present = {str(source.resolve()).casefold() for source, _ in entries}
+                    present = {os.path.normcase(str(source.resolve())) for source, _ in entries}
                     for row in records:
                         if not isinstance(row, dict) or not isinstance(row.get("path"), str):
                             continue
@@ -428,11 +427,7 @@ class CompleteBackup:
                             if (
                                 not model_path.is_file()
                                 or model_path.is_symlink()
-                                or (
-                                    _inside(model_path, app)
-                                    and not any(_inside(model_path, root) for root in media_roots)
-                                )
-                                or str(model_path).casefold() in present
+                                or os.path.normcase(str(model_path)) in present
                             ):
                                 continue
                         except OSError:
@@ -450,7 +445,7 @@ class CompleteBackup:
                             entries.append((model_path, relname))
                         external_models[str(row.get("id", model_id))] = relname
                         portable_paths[str(model_path)] = relname
-                        present.add(str(model_path).casefold())
+                        present.add(os.path.normcase(str(model_path)))
                     for source, name in entries:
                         if name.startswith("appdata/"):
                             portable_paths.setdefault(str(source.resolve()), name)
@@ -476,8 +471,11 @@ class CompleteBackup:
                         ref_path = raw_path.resolve(strict=True)
                         if not ref_path.is_file():
                             continue
-                        if _inside(ref_path, app):
-                            rel = "appdata/" + ref_path.relative_to(app).as_posix()
+                        captured = next(
+                            (name for source, name in entries if source.resolve() == ref_path), None
+                        )
+                        if captured is not None:
+                            rel = captured
                         else:
                             path_hash = hashlib.sha256(str(ref_path).encode()).hexdigest()[:20]
                             rel = f"external-models/refs/{path_hash}/{ref_path.name}"
@@ -539,6 +537,8 @@ class CompleteBackup:
             except (ImportError, OSError, ValueError) as error:
                 warnings.append(f"Installed detector models could not be enumerated: {error}")
             entries.sort(key=lambda pair: pair[1].casefold())
+            if any(not _safe_archive_name(name) for _, name in entries):
+                raise ValueError("Persistent files contain a nonportable archive path")
             if len({name.casefold() for _, name in entries}) != len(entries):
                 raise ValueError("Backup contains duplicate case-insensitive paths")
             for source, name in entries:
@@ -546,7 +546,7 @@ class CompleteBackup:
                     portable_paths.setdefault(str(source.resolve()), name)
             for source, _name in entries:
                 is_app_or_media = _inside(source, app) or _inside(source, media)
-                if not is_app_or_media and _inside(output, source.parent):
+                if not is_app_or_media and output == source.resolve():
                     raise ValueError("Backup output must not overlap external model source data")
             if len(entries) > MAX_FILES:
                 raise ValueError("Backup contains too many files")
@@ -654,9 +654,16 @@ class CompleteBackup:
                         raise ValueError("Recording schedules exceed 256 KiB")
                     digest = hashlib.sha256()
                     copied = 0
+                    member = zipfile.ZipInfo(name)
+                    member.compress_type = (
+                        zipfile.ZIP_STORED
+                        if source.suffix.lower()
+                        in {".mp4", ".webm", ".mkv", ".jpg", ".jpeg", ".png"}
+                        else zipfile.ZIP_DEFLATED
+                    )
                     with (
                         source.open("rb") as stream,
-                        archive.open(name, "w", force_zip64=True) as target,
+                        archive.open(member, "w", force_zip64=True) as target,
                     ):
                         while chunk := stream.read(CHUNK):
                             target.write(chunk)
@@ -687,7 +694,13 @@ class CompleteBackup:
                     size = copied
                     total += size
                     hashes[name] = {"sha256": digest.hexdigest(), "size": size}
+                try:
+                    application_version = version("spyder-cctv")
+                except PackageNotFoundError:
+                    application_version = "unknown"
                 manifest = {
+                    "application_version": application_version,
+                    "created_at": datetime.now(UTC).isoformat(),
                     "format": FORMAT,
                     "version": VERSION,
                     "files": hashes,
@@ -714,9 +727,7 @@ class CompleteBackup:
             final_entries = _iter_files(app, roots, exclude_dirs=media_roots)
             final_names = {name for _, name in final_entries}
             for source, name in entries:
-                if name not in final_names and (
-                    not _inside(source, app) or any(_inside(source, root) for root in media_roots)
-                ):
+                if name not in final_names:
                     if source.is_file():
                         final_entries.append((source, name))
             final_inventory = {
@@ -811,6 +822,15 @@ class CompleteBackup:
             ):
                 raise ValueError("Unsupported backup format or version")
             expected = manifest["files"]
+            if any(
+                not isinstance(record, dict)
+                or type(record.get("size")) is not int
+                or record["size"] < 0
+                or not isinstance(record.get("sha256"), str)
+                or len(record["sha256"]) != 64
+                for record in expected.values()
+            ):
+                raise ValueError("Backup file metadata is invalid")
             if (
                 len(expected) > MAX_FILES
                 or any(not isinstance(name, str) for name in expected)
@@ -938,6 +958,8 @@ class CompleteBackup:
         return {
             "format": FORMAT,
             "version": VERSION,
+            "application_version": manifest.get("application_version", "unknown"),
+            "created_at": manifest.get("created_at"),
             "files": manifest["file_count"],
             "file_count": manifest["file_count"],
             "total_bytes": manifest["total_bytes"],
@@ -1001,6 +1023,8 @@ class CompleteBackup:
             )
             _validate_restored_data(staging, destination, config_filename)
             if destination.exists() or destination.is_symlink():
+                raise FileExistsError(f"Restore destination already exists: {destination}")
+            if destination.exists() or _is_link(destination):
                 raise FileExistsError(f"Restore destination already exists: {destination}")
             os.rename(staging, destination)
             staging = None
@@ -1067,11 +1091,15 @@ def _rewrite_restored_paths(
         or type(value.get("version")) is not int
         or value["version"] != 1
         or not isinstance(value.get("media_directory"), str)
-        or not Path(value["media_directory"]).is_absolute()
+        or not (
+            Path(value["media_directory"]).is_absolute()
+            or PureWindowsPath(value["media_directory"]).is_absolute()
+        )
         or not isinstance(value.get("previous_directories"), list)
         or len(value["previous_directories"]) > 32
         or any(
-            not isinstance(item, str) or not Path(item).is_absolute()
+            not isinstance(item, str)
+            or not (Path(item).is_absolute() or PureWindowsPath(item).is_absolute())
             for item in value["previous_directories"]
         )
     ):

@@ -13,7 +13,12 @@
     return rule;
   }
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { scheduleSummary, validateSchedule };
+    module.exports = {
+      scheduleSummary,
+      validateSchedule,
+      collectBrowserBackup,
+      validateBrowserBackup,
+    };
     return;
   }
   const app = window.spyder;
@@ -40,18 +45,52 @@
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  function collectBrowserBackup(storage) {
+    const local_storage = {};
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (key?.startsWith("spyder.") || key?.startsWith("spyder-"))
+        local_storage[key] = storage.getItem(key);
+    }
+    const result = { version: 1, local_storage };
+    validateBrowserBackup(result);
+    return result;
+  }
+  function validateBrowserBackup(data) {
+    if (
+      !data ||
+      data.version !== 1 ||
+      Object.keys(data).sort().join() !== "local_storage,version" ||
+      !data.local_storage ||
+      typeof data.local_storage !== "object" ||
+      Array.isArray(data.local_storage) ||
+      Object.entries(data.local_storage).length > 1000 ||
+      Object.entries(data.local_storage).some(
+        ([key, value]) =>
+          !(key.startsWith("spyder.") || key.startsWith("spyder-")) ||
+          key.length > 256 ||
+          typeof value !== "string",
+      ) ||
+      new TextEncoder().encode(JSON.stringify(data)).length > 8 * 1024 * 1024
+    )
+      throw Error(
+        "Invalid browser settings backup (SpyDER keys only, maximum 8 MiB).",
+      );
+    return data;
+  }
   function mount() {
     dispose();
     const workspace = location.hash.slice(1);
     const content = document.querySelector("#workspace-content");
     if (!content || !["system", "recordings"].includes(workspace)) return;
     const controller = new AbortController();
-    let timer;
+    let timer, backupTimer;
     let disposed = false;
     dispose = () => {
       disposed = true;
       controller.abort();
       clearTimeout(timer);
+      clearTimeout(backupTimer);
     };
     const get = async (path) => {
       if (window.spyderShowcase)
@@ -85,6 +124,320 @@
         stamp = node("small");
       health.append(summary, issues, stamp);
       content.prepend(health);
+      const complete = panel(
+        "Complete backup & restore",
+        "Portable ZIP archive of application settings, workflows and published versions, models, face galleries, events, schedules, and execution history. Footage is optional. All work stays on this computer.",
+      );
+      complete.id = "complete-backup";
+      const fields = node("div", "", "complete-backup-grid");
+      function pathField(caption, placeholder) {
+        const label = node("label", caption),
+          input = node("input");
+        input.type = "text";
+        input.placeholder = placeholder;
+        input.autocomplete = "off";
+        label.append(input);
+        return { label, input };
+      }
+      const output = pathField(
+        "New backup archive path",
+        "C:\\Backups\\spyder-backup.zip",
+      );
+      const source = pathField(
+        "Archive to inspect / restore",
+        "C:\\Backups\\spyder-backup.zip",
+      );
+      const destination = pathField(
+        "New restore folder (must not exist)",
+        "C:\\SpyDER-Restored",
+      );
+      const mediaLabel = node("label", "", "operation-check"),
+        mediaCheck = node("input");
+      mediaCheck.type = "checkbox";
+      mediaLabel.append(
+        mediaCheck,
+        document.createTextNode(
+          "Include recordings and captures (can be very large)",
+        ),
+      );
+      const browserLabel = node("label", "", "operation-check"),
+        browserCheck = node("input");
+      browserCheck.type = "checkbox";
+      browserCheck.checked = true;
+      browserLabel.append(
+        browserCheck,
+        document.createTextNode(
+          "Include this browser’s SpyDER layouts, preferences, and drafts",
+        ),
+      );
+      const status = node(
+        "p",
+        "Ready. Archive paths refer to the computer running SpyDER.",
+        "field-help",
+      );
+      status.setAttribute("role", "status");
+      const progress = node("progress");
+      progress.removeAttribute("value");
+      progress.hidden = true;
+      progress.setAttribute("aria-label", "Backup operation in progress");
+      const report = node("div", "", "complete-backup-report");
+      report.hidden = true;
+      const ackLabel = node("label", "", "operation-check"),
+        ack = node("input");
+      ack.type = "checkbox";
+      ackLabel.append(
+        ack,
+        document.createTextNode(
+          "Restore a separate copy into a new folder. The running installation stays in place.",
+        ),
+      );
+      let jobGeneration = 0;
+      let active = false,
+        validatedPath = "",
+        submittedPath = "";
+      const create = button("Create complete backup", () => start("create"));
+      const inspect = button("Inspect archive", () => start("inspect"));
+      const restore = button("Restore to new folder", () => start("restore"));
+      const cancel = button("Cancel current operation", async () => {
+        try {
+          await showJob(await submit("/api/system/backup/jobs/cancel", {}));
+          status.textContent =
+            "Cancellation requested. A completed archive may already exist; current application data stays in place.";
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      });
+      cancel.disabled = true;
+      function refreshButtons() {
+        cancel.disabled = !active || !!window.spyderShowcase;
+        create.disabled = inspect.disabled = active || !!window.spyderShowcase;
+        restore.disabled =
+          active ||
+          !!window.spyderShowcase ||
+          !ack.checked ||
+          validatedPath !== source.input.value.trim() ||
+          !validatedPath;
+      }
+      for (const input of [source.input, destination.input])
+        input.addEventListener("input", () => {
+          if (input === source.input) {
+            validatedPath = "";
+            ack.checked = false;
+          }
+          refreshButtons();
+        });
+      ack.addEventListener("change", refreshButtons);
+      async function showJob(job) {
+        if (disposed) return;
+        clearTimeout(backupTimer);
+        active = job.state === "running";
+        progress.hidden = !active;
+        refreshButtons();
+        status.textContent =
+          job.state === "idle"
+            ? "Ready."
+            : job.state === "error"
+              ? `Operation failed: ${job.error}`
+              : job.state === "completed"
+                ? "Operation completed."
+                : job.progress?.message ||
+                  `${job.operation || "Backup"} in progress…`;
+        if (job.state === "completed") {
+          const result = job.result || {};
+          report.hidden = false;
+          const details = node("dl");
+          const pairs = [
+            ["Archive", result.path],
+            ["Restored folder", result.destination],
+            ["Configuration path", result.config_path],
+            ["Browser settings file", result.browser_state_path],
+            ["Files", result.files ?? result.file_count],
+            [
+              "Uncompressed size",
+              result.total_bytes == null
+                ? null
+                : `${(result.total_bytes / 1048576).toLocaleString(undefined, { maximumFractionDigits: 2 })} MiB`,
+            ],
+            ["SpyDER version", result.application_version],
+            [
+              "Created",
+              result.created_at
+                ? new Date(result.created_at).toLocaleString()
+                : null,
+            ],
+            [
+              "Footage",
+              result.include_media == null
+                ? null
+                : result.include_media
+                  ? "Included"
+                  : "Excluded",
+            ],
+          ];
+          for (const [label, value] of pairs)
+            if (value != null) {
+              details.append(node("dt", label), node("dd", String(value)));
+            }
+          report.replaceChildren(details);
+          if (result.warnings?.length) {
+            report.append(node("h3", "Review before restoring"));
+            const warnings = node("ul");
+            for (const warning of result.warnings)
+              warnings.append(node("li", warning));
+            report.append(warnings);
+          }
+
+          if (job.operation === "create") {
+            source.input.value =
+              submittedPath || result.path || output.input.value.trim();
+            validatedPath = "";
+          }
+          if (
+            job.operation === "inspect" &&
+            submittedPath &&
+            submittedPath === source.input.value.trim()
+          ) {
+            validatedPath = submittedPath;
+            refreshButtons();
+          }
+          if (job.operation === "restore")
+            status.textContent =
+              "Restore complete. Stop SpyDER before starting a new instance with the restored config path shown below. Import browser-state.json after switching to that restored instance.";
+        }
+        if (active && !disposed) backupTimer = setTimeout(pollJob, 1500);
+      }
+      async function pollJob() {
+        try {
+          const generation = jobGeneration;
+          const job = await get("/api/system/backup/jobs");
+          if (generation === jobGeneration) await showJob(job);
+        } catch (error) {
+          if (!disposed) {
+            status.textContent = error.message;
+            backupTimer = setTimeout(pollJob, 3000);
+          }
+        }
+      }
+      async function start(operation) {
+        if (active || window.spyderShowcase) return;
+        if (
+          operation === "restore" &&
+          (!ack.checked || validatedPath !== source.input.value.trim())
+        )
+          return;
+        ++jobGeneration;
+        active = true;
+        refreshButtons();
+        report.hidden = true;
+        status.textContent = "Starting local operation…";
+        submittedPath =
+          operation === "create"
+            ? output.input.value.trim()
+            : source.input.value.trim();
+        try {
+          const body = { operation, path: submittedPath };
+          if (operation === "create") {
+            body.include_media = mediaCheck.checked;
+            if (browserCheck.checked)
+              body.browser_data = collectBrowserBackup(localStorage);
+          }
+          if (operation === "restore")
+            body.destination = destination.input.value.trim();
+          await showJob(await submit("/api/system/backup/jobs", body));
+        } catch (error) {
+          active = false;
+          refreshButtons();
+          status.textContent = error.message;
+        }
+      }
+      fields.append(
+        output.label,
+        mediaLabel,
+        browserLabel,
+        create,
+        source.label,
+        inspect,
+        destination.label,
+        ackLabel,
+        restore,
+        cancel,
+      );
+      complete.append(
+        fields,
+        progress,
+        status,
+        report,
+        node(
+          "p",
+          "Before creating an archive, stop cameras and recordings, disable workflows and schedules, and wait for finalization. Model files and sensitive face profiles are included; keep the archive private. Restored automation starts disabled.",
+          "field-help",
+        ),
+      );
+      const browserImport = node(
+          "label",
+          "Import browser-state.json after switching to restored data",
+          "backup-file-label",
+        ),
+        browserFile = node("input");
+      browserFile.type = "file";
+      browserFile.accept = ".json,application/json";
+      browserImport.append(browserFile);
+      complete.append(
+        browserImport,
+        button("Export browser settings", () => {
+          try {
+            download(
+              JSON.stringify(collectBrowserBackup(localStorage), null, 2),
+              "browser-state.json",
+            );
+            status.textContent =
+              "Browser layouts, preferences, and drafts exported locally.";
+          } catch (error) {
+            status.textContent = error.message;
+          }
+        }),
+      );
+      browserFile.addEventListener("change", async () => {
+        try {
+          const file = browserFile.files[0];
+          if (!file) return;
+          if (file.size > 8 * 1024 * 1024)
+            throw Error("Browser settings exceed 8 MiB.");
+          const data = validateBrowserBackup(JSON.parse(await file.text()));
+          if (
+            !window.confirm(
+              "Replace matching SpyDER browser preferences, layouts, and drafts on this origin? Do this only after switching to the restored installation.",
+            )
+          )
+            return;
+          const old = new Map(
+            Object.keys(data.local_storage).map((key) => [
+              key,
+              localStorage.getItem(key),
+            ]),
+          );
+          try {
+            for (const [key, value] of Object.entries(data.local_storage))
+              localStorage.setItem(key, value);
+          } catch (error) {
+            for (const key of old.keys()) localStorage.removeItem(key);
+            for (const [key, value] of old)
+              if (value !== null) localStorage.setItem(key, value);
+            throw error;
+          }
+          status.textContent =
+            "Browser settings imported. Reload to apply the layouts and preferences.";
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      });
+      content.append(complete);
+      refreshButtons();
+      if (window.spyderShowcase) {
+        status.textContent =
+          "Complete archives require the installed app. This static showcase sends no native backup requests.";
+        browserFile.disabled = true;
+      } else pollJob();
       const backup = panel(
         "Configuration backup & restore",
         "Back up camera settings, profiles, workflows, focus preference, and recording quality. Excludes models, media, events, schedules, output paths, and browser layouts.",
