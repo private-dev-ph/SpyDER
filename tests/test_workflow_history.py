@@ -57,6 +57,46 @@ def test_persistence_search_filters_and_pagination(tmp_path: Path):
     reopened.close()
 
 
+def test_history_overview_source_sort_and_page_clamp(tmp_path: Path):
+    store = ExecutionHistory(tmp_path / "history.sqlite")
+    date = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+    for index, state, duration in (
+        (1, "completed", 10),
+        (2, "filtered", 40),
+        (3, "error", 20),
+    ):
+        store.record(
+            _run(
+                index,
+                state=state,
+                duration_ms=duration,
+                started_at=date.replace(minute=index).isoformat(),
+            )
+        )
+    assert store.flush()
+    result = store.list(
+        source="live",
+        since=date.date().isoformat(),
+        until=date.date().isoformat(),
+        sort="slowest",
+        page=8,
+    )
+    assert [run["id"] for run in result["runs"]] == ["run-2", "run-3", "run-1"]
+    assert result["page"] == 0
+    assert result["overview"] == {
+        "completed": 1,
+        "filtered": 1,
+        "error": 1,
+        "average_duration_ms": 23.333,
+    }
+    assert store.list(sort="oldest", size=1)["runs"][0]["id"] == "run-1"
+    with pytest.raises(ValueError, match="sort"):
+        store.list(sort="duration")
+    with pytest.raises(ValueError, match="source"):
+        store.list(source="worker")
+    store.close()
+
+
 def test_search_escapes_sql_wildcards(tmp_path: Path):
     store = ExecutionHistory(tmp_path / "history.sqlite")
     store.record(_run(1, name="100% real"))
@@ -306,3 +346,26 @@ def test_oversized_graph_marks_snapshot_incomplete_instead_of_silent_partial_rep
         assert result["graph"]["nodes"] == []
     finally:
         history.close()
+
+
+def test_duration_index_migrates_existing_history_and_preserves_fractional_timings(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.sqlite"
+    store = ExecutionHistory(path)
+    assert store.record(_run(1, duration_ms=0.375))
+    assert store.flush()
+    store.close()
+    with sqlite3.connect(path) as db:
+        db.execute("DROP INDEX runs_duration_idx")
+        db.execute("ALTER TABLE runs DROP COLUMN duration_ms")
+    store = ExecutionHistory(path)
+    try:
+        result = store.list(sort="slowest")
+        assert result["runs"][0]["duration_ms"] == 0.375
+        assert result["overview"]["average_duration_ms"] == 0.375
+        assert store.record(_run(2, duration_ms=1.5, started_at=datetime.now(UTC).isoformat()))
+        assert store.flush()
+        assert store.list(sort="slowest")["runs"][0]["id"] == "run-2"
+    finally:
+        store.close()

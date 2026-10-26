@@ -282,8 +282,15 @@
         demo: true,
       };
     const normalized = { ...filters };
-    if (/^\d{4}-\d{2}-\d{2}$/.test(normalized.until || ""))
-      normalized.until = `${normalized.until}T23:59:59.999Z`;
+    for (const key of ["since", "until"]) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(normalized[key] || "")) {
+        const date = new Date(
+          `${normalized[key]}T${key === "until" ? "23:59:59.999" : "00:00:00"}`,
+        );
+        if (Number.isFinite(date.getTime()))
+          normalized[key] = date.toISOString();
+      }
+    }
     const query = new URLSearchParams(
       Object.entries(normalized).filter(([, v]) => v !== "" && v != null),
     );
@@ -845,31 +852,68 @@
         }
       });
   }
-  async function openHistory() {
+  async function openHistory({ workflow_id = "" } = {}) {
     const filters = {
       query: "",
-      workflow_id: "",
+      workflow_id,
       camera_id: "",
       state: "",
+      source: "",
+      sort: "newest",
       since: "",
       until: "",
       page: 0,
       size: 25,
     };
     const dialog = modal(
-      `<section class="wt-dialog wt-history" role="dialog" aria-modal="true" aria-labelledby="wt-history-title"><header><div><p class="eyebrow">PERSISTENT RUN RECORDS</p><h2 id="wt-history-title">Execution history</h2></div><div class="wt-header-actions"><button class="button secondary" data-hist-refresh ${demo() ? "disabled" : ""}>Refresh</button><button class="button secondary" data-wt-close>Close</button></div></header>${demo() ? '<p class="wt-demo">Execution history is unavailable in this browser showcase. No network requests are sent.</p>' : ""}<div class="wt-filter-grid"><label>Search<input data-hist-filter="query" placeholder="Workflow name or camera"></label><label>Workflow ID<input data-hist-filter="workflow_id"></label><label>Camera ID<input data-hist-filter="camera_id"></label><label>State<select data-hist-filter="state"><option value="">All states</option><option>completed</option><option>filtered</option><option>error</option></select></label><label>Since<input type="date" data-hist-filter="since"></label><label>Until<input type="date" data-hist-filter="until"></label></div><div class="wt-capacity"><span data-hist-storage>Loading storage summary…</span><button class="button secondary" data-hist-settings ${demo() ? "disabled" : ""}>History settings</button></div><div data-hist-warnings></div><div class="wt-runs" data-hist-runs></div><nav class="wt-pages"><button class="button secondary" data-hist-prev>Previous</button><span data-hist-page></span><button class="button secondary" data-hist-next>Next</button></nav><div data-hist-detail></div></section>`,
+      `<section class="wt-dialog wt-history" role="dialog" aria-modal="true" aria-labelledby="wt-history-title"><header><div><p class="eyebrow">PERSISTENT RUN RECORDS</p><h2 id="wt-history-title">Execution history</h2></div><div class="wt-header-actions"><label class="wt-live-toggle"><input type="checkbox" data-hist-live ${demo() ? "disabled" : ""}>Live updates</label><button class="button secondary" data-hist-reset>All runs / reset filters</button><button class="button secondary" data-hist-refresh ${demo() ? "disabled" : ""}>Refresh</button><button class="button secondary" data-wt-close>Close</button></div></header>${demo() ? '<p class="wt-demo">Execution history is unavailable in this browser showcase. No network requests are sent.</p>' : ""}<div class="wt-filter-grid"><label>Search<input data-hist-filter="query" placeholder="Workflow name or camera"></label><label>Workflow ID<input data-hist-filter="workflow_id" value="${esc(workflow_id)}"></label><label>Camera ID<input data-hist-filter="camera_id"></label><label>State<select data-hist-filter="state"><option value="">All states</option><option>completed</option><option>filtered</option><option>error</option></select></label><label>Source<select data-hist-filter="source"><option value="">All sources</option><option value="live">Live evaluations</option><option value="replay">Diagnostic replay</option></select></label><label>Order<select data-hist-filter="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="slowest">Slowest first</option></select></label><label>Since<input type="date" data-hist-filter="since"></label><label>Until<input type="date" data-hist-filter="until"></label></div><div class="wt-capacity"><span data-hist-storage>Loading storage summary…</span><button class="button secondary" data-hist-settings ${demo() ? "disabled" : ""}>History settings</button></div><div class="wt-history-overview" data-hist-overview aria-label="Filtered execution summary"></div><div data-hist-warnings></div><div class="wt-history-bulk"><label><input type="checkbox" data-hist-select-page aria-label="Select all runs on this page">Select page</label><span data-hist-selected>0 selected</span><button class="button secondary" data-hist-export-selected disabled>Export selected</button><button class="button secondary" data-hist-delete-selected disabled>Delete selected</button><span data-hist-live-status role="status" aria-live="polite"></span></div><div class="wt-runs" data-hist-runs></div><nav class="wt-pages"><button class="button secondary" data-hist-prev>Previous</button><span data-hist-page></span><button class="button secondary" data-hist-next>Next</button></nav><div data-hist-detail></div></section>`,
     );
     let generation = 0,
-      historyMode = "summary";
-    const load = async () => {
+      detailGeneration = 0;
+    const selected = new Set();
+    let visibleRuns = [];
+    const selectedState = () => {
+      dialog.wrap.querySelector("[data-hist-selected]").textContent =
+        `${selected.size} selected (maximum 500)`;
+      for (const button of dialog.wrap.querySelectorAll(
+        "[data-hist-export-selected],[data-hist-delete-selected]",
+      ))
+        button.disabled = !selected.size;
+      const all = dialog.wrap.querySelector("[data-hist-select-page]");
+      all.disabled = !visibleRuns.length;
+      all.checked =
+        visibleRuns.length > 0 &&
+        visibleRuns.every((run) => selected.has(run.id));
+      all.indeterminate =
+        !all.checked && visibleRuns.some((run) => selected.has(run.id));
+      dialog.wrap.querySelector("[data-hist-live-status]").textContent =
+        selected.size ? "Live updates paused during selection." : "";
+    };
+    const load = async (background = false) => {
       const current = ++generation,
         box = dialog.wrap.querySelector("[data-hist-runs]"),
         pager = dialog.wrap.querySelector("[data-hist-page]");
-      box.innerHTML = "<p>Loading runs…</p>";
+      if (!background) box.innerHTML = "<p>Loading runs…</p>";
       try {
         const data = await historyPage(filters);
         if (current !== generation || !dialog.wrap.isConnected) return;
-        historyMode = data.settings?.mode || historyMode;
+        filters.page = data.page || 0;
+        visibleRuns = data.runs || [];
+        const overview = data.overview || {};
+        dialog.wrap.querySelector("[data-hist-overview]").innerHTML = [
+          ["Completed", overview.completed],
+          ["Filtered", overview.filtered],
+          ["Errors", overview.error],
+          [
+            "Average duration",
+            `${Number(overview.average_duration_ms || 0).toFixed(1)} ms`,
+          ],
+        ]
+          .map(
+            ([label, value]) =>
+              `<div><strong>${esc(value ?? 0)}</strong><span>${label}</span></div>`,
+          )
+          .join("");
         dialog.wrap.querySelector("[data-hist-storage]").textContent = data.demo
           ? "Storage: browser showcase · 0 runs"
           : `Storage: ${data.stats?.database_bytes ?? data.stats?.bytes_used ?? "—"} bytes on disk · ${data.stats?.data_bytes ?? "—"} data bytes · ${data.total} runs · retention ${data.settings?.retention_days ?? "—"} days`;
@@ -878,6 +922,13 @@
           data.dropped_warning,
           data.storage_error,
           data.warning,
+          data.stats?.error,
+          data.stats?.dropped
+            ? `${data.stats.dropped} history records were dropped. Capture and inference continue.`
+            : "",
+          data.settings?.enabled === false
+            ? "History collection is disabled. Existing records remain available."
+            : "",
         ].filter(Boolean);
         dialog.wrap.querySelector("[data-hist-warnings]").innerHTML = warnings
           .map(
@@ -889,10 +940,23 @@
           (data.runs || [])
             .map(
               (run) =>
-                `<article><div><strong>${esc(run.name || run.workflow_id)}</strong><span class="wt-state wt-state-${esc(run.state)}">${esc(run.state)}</span><small>${esc(run.started_at)} · ${esc(run.camera_id || "all cameras")} · ${esc(run.duration_ms ?? "—")} ms · ${esc(run.source || "")}</small></div><button class="button secondary" data-hist-open="${esc(run.id)}">Details</button></article>`,
+                `<article data-run-row="${esc(run.id)}"><label class="wt-run-select"><input type="checkbox" data-hist-select="${esc(run.id)}" aria-label="Select execution ${esc(run.name || run.workflow_id)}" ${selected.has(run.id) ? "checked" : ""}></label><div><strong>${esc(run.name || run.workflow_id)}</strong><span class="wt-state wt-state-${esc(run.state)}">${esc(run.state)}</span><small>${esc(run.started_at)} · ${esc(run.camera_id || "all cameras")} · ${esc(run.duration_ms ?? "—")} ms · ${esc(run.source || "")}</small></div><button class="button secondary" data-hist-open="${esc(run.id)}">Details</button></article>`,
             )
             .join("") ||
           `<p class="wt-empty">${data.demo ? "No server history is shown in showcase mode." : "No runs match these filters."}</p>`;
+        selectedState();
+        box.querySelectorAll("[data-hist-select]").forEach((input) =>
+          input.addEventListener("change", () => {
+            if (input.checked && selected.size >= 500) {
+              input.checked = false;
+              return;
+            }
+            input.checked
+              ? selected.add(input.dataset.histSelect)
+              : selected.delete(input.dataset.histSelect);
+            selectedState();
+          }),
+        );
         box
           .querySelectorAll("[data-hist-open]")
           .forEach((button) =>
@@ -905,18 +969,53 @@
         dialog.wrap.querySelector("[data-hist-next]").disabled =
           (data.page || 0) + 1 >= (data.pages || 1);
       } catch (error) {
+        if (current !== generation || !dialog.wrap.isConnected) return;
         box.innerHTML = `<p class="wt-error">${esc(error.message)}</p>`;
       }
     };
     const detail = async (id) => {
+      const currentDetail = ++detailGeneration;
       const host = dialog.wrap.querySelector("[data-hist-detail]");
       host.innerHTML = "<p>Loading run details…</p>";
       try {
         const run = await request(
           `/api/workflows/history/${encodeURIComponent(id)}`,
         );
+        if (currentDetail !== detailGeneration || !dialog.wrap.isConnected)
+          return;
         const value = run.run || run;
-        host.innerHTML = `<section class="wt-run-detail"><header><h3>${esc(value.name || value.workflow_id)} · ${esc(value.state)}</h3><button class="button secondary" data-hist-export>Export JSON</button><button class="button secondary" data-hist-replay ${value.graph_complete !== false && value.trace_complete !== false && value.context?.cv ? "" : "disabled"} title="${value.graph_complete === false ? "Configuration snapshot is incomplete." : value.context?.cv ? "Dry run using retained diagnostic inputs." : "Diagnostic inputs were not retained for this run."}">Safe replay diagnostics</button></header><p>${esc(value.started_at)} · ${esc(value.duration_ms)} ms · ${esc(value.camera_id || "all cameras")}</p>${value.snapshot_warning ? `<p class="wt-error">${esc(value.snapshot_warning)}</p>` : ""}<p>Run state reflects evaluation completion. Recording attachment state is shown per action and can finish later.</p>${window.spyderWorkflowRunView?.renderGraph(value) || ""}<div class="wt-timeline">${(value.nodes || []).map((item) => `<article class="wt-node-state wt-state-${esc(item.state)}"><strong>${esc(item.type)} · ${esc(item.id)}</strong><span>${esc(item.state)} · ${esc(item.input_count ?? 0)} IN / ${esc(item.output_count ?? 0)} OUT · ${esc(item.duration_ms ?? 0)} ms</span>${item.error ? `<p>${esc(item.error)}</p>` : ""}${item.path ? `<small>Path: ${esc(Array.isArray(item.path) ? item.path.join(" / ") : item.path)}</small>` : ""}${item.inputs !== undefined ? `<details><summary>Input summary</summary><pre>${esc(JSON.stringify(item.inputs, null, 2))}</pre></details>` : ""}${item.outputs !== undefined ? `<details><summary>Output summary</summary><pre>${esc(JSON.stringify(item.outputs, null, 2))}</pre></details>` : ""}</article>`).join("") || "<p>No node trace was stored.</p>"}</div><section class="wt-actions"><h4>Actions and media</h4>${(value.actions || []).map((action) => `<article><strong>${esc(action.type)} · ${esc(action.state)}</strong><small>Node ${esc(action.node_id)}${action.event_id ? ` · Event ${esc(action.event_id)}` : ""}</small>${action.attachment_state ? `<small>Recording attachment: ${esc(action.attachment_state)}${action.attachment_error ? ` · ${esc(action.attachment_error)}` : ""}</small>` : ""}${(Array.isArray(action.media) ? action.media : action.media ? [action.media] : []).map((media) => window.spyderWorkflowRunView?.renderMedia(media) || "").join("")}</article>`).join("") || "<p>No actions or media were recorded.</p>"}</section><pre class="wt-replay-result" data-replay-result></pre></section>`;
+        host.innerHTML = `<section class="wt-run-detail" tabindex="-1"><header><h3>${esc(value.name || value.workflow_id)} · ${esc(value.state)}</h3><button class="button secondary" data-hist-close-detail aria-label="Close execution details"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#close"/></svg></button><button class="button secondary" data-hist-export>Export JSON</button><button class="button secondary" data-hist-replay ${value.graph_complete !== false && value.trace_complete !== false && value.context?.cv ? "" : "disabled"} title="${value.graph_complete === false ? "Configuration snapshot is incomplete." : value.context?.cv ? "Dry run using retained diagnostic inputs." : "Diagnostic inputs were not retained for this run."}">Safe replay diagnostics</button></header><p>${esc(value.started_at)} · ${esc(value.duration_ms)} ms · ${esc(value.camera_id || "all cameras")}</p>${value.snapshot_warning ? `<p class="wt-error">${esc(value.snapshot_warning)}</p>` : ""}${value.original_run_id ? `<p>Diagnostic replay of ${esc(value.original_run_id)} · actions disabled <button class="button secondary" data-hist-original="${esc(value.original_run_id)}">Open original run</button></p>` : ""}<p>Run state reflects evaluation completion. Recording attachment state is shown per action and can finish later.</p>${window.spyderWorkflowRunView?.renderGraph(value) || ""}<div class="wt-node-inspector" data-hist-node-inspector></div><div class="wt-timeline">${(value.nodes || []).map((item) => `<article data-trace-node="${esc(item.id)}" class="wt-node-state wt-state-${esc(item.state)}"><strong>${esc(item.type)} · ${esc(item.id)}</strong><span>${esc(item.state)} · ${esc(item.input_count ?? 0)} IN / ${esc(item.output_count ?? 0)} OUT · ${esc(item.duration_ms ?? 0)} ms</span>${item.error ? `<p>${esc(item.error)}</p>` : ""}${item.path ? `<small>Path: ${esc(Array.isArray(item.path) ? item.path.join(" / ") : item.path)}</small>` : ""}${item.inputs !== undefined ? `<details><summary>Input summary</summary><pre>${esc(JSON.stringify(item.inputs, null, 2))}</pre></details>` : ""}${item.outputs !== undefined ? `<details><summary>Output summary</summary><pre>${esc(JSON.stringify(item.outputs, null, 2))}</pre></details>` : ""}</article>`).join("") || "<p>No node trace was stored.</p>"}</div><section class="wt-actions"><h4>Actions and media</h4>${(value.actions || []).map((action) => `<article><strong>${esc(action.type)} · ${esc(action.state)}</strong><small>Node ${esc(action.node_id)}${action.event_id ? ` · Event ${esc(action.event_id)}` : ""}</small>${action.attachment_state ? `<small>Recording attachment: ${esc(action.attachment_state)}${action.attachment_error ? ` · ${esc(action.attachment_error)}` : ""}</small>` : ""}${(Array.isArray(action.media) ? action.media : action.media ? [action.media] : []).map((media) => window.spyderWorkflowRunView?.renderMedia(media) || "").join("")}</article>`).join("") || "<p>No actions or media were recorded.</p>"}</section><pre class="wt-replay-result" data-replay-result></pre></section>`;
+        host
+          .querySelector("[data-hist-original]")
+          ?.addEventListener("click", () => detail(value.original_run_id));
+        host
+          .querySelector("[data-hist-close-detail]")
+          .addEventListener("click", () => {
+            ++detailGeneration;
+            host.innerHTML = "";
+          });
+        host.querySelector(".wt-run-detail").focus({ preventScroll: true });
+        host.querySelectorAll("[data-inspect-node]").forEach((button) => {
+          button.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            }
+          });
+          button.addEventListener("click", () => {
+            const node = (value.nodes || []).find(
+              (item) => item.id === button.dataset.inspectNode,
+            );
+            const graphNode = value.graph?.nodes?.find(
+              (item) => item.id === button.dataset.inspectNode,
+            );
+            const inspector = host.querySelector("[data-hist-node-inspector]");
+            inspector.innerHTML =
+              window.spyderWorkflowRunView?.renderNode(node, graphNode) || "";
+            inspector.querySelector("h4")?.focus({ preventScroll: true });
+            inspector.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          });
+        });
         host
           .querySelector("[data-hist-export]")
           .addEventListener("click", () =>
@@ -937,25 +1036,41 @@
                   body: "{}",
                 },
               );
-              result.textContent = `${replay.message ? `Replay notice: ${replay.message}` : ""}${replay.message ? String.fromCharCode(10, 10) : ""}${JSON.stringify(replay, null, 2)}`;
+              result.textContent = `${replay.message ? `Replay notice: ${replay.message}${replay.history_queued ? " Replay queued in execution history." : " Replay was not retained (collection disabled or storage unavailable)."}` : ""}${replay.message ? String.fromCharCode(10, 10) : ""}${JSON.stringify(replay, null, 2)}`;
             } catch (error) {
               result.textContent = error.message;
             }
           });
       } catch (error) {
+        if (currentDetail !== detailGeneration || !dialog.wrap.isConnected)
+          return;
         host.innerHTML = `<p class="wt-error">${esc(error.message)}</p>`;
       }
     };
+    dialog.wrap
+      .querySelector("[data-hist-reset]")
+      .addEventListener("click", () => {
+        for (const input of dialog.wrap.querySelectorAll(
+          "[data-hist-filter]",
+        )) {
+          input.value = input.dataset.histFilter === "sort" ? "newest" : "";
+          filters[input.dataset.histFilter] = input.value;
+        }
+        filters.page = 0;
+        selected.clear();
+        load();
+      });
     dialog.wrap.querySelectorAll("[data-hist-filter]").forEach((input) =>
       input.addEventListener("change", () => {
         filters[input.dataset.histFilter] = input.value;
         filters.page = 0;
+        selected.clear();
         load();
       }),
     );
     dialog.wrap
       .querySelector("[data-hist-refresh]")
-      .addEventListener("click", load);
+      .addEventListener("click", () => load());
     dialog.wrap
       .querySelector("[data-hist-prev]")
       .addEventListener("click", () => {
@@ -1005,7 +1120,7 @@
                 });
                 form.wrap.querySelector(".wt-status").textContent =
                   "Settings saved.";
-                historyMode = settings.mode;
+                load();
               } catch (error) {
                 form.wrap.querySelector(".wt-status").textContent =
                   error.message;
@@ -1037,6 +1152,83 @@
           /* keep history panel usable */
         }
       });
+    dialog.wrap
+      .querySelector("[data-hist-select-page]")
+      .addEventListener("change", (event) => {
+        for (const run of visibleRuns) {
+          if (event.target.checked && selected.size < 500) selected.add(run.id);
+          else if (!event.target.checked) selected.delete(run.id);
+        }
+        dialog.wrap
+          .querySelectorAll("[data-hist-select]")
+          .forEach(
+            (input) => (input.checked = selected.has(input.dataset.histSelect)),
+          );
+        selectedState();
+      });
+    let bulkBusy = false;
+    async function bulk(operation) {
+      if (demo() || !selected.size || bulkBusy) return;
+      if (
+        operation === "delete" &&
+        !window.confirm(
+          `Delete ${selected.size} execution records? Camera footage, events, and workflows are kept.`,
+        )
+      )
+        return;
+      bulkBusy = true;
+      const status = dialog.wrap.querySelector("[data-hist-live-status]");
+      status.textContent =
+        operation === "export"
+          ? "Preparing export…"
+          : "Deleting selected runs…";
+      try {
+        const result = await request(`/api/workflows/history/${operation}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: [...selected] }),
+        });
+        if (operation === "export")
+          download(result, "spyder-workflow-history.json");
+        else {
+          selected.clear();
+          await load();
+          dialog.wrap.querySelector("[data-hist-detail]").innerHTML = "";
+        }
+        status.textContent =
+          operation === "export"
+            ? "Export ready. Diagnostic records can contain identity labels."
+            : `${result.deleted} execution records deleted.`;
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        bulkBusy = false;
+      }
+    }
+    dialog.wrap
+      .querySelector("[data-hist-export-selected]")
+      .addEventListener("click", () => bulk("export"));
+    dialog.wrap
+      .querySelector("[data-hist-delete-selected]")
+      .addEventListener("click", () => bulk("delete"));
+    const tick = async () => {
+      if (!dialog.wrap.isConnected) return;
+      if (
+        dialog.wrap.querySelector("[data-hist-live]").checked &&
+        !document.hidden &&
+        !selected.size &&
+        !bulkBusy &&
+        filters.page === 0 &&
+        filters.sort === "newest" &&
+        !dialog.wrap.querySelector("[data-hist-detail]").textContent &&
+        !dialog.wrap
+          .querySelector("[data-hist-runs]")
+          .contains(document.activeElement)
+      )
+        await load(true);
+      if (dialog.wrap.isConnected) setTimeout(tick, 5000);
+    };
+    setTimeout(tick, 5000);
     load();
   }
   window.spyderWorkflowTools = {

@@ -63,3 +63,38 @@ test("media preview trusts catalog IDs rather than supplied URLs", () => {
   );
   assert.equal(renderMedia({ id: "../bad", kind: "recording" }), "");
 });
+const {
+  renderNode,
+} = require("../src/spyder_cctv/assets/workflow-run-view.js");
+test("node inspector exposes bounded retained data and distinguishes missing payloads", () => {
+  const html = renderNode(
+    {
+      id: "n",
+      type: "filter",
+      state: "filtered",
+      inputs: [{ identity: "<script>Person</script>" }],
+      outputs: [],
+      path: ["root", "child"],
+    },
+    { id: "n", type: "filter", params: { class: "face" } },
+  );
+  assert.ok(html.includes("root / child"));
+  assert.ok(html.includes("&lt;script&gt;Person&lt;/script&gt;"));
+  assert.ok(!html.includes("<script>"));
+  assert.ok(html.includes("OUT · recorded output"));
+  assert.ok(html.includes("Archived node configuration"));
+  assert.ok(
+    renderNode(undefined, { id: "unreached", type: "event" }).includes(
+      "Not reached or trace not retained",
+    ),
+  );
+  assert.ok(renderNode({ id: "summary" }).includes("Payload was not retained"));
+});
+test("graph nodes offer keyboard accessible inspection without trusting identifiers", () => {
+  const html = renderGraph({
+    graph: { nodes: [{ id: 'x" onclick="bad', type: "filter" }] },
+  });
+  assert.ok(html.includes('role="button"'));
+  assert.ok(html.includes('tabindex="0"'));
+  assert.ok(html.includes('data-inspect-node="x&quot; onclick=&quot;bad"'));
+});
