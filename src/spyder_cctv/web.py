@@ -25,6 +25,7 @@ import cv2
 
 from spyder_cctv.analysis_preview import AnalysisPreviews
 from spyder_cctv.backup_jobs import BackupJobs, validate_job_request
+from spyder_cctv.backup_picker import PICKER_LOCK, choose_path, close_active_picker
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.capacity import CapacityAssessment
 from spyder_cctv.capture import encode_jpeg
@@ -193,6 +194,8 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             super().server_bind()
 
         def server_close(self) -> None:
+            self._backup_picker_closing = True
+            close_active_picker()
             backup_jobs.close()
             schedule_stop.set()
             if schedule_thread.ident is not None:
@@ -948,10 +951,11 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
 
         def do_POST(self) -> None:
             parts = urlsplit(self.path).path.strip("/").split("/")
-            # Model uploads/installations cannot start capture or alter restored files.
-            # Keep their potentially slow I/O outside the camera/restore control gate.
+            # Native dialogs may wait for user input; model operations may do slow I/O.
+            # Keep both outside the camera/restore control gate.
             if (
-                parts == ["api", "system", "backup", "jobs", "cancel"]
+                parts == ["api", "system", "backup", "picker"]
+                or parts == ["api", "system", "backup", "jobs", "cancel"]
                 or parts[:2] in (["api", "models"], ["api", "faces"], ["api", "onvif"])
                 or parts[:3] == ["api", "vision", "detectors"]
             ):
@@ -988,7 +992,37 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 )
                 return
             try:
-                if parts == ["api", "system", "backup", "jobs", "cancel"]:
+                if parts == ["api", "system", "backup", "picker"]:
+                    data = self.body(1024)
+                    if set(data) != {"kind"} or data["kind"] not in (
+                        "save_archive",
+                        "open_archive",
+                        "restore_parent",
+                    ):
+                        raise ValueError("Send a valid backup picker kind")
+                    if backup_jobs.snapshot().get("state") == "running":
+                        raise RuntimeError(
+                            "Wait for the backup job to finish before choosing a path"
+                        )
+                    if backup and backup.pending:
+                        raise RuntimeError(
+                            "Configuration restore is pending; restart SpyDER before "
+                            "choosing a path"
+                        )
+                    if not PICKER_LOCK.acquire(blocking=False):
+                        self.json(409, {"error": "A native file picker is already open"})
+                        return
+                    try:
+                        selected_path = choose_path(
+                            data["kind"],
+                            is_closing=lambda: getattr(
+                                self.server, "_backup_picker_closing", False
+                            ),
+                        )
+                        self.json(200, {"path": selected_path, "cancelled": selected_path is None})
+                    finally:
+                        PICKER_LOCK.release()
+                elif parts == ["api", "system", "backup", "jobs", "cancel"]:
                     if self.body() != {}:
                         raise ValueError("Send an empty object")
                     self.json(202, backup_jobs.cancel())

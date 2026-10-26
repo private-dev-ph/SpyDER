@@ -130,27 +130,82 @@
       );
       complete.id = "complete-backup";
       const fields = node("div", "", "complete-backup-grid");
-      function pathField(caption, placeholder) {
+      function pathField(caption, placeholder, kind, browseText) {
+        const container = node("div", "", "backup-path-field");
         const label = node("label", caption),
-          input = node("input");
+          input = node("input"),
+          row = node("div", "", "backup-path-control");
+        input.id = `backup-path-${kind}`;
+        label.htmlFor = input.id;
         input.type = "text";
+        input.readOnly = true;
         input.placeholder = placeholder;
         input.autocomplete = "off";
-        label.append(input);
-        return { label, input };
+        input.dataset.backupPath = kind;
+        const help = node("small", "", "field-help");
+        help.id = `${input.id}-help`;
+        help.setAttribute("role", "status");
+        input.setAttribute("aria-describedby", help.id);
+        const field = { label: container, input, help };
+        field.choose = button(browseText, () => chooseLocation(field, kind));
+        field.choose.dataset.backupPick = kind;
+        const icon = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "svg",
+        );
+        icon.setAttribute("class", "icon");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("aria-hidden", "true");
+        const use = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "use",
+        );
+        use.setAttribute(
+          "href",
+          kind === "open_archive"
+            ? "/icons.svg#file-archive"
+            : "/icons.svg#folder-open",
+        );
+        icon.append(use);
+        field.choose.prepend(icon);
+        row.append(input, field.choose);
+        container.append(label, row, help);
+        return field;
       }
       const output = pathField(
-        "New backup archive path",
-        "C:\\Backups\\spyder-backup.zip",
+        "Backup file",
+        "Choose a save location",
+        "save_archive",
+        "Choose save location",
       );
       const source = pathField(
-        "Archive to inspect / restore",
-        "C:\\Backups\\spyder-backup.zip",
+        "Backup archive",
+        "Choose an existing ZIP backup",
+        "open_archive",
+        "Choose backup file",
       );
       const destination = pathField(
-        "New restore folder (must not exist)",
-        "C:\\SpyDER-Restored",
+        "Restore location",
+        "Choose a parent folder",
+        "restore_parent",
+        "Choose parent folder",
       );
+      destination.help.textContent =
+        "SpyDER will suggest a new restore folder inside your selection. Existing folders are kept.";
+      const advanced = node("details", "", "backup-advanced");
+      advanced.dataset.backupAdvanced = "";
+      advanced.append(
+        node("summary", "Advanced: enter paths manually"),
+        node(
+          "p",
+          "The location fields above become editable in this mode. Use full paths on the computer running SpyDER; the restore folder must not already exist.",
+          "field-help",
+        ),
+      );
+      advanced.addEventListener("toggle", () => {
+        for (const field of [output, source, destination])
+          field.input.readOnly = !advanced.open;
+      });
       const mediaLabel = node("label", "", "operation-check"),
         mediaCheck = node("input");
       mediaCheck.type = "checkbox";
@@ -192,12 +247,14 @@
         ),
       );
       let jobGeneration = 0;
+      let choosing = false;
       let active = false,
         validatedPath = "",
         submittedPath = "";
       const create = button("Create complete backup", () => start("create"));
       const inspect = button("Inspect archive", () => start("inspect"));
       const restore = button("Restore to new folder", () => start("restore"));
+      create.className = restore.className = "button primary";
       const cancel = button("Cancel current operation", async () => {
         try {
           await showJob(await submit("/api/system/backup/jobs/cancel", {}));
@@ -209,24 +266,73 @@
       });
       cancel.disabled = true;
       function refreshButtons() {
+        const unavailable = active || choosing || !!window.spyderShowcase;
+        for (const field of [output, source, destination]) {
+          field.choose.disabled = unavailable;
+          field.input.disabled = active || choosing;
+        }
+        create.disabled = unavailable || !output.input.value.trim();
+        inspect.disabled = unavailable || !source.input.value.trim();
+        complete.setAttribute("aria-busy", String(active || choosing));
+        cancel.hidden = !active;
         cancel.disabled = !active || !!window.spyderShowcase;
-        create.disabled = inspect.disabled = active || !!window.spyderShowcase;
+        inspect.textContent = validatedPath ? "Verify again" : "Verify archive";
         restore.disabled =
-          active ||
-          !!window.spyderShowcase ||
+          unavailable ||
+          !destination.input.value.trim() ||
           !ack.checked ||
           validatedPath !== source.input.value.trim() ||
           !validatedPath;
       }
-      for (const input of [source.input, destination.input])
+      for (const input of [output.input, source.input, destination.input])
         input.addEventListener("input", () => {
-          if (input === source.input) {
-            validatedPath = "";
+          if (input === source.input) validatedPath = "";
+          if (input === source.input || input === destination.input)
             ack.checked = false;
-          }
           refreshButtons();
         });
       ack.addEventListener("change", refreshButtons);
+      async function chooseLocation(field, kind) {
+        if (active || choosing || window.spyderShowcase) return;
+        choosing = true;
+        refreshButtons();
+        field.help.textContent = "Opening the file chooser on this computer…";
+        try {
+          const selection = await submit("/api/system/backup/picker", { kind });
+          if (disposed) return;
+          if (selection.cancelled || !selection.path) {
+            field.help.textContent =
+              "Selection cancelled. Your previous choice is kept.";
+            return;
+          }
+          field.input.value = selection.path;
+          field.input.title = selection.path;
+          field.input.dispatchEvent(new Event("input", { bubbles: true }));
+          field.help.textContent =
+            kind === "restore_parent"
+              ? "A new folder will be created here when you restore."
+              : kind === "open_archive"
+                ? "Archive selected. Verifying its contents…"
+                : "Save location selected. Existing archives will not be overwritten.";
+          choosing = false;
+          refreshButtons();
+          if (kind === "open_archive") await start("inspect");
+        } catch (error) {
+          if (!disposed) {
+            field.help.textContent = error.message;
+            status.textContent =
+              "The selection could not be used. Retry the chooser, or use Advanced to enter a path.";
+          }
+        } finally {
+          choosing = false;
+          if (!disposed) {
+            refreshButtons();
+            if (!field.choose.disabled)
+              field.choose.focus({ preventScroll: true });
+          }
+        }
+      }
+
       async function showJob(job) {
         if (disposed) return;
         clearTimeout(backupTimer);
@@ -291,6 +397,9 @@
             source.input.value =
               submittedPath || result.path || output.input.value.trim();
             validatedPath = "";
+            ack.checked = false;
+            source.help.textContent =
+              "Backup created. Verify this archive before restoring.";
           }
           if (
             job.operation === "inspect" &&
@@ -298,12 +407,17 @@
             submittedPath === source.input.value.trim()
           ) {
             validatedPath = submittedPath;
+            source.help.textContent =
+              "Archive verified. Choose a restore location, then review and restore.";
             refreshButtons();
           }
-          if (job.operation === "restore")
+          if (job.operation === "restore") {
+            ack.checked = false;
             status.textContent =
               "Restore complete. Stop SpyDER before starting a new instance with the restored config path shown below. Import browser-state.json after switching to that restored instance.";
+          }
         }
+        refreshButtons();
         if (active && !disposed) backupTimer = setTimeout(pollJob, 1500);
       }
       async function pollJob() {
@@ -319,7 +433,7 @@
         }
       }
       async function start(operation) {
-        if (active || window.spyderShowcase) return;
+        if (active || choosing || window.spyderShowcase) return;
         if (
           operation === "restore" &&
           (!ack.checked || validatedPath !== source.input.value.trim())
@@ -350,20 +464,51 @@
           status.textContent = error.message;
         }
       }
-      fields.append(
+      const createCard = node("section", "", "backup-task-card");
+      const createHeader = node("div", "", "backup-task-header");
+      createHeader.append(
+        node("span", "01", "backup-step"),
+        node("h3", "Create a backup"),
+      );
+      createCard.append(
+        createHeader,
+        node(
+          "p",
+          "Save a portable copy of your application data.",
+          "field-help",
+        ),
         output.label,
         mediaLabel,
         browserLabel,
         create,
+      );
+      const restoreCard = node("section", "", "backup-task-card");
+      const restoreHeader = node("div", "", "backup-task-header");
+      restoreHeader.append(
+        node("span", "02", "backup-step"),
+        node("h3", "Verify & restore"),
+      );
+      restoreCard.append(
+        restoreHeader,
+        node(
+          "p",
+          "Choose an archive to verify it before creating a separate restored copy.",
+          "field-help",
+        ),
         source.label,
         inspect,
         destination.label,
         ackLabel,
         restore,
-        cancel,
       );
+      create.dataset.backupCreate = "";
+      inspect.dataset.backupInspect = "";
+      restore.dataset.backupRestore = "";
+      fields.append(createCard, restoreCard);
       complete.append(
         fields,
+        advanced,
+        cancel,
         progress,
         status,
         report,

@@ -191,3 +191,160 @@
     margin-bottom: 0.6rem;
   }
 }
+
+/* Backup tasks: browse first, with manual paths available as an advanced fallback. */
+.complete-backup-grid {
+  align-items: start;
+  gap: 1rem;
+}
+.backup-task-card {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--canvas);
+}
+.backup-task-header {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.backup-task-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  text-wrap: balance;
+}
+.backup-step {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--gold-soft);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+.backup-task-card p {
+  margin: 0;
+}
+.backup-task-card > .button {
+  min-height: 44px;
+}
+.backup-task-card .operation-check {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  align-items: flex-start;
+}
+.backup-task-card .operation-check input {
+  margin-top: 0.2rem;
+}
+.backup-path-field {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.backup-path-field > label {
+  font-weight: 650;
+  font-size: 0.875rem;
+}
+.backup-path-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  min-width: 0;
+  align-items: center;
+}
+.backup-path-control .button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+}
+.backup-path-control .icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+.backup-path-control input {
+  min-height: 44px;
+  font-size: 0.85rem;
+  text-overflow: ellipsis;
+  background: var(--surface);
+}
+.backup-path-control input[readonly] {
+  cursor: default;
+}
+.backup-path-field small {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.backup-advanced {
+  margin: 1rem 0;
+  border-top: 1px solid var(--border);
+  padding-top: 0.8rem;
+}
+.backup-advanced summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.backup-advanced summary::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+}
+.backup-advanced[open] summary::before {
+  transform: rotate(45deg);
+}
+.backup-advanced p {
+  margin: 0.3rem 0;
+}
+@media (max-width: 1150px) {
+  .backup-path-control {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .backup-task-card {
+    padding: 0.85rem;
+  }
+  .complete-backup-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backup-advanced summary::before {
+    transition: none;
+  }
+}
+#complete-backup .field-help {
+  font-size: 13px;
+  line-height: 1.5;
+}
+#complete-backup .button.secondary {
+  appearance: none;
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--control-border);
+}
+#complete-backup .button.secondary:hover:not(:disabled) {
+  background: var(--rail);
+}
+.backup-path-control input:not([readonly]):not(:disabled) {
+  border-color: var(--focus);
+  cursor: text;
+}

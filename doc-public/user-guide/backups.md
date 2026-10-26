@@ -10,8 +10,10 @@ hardware drivers. Install a compatible SpyDER version before restoring on anothe
 ## Complete archives
 
 Open **System → Complete backup & restore**. Paths in this panel refer to the
-computer running the local server, not a cloud storage service. Use an absolute
-archive path outside the application data and footage folders.
+computer running the local server, not a cloud storage service. **Choose save location**
+opens a native Save dialog. Pick a new archive outside the application data and footage
+folders; existing archives are never overwritten. Paths remain visible for review and
+copying. **Advanced: enter paths manually** makes those fields editable as a fallback.
 
 The archive includes saved camera settings and profiles, preferences, workflows and
 published callable versions, model registrations and available referenced weights,
@@ -32,11 +34,13 @@ addresses and local hardware assignments may need adjustment on a different comp
 1. Stop recordings and cameras; wait for finalization and processing to finish.
    Disable workflows and recording schedules. The GUI checks these conditions and
    refuses creation while a resource is active; it does not stop resources for you.
-2. Enter a new ZIP path. Choose whether to include footage and browser settings.
+2. Choose **Choose save location**, select a folder and ZIP filename, then choose
+   whether to include footage and browser settings.
 3. Choose **Create complete backup**. The background operation reports progress;
    keep SpyDER running until it finishes. You can leave and return to the System page.
-4. Choose **Inspect archive** to read the manifest and verify every file checksum.
-   Inspection does not change the current installation.
+4. In **Verify & restore**, use **Choose backup file** to select an existing ZIP.
+   SpyDER starts verification automatically. **Verify again** repeats the checks.
+   Verification does not change the current installation.
 
 Keep archives private: they can contain camera credentials, workflow code, model
 files, face images/embeddings, and identity labels. Only restore archives you trust.
@@ -48,9 +52,11 @@ already completed may still exist at the selected path.
 
 ### Restore a separate copy
 
-1. Enter the archive path and inspect it successfully.
-2. Enter a **new folder that does not already exist** and acknowledge the separate-copy
-   restore. Choose **Restore to new folder**.
+1. Use **Choose backup file** and wait for successful verification.
+2. Use **Choose parent folder**. SpyDER suggests a new `SpyDER-Restored` folder inside
+   it, or a numbered variation if that name is taken. The chooser does not create it.
+   Review the proposed location, acknowledge the separate-copy restore, and choose
+   **Restore to new folder**.
 3. SpyDER verifies the archive, extracts into staging, relocates its managed paths, and
    publishes the destination only after successful validation. Existing data is not
    overwritten. A failed or cancelled operation does not publish a partial restore.
@@ -69,6 +75,11 @@ already completed may still exist at the selected path.
    replaces matching SpyDER preferences/layouts/drafts on the current browser origin;
    unrelated site settings remain. Reload afterward. Browser permissions and open
    directory handles cannot be transferred; grant those again when needed.
+
+Native file/folder dialogs open on the desktop running SpyDER. Cancelling a chooser
+keeps the previous selection and writes no files. If desktop dialogs are unavailable
+(for example, a Python installation without Tk support), use Advanced to enter full
+paths manually.
 
 A restore can be inspected without activating it. Keep the original installation
 and archive until the restored copy has been checked. Do not launch two servers

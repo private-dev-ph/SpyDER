@@ -1,5 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <symbol id="file-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z"/><path d="M14 3v6h6M10 3v2m0 3v2"/><rect x="8" y="13" width="4" height="5" rx="1"/></symbol>
+    <symbol id="folder-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2M3 7v12a1 1 0 0 0 1 1h15l3-9H7l-3 9"/></symbol>
     <symbol id="pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 3 6 0-1 6 4 4v2H6v-2l4-4zM12 15v6"/></symbol>
     <symbol id="reorder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5h12M9 12h12M9 19h12M3 3v4m-2-2h4M3 10v4m-2-2h4M3 17v4m-2-2h4"/></symbol>
     <symbol id="arrow-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m10 5-7 7 7 7M3 12h18"/></symbol>
