@@ -194,6 +194,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             super().server_bind()
 
         def server_close(self) -> None:
+            self._backup_picker_closing = True
             close_active_picker()
             backup_jobs.close()
             schedule_stop.set()
@@ -1012,7 +1013,13 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                         self.json(409, {"error": "A native file picker is already open"})
                         return
                     try:
-                        self.json(200, {"path": choose_path(data["kind"])})
+                        selected_path = choose_path(
+                            data["kind"],
+                            is_closing=lambda: getattr(
+                                self.server, "_backup_picker_closing", False
+                            ),
+                        )
+                        self.json(200, {"path": selected_path, "cancelled": selected_path is None})
                     finally:
                         PICKER_LOCK.release()
                 elif parts == ["api", "system", "backup", "jobs", "cancel"]:

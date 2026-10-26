@@ -176,7 +176,7 @@ try {
   );
   await evaluate(`(()=>{
     window.backupErrors=[];window.addEventListener('error',e=>backupErrors.push(e.message));
-    window.backupRequests=[];window.mockBackupJob={state:'idle'};window.spyderShowcase=false;
+    window.backupRequests=[];window.pickerRequests=[];window.cancelNextPick=false;window.mockBackupJob={state:'idle'};window.spyderShowcase=false;
     const original=window.fetch;window.fetch=async(url,options={})=>{
       if(String(url).startsWith('/api/system/backup/jobs')){
         if(options.method==='POST'){
@@ -186,17 +186,45 @@ try {
         }
         return new Response(JSON.stringify(mockBackupJob),{headers:{'Content-Type':'application/json'}});
       }
+      if(String(url)==='/api/system/backup/picker'){
+        const body=JSON.parse(options.body);pickerRequests.push(body.kind);
+        if(cancelNextPick){cancelNextPick=false;return new Response(JSON.stringify({path:null,cancelled:true}));}
+        return new Response(JSON.stringify({path:body.kind==='restore_parent'?'C:/Restores/SpyDER-Restored':'C:/Backups/full.zip',cancelled:false}));
+      }
       if(String(url)==='/api/system/health')return new Response(JSON.stringify({state:'healthy',issues:[],running_cameras:0,camera_count:0,recording_state:'idle',checked_at:new Date().toISOString()}));
       return original(url,options);
     };
     window.dispatchEvent(new HashChangeEvent('hashchange'));
   })()`);
   await until(
-    "!![...document.querySelectorAll('#complete-backup button')].find(b=>b.textContent==='Create complete backup'&&!b.disabled)",
+    "!!document.querySelector('[data-backup-pick=save_archive]:not(:disabled)')",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[data-backup-path=save_archive]').readOnly",
+    ),
+    true,
   );
   await evaluate(
-    `(()=>{const inputs=document.querySelectorAll('#complete-backup input[type=text]');inputs[0].value='C:/Backups/full.zip';[...document.querySelectorAll('#complete-backup button')].find(b=>b.textContent==='Create complete backup').click()})()`,
+    "document.querySelector('[data-backup-pick=save_archive]').click()",
   );
+  await until(
+    "document.querySelector('[data-backup-path=save_archive]').value==='C:/Backups/full.zip'",
+  );
+  await evaluate(
+    "window.cancelNextPick=true;document.querySelector('[data-backup-pick=save_archive]').click()",
+  );
+  await until("pickerRequests.length===2");
+  await until(
+    "document.querySelector('#backup-path-save_archive-help').textContent.includes('cancelled')",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[data-backup-path=save_archive]').value",
+    ),
+    "C:/Backups/full.zip",
+  );
+  await evaluate("document.querySelector('[data-backup-create]').click()");
   await until("backupRequests.length===1");
   assert.equal(await evaluate("backupRequests[0].body.include_media"), false);
   assert.equal(
@@ -204,11 +232,19 @@ try {
     1,
   );
   await evaluate(
-    "[...document.querySelectorAll('#complete-backup button')].find(b=>b.textContent==='Inspect archive').click()",
+    "document.querySelector('[data-backup-pick=open_archive]').click()",
   );
-  await until("backupRequests.length===2");
+  await until(
+    "backupRequests.length===2 && document.querySelector('#backup-path-open_archive-help').textContent.includes('verified')",
+  );
   await evaluate(
-    `(()=>{const inputs=document.querySelectorAll('#complete-backup input[type=text]');inputs[2].value='C:/Restored';inputs[2].dispatchEvent(new Event('input',{bubbles:true}));const checks=document.querySelectorAll('#complete-backup input[type=checkbox]');checks[2].click();})()`,
+    "document.querySelector('[data-backup-pick=restore_parent]').click()",
+  );
+  await until(
+    "document.querySelector('[data-backup-path=restore_parent]').value==='C:/Restores/SpyDER-Restored'",
+  );
+  await evaluate(
+    "document.querySelectorAll('#complete-backup input[type=checkbox]')[2].click()",
   );
   assert.equal(
     await evaluate(
@@ -222,32 +258,111 @@ try {
   await until("backupRequests.length===3");
   assert.equal(
     await evaluate("backupRequests[2].body.destination"),
-    "C:/Restored",
+    "C:/Restores/SpyDER-Restored",
   );
   assert.match(
     await evaluate("document.querySelector('#complete-backup').textContent"),
     /Stop SpyDER before starting/,
   );
-  for (const [width, height] of [
-    [390, 700],
-    [1280, 480],
-  ]) {
+  await command("Page.bringToFront", {}, sessionId);
+  await evaluate("document.querySelector('.backup-advanced summary').focus()");
+  await command(
+    "Input.dispatchKeyEvent",
+    {
+      type: "keyDown",
+      text: "\r",
+      unmodifiedText: "\r",
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+    },
+    sessionId,
+  );
+  await command(
+    "Input.dispatchKeyEvent",
+    { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
+    sessionId,
+  );
+
+  await until(
+    "!document.querySelector('[data-backup-path=save_archive]').readOnly",
+  );
+  await evaluate("document.querySelector('[data-backup-advanced]').open=false");
+  await until(
+    "document.querySelector('[data-backup-path=save_archive]').readOnly",
+  );
+  for (const theme of ["light", "dark"]) {
+    await evaluate(
+      `document.documentElement.dataset.theme=${JSON.stringify(theme)}`,
+    );
+    for (const [width, height] of [
+      [320, 640],
+      [390, 700],
+      [768, 1024],
+      [1024, 768],
+      [1280, 480],
+    ]) {
+      await command(
+        "Emulation.setDeviceMetricsOverride",
+        { width, height, deviceScaleFactor: 1, mobile: false },
+        sessionId,
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelector('#complete-backup').scrollWidth<=document.querySelector('#complete-backup').clientWidth+1",
+        ),
+        true,
+        `${theme} ${width}x${height} backup overflow`,
+      );
+      assert.equal(
+        await evaluate(
+          "[...document.querySelectorAll('[data-backup-pick]')].every(b=>b.getBoundingClientRect().height>=44)",
+        ),
+        true,
+        "browse touch targets",
+      );
+      assert.equal(
+        await evaluate(
+          "[...document.querySelectorAll('[data-backup-path]')].every(input=>input.labels.length>0)",
+        ),
+        true,
+        "associated field labels",
+      );
+      assert.equal(
+        await evaluate(`(()=>{
+        const rgb=value=>value.match(/[0-9.]+/g).slice(0,3).map(Number);
+        const lum=c=>c.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+        const card=document.querySelector('.backup-task-card'), label=card.querySelector('.backup-path-field > label');
+        const values=[lum(rgb(getComputedStyle(label).color)),lum(rgb(getComputedStyle(card).backgroundColor))].sort((a,b)=>b-a);
+        return (values[0]+.05)/(values[1]+.05)>=4.5;
+      })()`),
+        true,
+        "label contrast",
+      );
+    }
+  }
+  for (const theme of ["light", "dark"]) {
     await command(
       "Emulation.setDeviceMetricsOverride",
-      { width, height, deviceScaleFactor: 1, mobile: false },
+      { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false },
       sessionId,
     );
-    assert.equal(
-      await evaluate(
-        "document.querySelector('#complete-backup').scrollWidth<=document.querySelector('#complete-backup').clientWidth+1",
-      ),
-      true,
-      "backup panel overflow",
+    await evaluate(
+      `document.documentElement.dataset.theme=${JSON.stringify(theme)};document.querySelector('#complete-backup').scrollIntoView({block:'start'})`,
+    );
+    const shot = await command(
+      "Page.captureScreenshot",
+      { format: "png" },
+      sessionId,
+    );
+    await writeFile(
+      path.join(assets, `backup-picker-${theme}.png`),
+      Buffer.from(shot.data, "base64"),
     );
   }
   assert.deepEqual(await evaluate("backupErrors"), []);
   console.log(
-    "PASS: default no footage, browser-state capture, inspection before restore, new destination, mobile/short layout, native API isolation in showcase",
+    "PASS: browse-first backup flow, cancellation preserves selection, automatic verification, new restore folder, responsive layout, showcase isolation",
   );
 } finally {
   socket?.close();

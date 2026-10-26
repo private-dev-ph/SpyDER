@@ -127,7 +127,7 @@ def test_picker_api_guards_schema_cancellation_and_single_dialog(tmp_path, monke
     started = threading.Event()
     release = threading.Event()
 
-    def choose(kind):
+    def choose(kind, **kwargs):
         started.set()
         release.wait(2)
         return None
@@ -159,10 +159,47 @@ def test_picker_api_guards_schema_cancellation_and_single_dialog(tmp_path, monke
         assert error.value.code == 409
         release.set()
         first.join(2)
-        assert results == [(200, {"path": None})]
+        assert results == [(200, {"path": None, "cancelled": True})]
     finally:
         release.set()
         server.shutdown()
         server.server_close()
         manager.close()
         thread.join(2)
+
+
+def test_chooser_does_not_spawn_after_server_shutdown():
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Child must not start while server closes")
+
+    with pytest.raises(RuntimeError, match="closing"):
+        backup_picker.choose_path("open_archive", popen_factory=forbidden, is_closing=lambda: True)
+
+
+def test_native_dialog_options_and_cleanup_use_supported_tk_primitives(tmp_path, monkeypatch):
+    import sys
+
+    calls = []
+
+    class Root:
+        def withdraw(self):
+            pass
+
+        def attributes(self, *args):
+            pass
+
+        def update_idletasks(self):
+            pass
+
+        def destroy(self):
+            calls.append("destroy")
+
+    def open_file(**kwargs):
+        assert "mustexist" not in kwargs  # tk_getOpenFile already requires an existing file.
+        assert kwargs["filetypes"] == (("ZIP archives", "*.zip"),)
+        return str(tmp_path / "existing.zip")
+
+    dialog = SimpleNamespace(askopenfilename=open_file)
+    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=Root, filedialog=dialog))
+    assert backup_picker._dialog("open_archive") == str(tmp_path / "existing.zip")
+    assert calls == ["destroy"]

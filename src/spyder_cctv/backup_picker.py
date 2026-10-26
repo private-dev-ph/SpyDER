@@ -29,6 +29,9 @@ def _dialog(kind: str) -> str | None:
         ) from error
 
     root = None
+    initial_dir = Path.home() / "Documents"
+    if not initial_dir.is_dir():
+        initial_dir = Path.home()
     try:
         root = tk.Tk()
         root.withdraw()
@@ -38,6 +41,7 @@ def _dialog(kind: str) -> str | None:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             selected = filedialog.asksaveasfilename(
                 parent=root,
+                initialdir=str(initial_dir),
                 title="Save SpyDER backup",
                 initialfile=f"SpyDER-Backup-{stamp}.zip",
                 defaultextension=".zip",
@@ -47,14 +51,15 @@ def _dialog(kind: str) -> str | None:
         elif kind == "open_archive":
             selected = filedialog.askopenfilename(
                 parent=root,
+                initialdir=str(initial_dir),
                 title="Open SpyDER backup",
                 filetypes=(("ZIP archives", "*.zip"),),
                 defaultextension=".zip",
-                mustexist=True,
             )
         else:
             selected = filedialog.askdirectory(
                 parent=root,
+                initialdir=str(initial_dir),
                 title="Choose restore parent folder",
                 mustexist=True,
             )
@@ -98,7 +103,7 @@ def _validated_selection(kind: str, selected: str | None) -> str | None:
         raise RuntimeError("Select an existing parent folder")
     child = resolved / "SpyDER-Restored"
     index = 2
-    while child.exists():
+    while os.path.lexists(child):
         child = resolved / f"SpyDER-Restored-{index}"
         index += 1
     return str(child)
@@ -125,6 +130,7 @@ def choose_path(
     *,
     popen_factory=subprocess.Popen,
     timeout: int = DIALOG_TIMEOUT_SECONDS,
+    is_closing=None,
 ) -> str | None:
     """Run isolated native picker and validate its output before returning it."""
     global _ACTIVE_PROCESS
@@ -134,13 +140,15 @@ def choose_path(
     options = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
     if sys.platform == "win32":
         options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-    try:
-        process = popen_factory(command, **options)
-    except OSError as error:
-        raise RuntimeError(
-            "Native file selection is unavailable. Enter an absolute archive path manually."
-        ) from error
     with _PROCESS_LOCK:
+        if is_closing is not None and is_closing():
+            raise RuntimeError("SpyDER is closing")
+        try:
+            process = popen_factory(command, **options)
+        except OSError as error:
+            raise RuntimeError(
+                "Native file selection is unavailable. Enter an absolute archive path manually."
+            ) from error
         _ACTIVE_PROCESS = process
     try:
         try:
