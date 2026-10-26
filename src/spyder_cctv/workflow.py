@@ -113,12 +113,51 @@ def _finite(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value)
 
 
+_DEFAULT_HISTORY_POLICY = {
+    "enabled": True,
+    "states": ["completed", "filtered", "error"],
+    "min_interval_seconds": 0,
+    "always_save_errors": True,
+}
+
+
+def _validate_history_policy(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or set(raw) != set(_DEFAULT_HISTORY_POLICY):
+        raise ValueError(
+            "history must contain exactly enabled, states, min_interval_seconds and "
+            "always_save_errors"
+        )
+    if type(raw["enabled"]) is not bool or type(raw["always_save_errors"]) is not bool:
+        raise ValueError("history enabled and always_save_errors must be boolean")
+    states = raw["states"]
+    if (
+        not isinstance(states, list)
+        or not states
+        or any(
+            not isinstance(state, str) or state not in ("completed", "filtered", "error")
+            for state in states
+        )
+        or len(set(states)) != len(states)
+    ):
+        raise ValueError(
+            "history states must be a nonempty list of unique completed, filtered or error values"
+        )
+    interval = raw["min_interval_seconds"]
+    if type(interval) is not int or not 0 <= interval <= 86400:
+        raise ValueError("history min_interval_seconds must be an integer from 0 to 86400")
+    return {
+        "enabled": raw["enabled"],
+        "states": list(states),
+        "min_interval_seconds": interval,
+        "always_save_errors": raw["always_save_errors"],
+    }
+
+
 def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
     fields = {"id", "name", "enabled", "camera_ids", "nodes", "edges"}
-    if not isinstance(raw, dict) or set(raw) not in (
-        fields,
-        fields | {"execution"},
-        fields | {"execution", "callable_version"},
+    allowed = (fields, fields | {"execution"}, fields | {"execution", "callable_version"})
+    if not isinstance(raw, dict) or not any(
+        set(raw) in (base, base | {"history"}) for base in allowed
     ):
         raise ValueError(
             "Workflow must contain exactly id, name, enabled, camera_ids, nodes and edges"
@@ -459,6 +498,8 @@ def _validate_graph(raw: Any, *, allow_bridges: bool = False) -> dict[str, Any]:
         result["execution"] = execution
     if "callable_version" in raw:
         result["callable_version"] = raw["callable_version"]
+    if "history" in raw:
+        result["history"] = _validate_history_policy(raw["history"])
     return result
 
 
@@ -2267,7 +2308,7 @@ class WorkflowService:
                                 "path": ["compile"],
                             }
                         ],
-                    }
+                    },
                 )
 
     def remove_subflow(self, subflow_id: str) -> dict[str, Any]:
@@ -2411,6 +2452,7 @@ class WorkflowService:
     ) -> list[dict[str, Any]] | None:
         graph = self.compile_graph(graph)
         settings = self.history.settings()
+        history_policy = graph.get("history", _DEFAULT_HISTORY_POLICY)
         trace = (
             EvaluationTrace(
                 graph,
@@ -2420,7 +2462,7 @@ class WorkflowService:
                 self.history,
                 diagnostic=settings["mode"] == "diagnostic",
             )
-            if preview_node_id is None and settings["enabled"]
+            if preview_node_id is None and settings["enabled"] and history_policy["enabled"]
             else None
         )
         try:

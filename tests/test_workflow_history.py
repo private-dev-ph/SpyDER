@@ -57,6 +57,61 @@ def test_persistence_search_filters_and_pagination(tmp_path: Path):
     reopened.close()
 
 
+def test_per_workflow_history_policy_disabled_states_interval_and_error_override(tmp_path: Path):
+    store = ExecutionHistory(tmp_path / "policy.sqlite")
+    policy = {
+        "enabled": True,
+        "states": ["completed", "error"],
+        "min_interval_seconds": 3600,
+        "always_save_errors": True,
+    }
+    disabled = {**_run(0), "graph": {"history": {**policy, "enabled": False}}}
+    assert store.record(disabled) is None
+    filtered = {**_run(1), "state": "filtered", "graph": {"history": policy}}
+    assert store.record(filtered) is None
+
+    first = {**_run(2), "graph": {"history": policy}}
+    assert store.record(first) == "run-2"
+    # Interval applies across cameras for same workflow.
+    other_camera = {
+        **_run(3),
+        "camera_id": "cam-2",
+        "graph": {"history": policy},
+    }
+    assert store.record(other_camera) is None
+    error = {**_run(4), "state": "error", "graph": {"history": policy}}
+    assert store.record(error) == "run-4"
+    reject_errors = {
+        **policy,
+        "always_save_errors": False,
+    }
+    assert store.record({**_run(5), "state": "error", "graph": {"history": reject_errors}}) is None
+    store.close()
+
+
+def test_history_rate_window_updates_only_after_queue_acceptance(tmp_path: Path, monkeypatch):
+    store = ExecutionHistory(tmp_path / "queue-policy.sqlite")
+    policy = {
+        "enabled": True,
+        "states": ["completed"],
+        "min_interval_seconds": 3600,
+        "always_save_errors": True,
+    }
+    original_put = store._queue.put_nowait
+
+    def full(_item):
+        raise queue.Full
+
+    monkeypatch.setattr(store._queue, "put_nowait", full)
+    assert store.record({**_run(1), "graph": {"history": policy}}) is None
+    assert store.dropped == 1
+    assert not store._workflow_record_times
+    monkeypatch.setattr(store._queue, "put_nowait", original_put)
+    assert store.record({**_run(2), "graph": {"history": policy}}) == "run-2"
+    assert store._workflow_record_times["wf-1"] > 0
+    store.close()
+
+
 def test_history_overview_source_sort_and_page_clamp(tmp_path: Path):
     store = ExecutionHistory(tmp_path / "history.sqlite")
     date = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)

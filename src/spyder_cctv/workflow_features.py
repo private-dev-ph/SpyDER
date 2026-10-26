@@ -231,6 +231,15 @@ class WorkflowFeatures:
         if not isinstance(context, dict) or not isinstance(context.get("cv"), dict):
             raise ValueError("Replay requires a diagnostic run with retained detection inputs")
         graph = run["graph"]
+        from .workflow import _DEFAULT_HISTORY_POLICY
+
+        with self.service._lock:
+            current_graph = self.service._graphs.get(run.get("workflow_id"))
+            replay_policy = (
+                copy.deepcopy(current_graph.get("history", _DEFAULT_HISTORY_POLICY))
+                if current_graph is not None
+                else copy.deepcopy(graph.get("history"))
+            )
         cv = context["cv"]
         # Copy execution state only. No capture, inference, event or recording operation is used.
         sandbox = copy.copy(self.service)
@@ -271,7 +280,7 @@ class WorkflowFeatures:
         )
         result = trace.finish()
         result["original_run_id"] = ident
-        retained_id = self.service.history.record(result)
+        retained_id = self.service.history.record(result, policy=replay_policy)
         notice = (
             " Some diagnostic inputs were truncated; this dry run uses the retained subset."
             if context.get("inputs_truncated")
