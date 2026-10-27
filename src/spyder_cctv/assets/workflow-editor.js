@@ -5687,7 +5687,7 @@
     "hist-overview": "list-video", "use-signal": "link-2", "call-entry": "log-in", "call-return": "log-out",
   };
   const panels = {nodes: "circle-plus", models: "boxes", inspector: "scan-search", settings: "settings-2", activity: "list-video"};
-  const manager = {toggle: "power", open: "workflow", call: "workflow", publish: "upload", rename: "square-pen", duplicate: "copy", export: "file-output", delete: "trash-2"};
+  const manager = {toggle: "power", open: "square-pen", call: "link-2", publish: "upload", rename: "square-pen", duplicate: "copy", export: "file-output", delete: "trash-2"};
   const records = new WeakMap();
   let active = null, tip = null, hideTimer;
 
