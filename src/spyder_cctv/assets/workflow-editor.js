@@ -5766,9 +5766,13 @@
     const ids = new Set((button.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
     ids.add(tip.id);
     button.setAttribute("aria-describedby", [...ids].join(" "));
+    position(button);
+  }
+  function position(button) {
     const rect = button.getBoundingClientRect(), size = tip.getBoundingClientRect();
     tip.style.left = `${Math.max(8, Math.min(innerWidth - size.width - 8, rect.left + (rect.width - size.width) / 2))}px`;
-    tip.style.top = `${Math.max(8, rect.bottom + size.height + 16 < innerHeight ? rect.bottom + 8 : rect.top - size.height - 8)}px`;
+    const top = rect.bottom + size.height + 16 < innerHeight ? rect.bottom + 8 : rect.top - size.height - 8;
+    tip.style.top = `${Math.max(8, Math.min(innerHeight - size.height - 8, top))}px`;
   }
   document.addEventListener("pointerover", (event) => {
     if (tip?.contains(event.target)) { clearTimeout(hideTimer); return; }
@@ -5781,7 +5785,14 @@
   document.addEventListener("focusout", hide);
   document.addEventListener("click", hide);
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") hide(); });
-  document.addEventListener("scroll", hide, true);
+  document.addEventListener("scroll", () => {
+    // Keyboard focus may scroll its button into view after focusin has fired.
+    if (active && document.activeElement === active) {
+      const rect = active.getBoundingClientRect();
+      if (rect.bottom > 0 && rect.top < innerHeight) position(active);
+      else hide();
+    } else hide();
+  }, true);
   window.addEventListener("resize", hide);
   const observer = new MutationObserver((mutations) => {
     const buttons = new Set();

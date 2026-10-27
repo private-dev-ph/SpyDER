@@ -1147,6 +1147,7 @@ try {
     {width: 375, height: 720, deviceScaleFactor: 1, mobile: true},
   ]) {
     await command("Emulation.setDeviceMetricsOverride", viewport, sessionId);
+    await evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
     const actions = await evaluate(`([...document.querySelectorAll('.workflow-editor .we-action-button')]
       .filter(b=>b.getClientRects().length).map(b=>({name:b.getAttribute('aria-label'),
       href:b.querySelector('use')?.getAttribute('href'), width:b.getBoundingClientRect().width,
