@@ -55,6 +55,8 @@ function harness({
   preference = "0",
   desktopThrows = false,
   permissionResult = "granted",
+  motion = false,
+  reducedMotion = false,
 } = {}) {
   const pending = new Map(),
     listeners = new Map(),
@@ -73,6 +75,7 @@ function harness({
       this.classList = { add() {} };
       this.namespaceURI = "http://www.w3.org/2000/svg";
       this.disabled = false;
+      if (motion) this.animate = () => ({ finished: new Promise((resolve) => { this.finishAnimation = resolve; }) });
     }
     append(...nodes) {
       for (const n of nodes) {
@@ -132,6 +135,7 @@ function harness({
       return true;
     },
     focus() {},
+    matchMedia: () => ({matches: reducedMotion}),
     ...(demo ? { spyderShowcase: {} } : {}),
   };
   const context = vm.createContext({
@@ -212,6 +216,30 @@ test("alerts render safely on any workspace without requesting desktop permissio
   assert.equal(h.body.children[0].children.length, 0);
   h.listeners.get("pagehide")();
   assert.equal(h.pending.size, 1); // Only card expiration timer remains.
+});
+test("notification dismissal waits for its exit animation and ignores repeat dismissals", async () => {
+  const h = harness({motion:true});
+  await h.flush();
+  await h.poll([item("animated")]);
+  const stack=h.body.children[0], card=stack.children[0];
+  card.children[3].handlers.click();
+  const finish=card.finishAnimation;
+  card.children[3].handlers.click();
+  assert.equal(card.finishAnimation,finish);
+  assert.equal(card.inert,true);
+  assert.equal(card.attributes['aria-hidden'],'true');
+  assert.equal(stack.children.length,1);
+  finish();
+  await h.flush();
+  assert.equal(stack.children.length,0);
+});
+test("reduced motion removes dismissed notifications immediately", async () => {
+  const h=harness({motion:true,reducedMotion:true});
+  await h.flush();
+  await h.poll([item("reduced")]);
+  const stack=h.body.children[0];
+  stack.children[0].children[3].handlers.click();
+  assert.equal(stack.children.length,0);
 });
 test("desktop alerts require explicit permission and user opt-in; can be disabled", async () => {
   const h = harness();

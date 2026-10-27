@@ -106,7 +106,7 @@ try {
     });
   }
   const { targetId } = await command("Target.createTarget", {
-    url: `http://127.0.0.1:${server.address().port}/#control-room`,
+    url: `http://127.0.0.1:${server.address().port}/#vision-lab`,
   });
   const { sessionId } = await command("Target.attachToTarget", {
     targetId,
@@ -235,10 +235,25 @@ try {
     sessionId,
   );
   await until("!!window.spyder && spyder.cameras().length===2");
+  await until("document.querySelector('#vision-mode-content')?.childElementCount>0");
   await evaluate(
     "window.templateErrors=[];window.addEventListener('error',e=>templateErrors.push(e.message));navigator.mediaDevices.getUserMedia=()=>{throw new Error('Unexpected camera access')};location.hash='vision-lab'",
   );
   await until("spyder.cameras().length===2 && !!document.querySelector('#vision-workflow-tab')");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
+  assert.equal(await evaluate(`(() => {
+    document.querySelector('#vision-gallery-tab').click();
+    const panel=document.querySelector('#vision-mode-content');
+    const running=panel.getAnimations().length;
+    document.querySelector('#vision-motion-tab').click();
+    return running===1 && panel.getAnimations().length===1;
+  })()`),true,"Rapid section switching replaces the incoming animation");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
+  assert.equal(await evaluate(`(() => {document.querySelector('#vision-gallery-tab').click();return document.querySelector('#vision-mode-content').getAnimations().length===0;})()`),true,"Reduced motion skips section animation");
+  await evaluate("document.querySelector('#vision-motion-tab').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.id"),"vision-gallery-tab","Vision navigator supports End key");
+  assert.equal(await evaluate("document.querySelector('#vision-gallery-tab').getAttribute('aria-selected')"),"true","Focused tab retains selected state until activation");
+  await command("Emulation.setEmulatedMedia", {features:[]}, sessionId);
   await evaluate("document.querySelector('#vision-workflow-tab').click()");
   await until("!!document.querySelector('[data-open-templates]')");
   assert.equal(
@@ -356,6 +371,8 @@ try {
     true,
     "Settings drawer retains workflow identity and history controls",
   );
+  // Check final theme colors without sampling halfway through a state transition.
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
   for (const theme of ["light", "dark"]) {
     const controls = await evaluate(`(() => {
       document.documentElement.dataset.theme=${JSON.stringify(theme)};
@@ -1032,6 +1049,17 @@ try {
   await openStudioPanel("inspector");
   await evaluate("location.hash='system'");
   await until("!!document.querySelector('.backup-file-label input[type=file]')");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
+  assert.equal(await evaluate(`(() => {
+    document.querySelector('[data-system-tab=storage]').click();
+    return document.querySelector('#system-storage-panel').getAnimations().length===1;
+  })()`),true,"System section changes animate incoming content");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
+  assert.equal(await evaluate(`(() => {
+    document.querySelector('[data-system-tab=backups]').click();
+    return document.querySelector('#system-backups').getAnimations().length===0 && document.querySelector('#system-storage-panel').getAnimations().length===0;
+  })()`),true,"Reduced motion and leaving a section cancel movement");
+  await command("Emulation.setEmulatedMedia", {features:[]}, sessionId);
   assert.equal(
     await evaluate("document.querySelectorAll('dialog[data-studio-panel][open]').length"),
     0,

@@ -101,11 +101,29 @@
     use.setAttribute("href", "/icons.svg#close");
     svg.append(use);
     close.append(svg);
-    close.addEventListener("click", () => card.remove());
+    let dismissing = false;
+    function dismiss() {
+      if (dismissing) return;
+      dismissing = true;
+      if (card.contains?.(document.activeElement)) {
+        const next = card.nextElementSibling?.querySelector("button") || card.previousElementSibling?.querySelector("button") || document.querySelector("#main-content");
+        next?.focus({ preventScroll: true });
+      }
+      card.inert = true;
+      card.setAttribute("aria-hidden", "true");
+      if (!card.animate || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+        card.remove();
+        return;
+      }
+      const current = window.getComputedStyle?.(card);
+      const animation = card.animate([{ opacity: current?.opacity || 1, transform: current?.transform || "none" }, { opacity: 0, transform: "translateX(12px)" }], { duration: 140, easing: "ease-in", fill: "forwards" });
+      animation.finished.then(() => card.remove(), () => card.remove());
+    }
+    close.addEventListener("click", dismiss);
     card.append(title, message, source, close);
     stack.append(card);
     while (stack.children.length > 5) stack.firstElementChild.remove();
-    setTimeout(() => card.remove(), 15000);
+    setTimeout(dismiss, 15000);
     if (desktopEnabled()) {
       try {
         const alert = new window.Notification(item.title, {

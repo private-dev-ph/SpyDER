@@ -2,6 +2,16 @@
 (() => {
   const app = window.spyder;
   const find = (s, root = document) => root.querySelector(s);
+  const sectionAnimations = new WeakMap();
+  function revealSection(element) {
+    if (!element?.animate) return;
+    sectionAnimations.get(element)?.cancel();
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    sectionAnimations.set(element, element.animate(
+      [{ opacity: .35, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }],
+      { duration: 160, easing: "cubic-bezier(.2,.75,.25,1)" },
+    ));
+  }
   const pages = {
     "control-room": ["Control Room", "grid", "Observe / control"],
     "vision-lab": ["Vision Lab", "vision", "Empower your security"],
@@ -123,6 +133,7 @@
       if (item) recordingTimeline.seekTo(Date.parse(item.created_at), item.id);
       void loadTimelineEvents();
     } else closeTimeline();
+    revealSection(view === "timeline" ? timeline : library);
   }
 
   function icon(name) {
@@ -248,6 +259,8 @@
     );
   }
   function route() {
+    for (const element of document.querySelectorAll("#workspace-content, #control-room, #vision-mode-content, [data-system-panel]"))
+      sectionAnimations.get(element)?.cancel();
     window.spyderLayouts?.unmount();
     window.spyderEventLibrary?.unmount();
     recordingLibrary?.unmount();
@@ -270,7 +283,10 @@
     }
     find("#control-room").hidden = current !== "control-room";
     page.hidden = current === "control-room";
-    if (page.hidden) return;
+    if (page.hidden) {
+      revealSection(find("#control-room"));
+      return;
+    }
     const [title, , subtitle] = pages[current];
     page.innerHTML =
       '<header class="page-heading"><div><p class="eyebrow">WORKSPACE</p><h1 id="workspace-title" tabindex="-1"></h1><p class="intro"></p></div><span class="workspace-badge"></span></header><div id="workspace-content"></div>';
@@ -393,46 +409,38 @@
       switchRecordingView(recordingView);
     } else if (current === "vision-lab") {
       content.innerHTML =
-        '<div class="recording-actions"><button id="vision-motion-tab" class="button primary">Motion & ROI</button><button id="vision-workflow-tab" class="button secondary">Models & Workflows</button><button id="vision-gallery-tab" class="button secondary" aria-pressed="false">Face galleries</button></div><div id="vision-mode-content"></div>';
+        '<div class="recording-actions vision-nav" role="tablist" aria-label="Vision Lab sections"><button type="button" role="tab" id="vision-motion-tab" class="button primary" aria-selected="true" aria-controls="vision-mode-content">Motion & ROI</button><button type="button" role="tab" id="vision-workflow-tab" class="button secondary" aria-selected="false" aria-controls="vision-mode-content" tabindex="-1">Models & Workflows</button><button type="button" role="tab" id="vision-gallery-tab" class="button secondary" aria-selected="false" aria-controls="vision-mode-content" tabindex="-1">Face galleries</button></div><div id="vision-mode-content" role="tabpanel" aria-labelledby="vision-motion-tab"></div>';
       const mode = find("#vision-mode-content");
-      function switchMode(workflow) {
-        find("#vision-gallery-tab").setAttribute("aria-pressed", "false");
-        find("#vision-gallery-tab").className = "button secondary";
+      const visionTabs = [...content.querySelectorAll(".vision-nav button")];
+      let visionSelection = null;
+      function selectVision(id) {
+        if (visionSelection === id && mode.childElementCount) return;
+        visionSelection = id;
         window.spyderVisionLab?.unmount();
         window.spyderWorkflows?.unmount();
-        find("#vision-motion-tab").setAttribute(
-          "aria-pressed",
-          String(!workflow),
-        );
-        find("#vision-workflow-tab").setAttribute(
-          "aria-pressed",
-          String(workflow),
-        );
-        find("#vision-motion-tab").className =
-          "button " + (workflow ? "secondary" : "primary");
-        find("#vision-workflow-tab").className =
-          "button " + (workflow ? "primary" : "secondary");
-        if (workflow) window.spyderWorkflows?.mount(mode);
-        else window.spyderVisionLab?.mount(mode);
-      }
-      find("#vision-motion-tab").addEventListener("click", () =>
-        switchMode(false),
-      );
-      find("#vision-workflow-tab").addEventListener("click", () =>
-        switchMode(true),
-      );
-      find("#vision-gallery-tab").addEventListener("click", () => {
-        window.spyderVisionLab?.unmount();
-        window.spyderWorkflows?.unmount();
-        for (const id of ["vision-motion-tab", "vision-workflow-tab"]) {
-          find("#" + id).className = "button secondary";
-          find("#" + id).setAttribute("aria-pressed", "false");
+        for (const tab of visionTabs) {
+          const selected = tab.id === id;
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+          tab.className = "button " + (selected ? "primary" : "secondary");
         }
-        find("#vision-gallery-tab").className = "button primary";
-        find("#vision-gallery-tab").setAttribute("aria-pressed", "true");
-        mode.innerHTML = '<div id="face-gallery-tools"></div>';
+        mode.setAttribute("aria-labelledby", id);
+        if (id === "vision-workflow-tab") window.spyderWorkflows?.mount(mode);
+        else if (id === "vision-motion-tab") window.spyderVisionLab?.mount(mode);
+        else mode.innerHTML = '<div id="face-gallery-tools"></div>';
+        revealSection(mode);
+      }
+      for (const tab of visionTabs) tab.addEventListener("click", () => selectVision(tab.id));
+      content.querySelector(".vision-nav").addEventListener("keydown", (event) => {
+        const index = visionTabs.indexOf(event.target);
+        if (index < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? visionTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + visionTabs.length) % visionTabs.length;
+        // Manual activation: arrows focus a tab; Enter/Space opens it.
+        visionTabs.forEach((tab, i) => { tab.tabIndex = i === next ? 0 : -1; });
+        visionTabs[next].focus();
       });
-      switchMode(false);
+      selectVision("vision-motion-tab");
     } else if (current === "camera-setup") {
       content.innerHTML =
         '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section><div id="onvif-camera-tools"></div>';
@@ -477,8 +485,12 @@
           tab.tabIndex = selected ? 0 : -1;
           if (selected && focus) tab.focus();
         }
-        for (const pane of systemRoot.querySelectorAll("[data-system-panel]"))
+        for (const pane of systemRoot.querySelectorAll("[data-system-panel]")) {
+          const entering = pane.hidden && pane.dataset.systemPanel === name;
           pane.hidden = pane.dataset.systemPanel !== name;
+          if (pane.hidden) sectionAnimations.get(pane)?.cancel();
+          if (entering) revealSection(pane);
+        }
       }
       systemRoot.querySelector(".system-nav").addEventListener("click", (event) => {
         const tab = event.target.closest("[data-system-tab]");
@@ -707,6 +719,7 @@
     update();
     (find("#system-heading") || find("#workspace-title")).focus({ preventScroll: true });
     window.scrollTo(0, 0);
+    revealSection(content);
   }
   function addCardActions() {
     for (const card of document.querySelectorAll(".camera-card")) {
@@ -964,14 +977,14 @@
   window.addEventListener("spyder:vision-lab-ready", () => {
     if (
       current === "vision-lab" &&
-      find("#vision-motion-tab")?.getAttribute("aria-pressed") === "true"
+      find("#vision-motion-tab")?.getAttribute("aria-selected") === "true"
     )
       window.spyderVisionLab.mount(find("#vision-mode-content"));
   });
   window.addEventListener("spyder:workflows-ready", () => {
     if (
       current === "vision-lab" &&
-      find("#vision-workflow-tab")?.getAttribute("aria-pressed") === "true"
+      find("#vision-workflow-tab")?.getAttribute("aria-selected") === "true"
     )
       window.spyderWorkflows.mount(find("#vision-mode-content"));
   });

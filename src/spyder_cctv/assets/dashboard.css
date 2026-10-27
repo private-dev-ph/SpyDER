@@ -1671,3 +1671,30 @@ input[type="search"]::-webkit-search-cancel-button {
     }
   }
 }
+/* Shared motion: brief feedback without shifting the control's layout box. */
+:root input[type="checkbox"] {
+  transition: background-color 140ms ease, border-color 140ms ease, background-size 140ms cubic-bezier(.2,.75,.25,1), box-shadow 140ms ease;
+}
+:root input[type="checkbox"]:not(:checked):not(:indeterminate) { background-size: 0 0; }
+@keyframes spyder-notice-enter {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+.message:not([hidden]), .workflow-alert { animation: spyder-notice-enter 180ms ease-out; }
+@supports (appearance: base-select) and selector(::picker(select)) {
+  @media (forced-colors: none) and (prefers-reduced-motion: no-preference) {
+    :root select:not([multiple]):is(:not([size]), [size="1"])::picker(select) {
+      opacity: 0;
+      transform: translateY(-3px) scale(.98);
+      transition: opacity 140ms ease, transform 160ms cubic-bezier(.2,.75,.25,1), display 160ms allow-discrete, overlay 160ms allow-discrete;
+    }
+    :root select:not([multiple]):is(:not([size]), [size="1"]):open::picker(select) { opacity: 1; transform: none; }
+    @starting-style {
+      :root select:not([multiple]):is(:not([size]), [size="1"]):open::picker(select) { opacity: 0; transform: translateY(-3px) scale(.98); }
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root input[type="checkbox"] { transition: none; }
+  .message:not([hidden]), .workflow-alert { animation: none; }
+}

@@ -24,6 +24,7 @@ const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
 </style><main>
 <label for="theme-select">Choose an especially long option label for responsive menu testing</label><select id="theme-select"><option value="current" selected>Current selection</option><option value="next">A deliberately long option label that remains readable on a narrow phone width</option><optgroup label="Camera group"><option value="disabled" disabled>Unavailable camera</option><option value="grouped">Available camera</option></optgroup></select>
 <label for="size-one-select">Single-row select</label><select id="size-one-select" size="1"><option selected>One</option><option>Two</option></select>
+<label><input id="motion-checkbox" type="checkbox">Animated checkbox</label>
 <label for="multiple-select">Multiple selection listbox</label><select id="multiple-select" multiple><option selected>Alpha</option><option>Beta</option></select>
 <label for="listbox-select">Tall listbox</label><select id="listbox-select" size="3"><option>Alpha</option><option>Beta</option><option>Gamma</option></select>
 <div id="field" class="we-help-field"><button class="help" type="button" aria-label="Field help">?</button><label id="threshold-label">Threshold<input id="threshold" type="number" value="0.2" min="0" max="0.4" step="0.1"></label></div>
@@ -154,6 +155,17 @@ try {
   }
 
   await until("document.querySelectorAll('.number-stepper').length === 2");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
+  const checkboxBox=await evaluate("document.querySelector('#motion-checkbox').getBoundingClientRect().toJSON()");
+  await clickElement("#motion-checkbox");
+  assert.ok(await evaluate("parseFloat(getComputedStyle(document.querySelector('#motion-checkbox')).transitionDuration)>0"), "Checkbox feedback is animated");
+  await delay(170);
+  assert.deepEqual(await evaluate("document.querySelector('#motion-checkbox').getBoundingClientRect().toJSON()"),checkboxBox,"Checkbox animation does not shift its box");
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#motion-checkbox')).backgroundColor"),"rgb(190, 26, 26)","Checkbox settles on the theme accent");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#motion-checkbox')).transitionDuration"),"0s","Reduced motion disables checkbox transitions");
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#theme-select'),'::picker(select)').transitionDuration"),"0s","Reduced motion disables dropdown transitions");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
 
   const selectStyle = await evaluate(`(() => {
     const select=document.querySelector('#theme-select');
@@ -187,6 +199,9 @@ try {
 
   await clickElement("#theme-select");
   await until("document.querySelector('#theme-select').matches(':open')");
+  assert.ok(await evaluate("parseFloat(getComputedStyle(document.querySelector('#theme-select'),'::picker(select)').transitionDuration)>0"), "Native dropdown animates its popup");
+  await delay(180);
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#theme-select'),'::picker(select)').opacity"),"1","Open picker settles fully visible");
   await command("Input.dispatchKeyEvent", {type:"keyDown",key:"ArrowDown",code:"ArrowDown"}, sessionId);
   await command("Input.dispatchKeyEvent", {type:"keyUp",key:"ArrowDown",code:"ArrowDown"}, sessionId);
   const focusedOption = await evaluate(`(() => {
