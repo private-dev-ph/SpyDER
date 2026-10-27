@@ -425,3 +425,19 @@
 .vision-nav .button { margin: 0; border-color: transparent; background: transparent; color: var(--ink); box-shadow: none; }
 .vision-nav .button[aria-selected=true] { border-color: transparent; background: var(--accent); color: white; }
 .vision-nav .button:not([aria-selected=true]):hover { border-color: transparent; background: var(--canvas); color: var(--ink); }
+/* Keep the Vision Lab frame identical across all three sections. */
+main:has(.vision-nav) { padding: 8px 12px; }
+#workspace-page:has(.vision-nav) > .page-heading { display: none; }
+#workspace-content:has(.vision-nav), .system-workspace { overflow-x: clip; }
+:is(.system-nav, .vision-nav) { position: relative; isolation: isolate; }
+:is(.system-nav, .vision-nav).has-nav-indicator::before {
+  content: ""; position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
+  width: var(--nav-width); height: var(--nav-height); border-radius: 7px;
+  background: var(--accent); transform: translate(var(--nav-x), var(--nav-y));
+  transition: transform 220ms cubic-bezier(.2,.75,.25,1);
+}
+:is(.system-nav, .vision-nav) > button { position: relative; z-index: 1; }
+:is(.system-nav, .vision-nav).has-nav-indicator > button[aria-selected=true] { background: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  :is(.system-nav, .vision-nav).has-nav-indicator::before { transition: none; }
+}

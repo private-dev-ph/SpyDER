@@ -3,14 +3,33 @@
   const app = window.spyder;
   const find = (s, root = document) => root.querySelector(s);
   const sectionAnimations = new WeakMap();
-  function revealSection(element) {
+  function revealSection(element, direction = 0) {
     if (!element?.animate) return;
     sectionAnimations.get(element)?.cancel();
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     sectionAnimations.set(element, element.animate(
-      [{ opacity: .35, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }],
-      { duration: 160, easing: "cubic-bezier(.2,.75,.25,1)" },
+      [{ opacity: .4, transform: direction ? `translateX(${direction * 24}px)` : "translateY(4px)" }, { opacity: 1, transform: "none" }],
+      { duration: 220, easing: "cubic-bezier(.2,.75,.25,1)" },
     ));
+  }
+  const navigatorObservers = [];
+  function updateNavigator(nav) {
+    const selected = nav.querySelector('[aria-selected="true"]');
+    if (!selected) return;
+    const box = selected.getBoundingClientRect(), frame = nav.getBoundingClientRect(), style = getComputedStyle(nav);
+    nav.style.setProperty("--nav-x", `${box.left - frame.left - parseFloat(style.borderLeftWidth)}px`);
+    nav.style.setProperty("--nav-y", `${box.top - frame.top - parseFloat(style.borderTopWidth)}px`);
+    nav.style.setProperty("--nav-width", `${box.width}px`);
+    nav.style.setProperty("--nav-height", `${box.height}px`);
+    nav.classList.add("has-nav-indicator");
+  }
+  function setupNavigator(nav) {
+    updateNavigator(nav);
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => updateNavigator(nav));
+      observer.observe(nav);
+      navigatorObservers.push(observer);
+    }
   }
   const pages = {
     "control-room": ["Control Room", "grid", "Observe / control"],
@@ -259,6 +278,7 @@
     );
   }
   function route() {
+    navigatorObservers.splice(0).forEach((observer) => observer.disconnect());
     for (const element of document.querySelectorAll("#workspace-content, #control-room, #vision-mode-content, [data-system-panel]"))
       sectionAnimations.get(element)?.cancel();
     window.spyderLayouts?.unmount();
@@ -415,6 +435,8 @@
       let visionSelection = null;
       function selectVision(id) {
         if (visionSelection === id && mode.childElementCount) return;
+        const previous = visionTabs.findIndex((tab) => tab.id === visionSelection);
+        const next = visionTabs.findIndex((tab) => tab.id === id);
         visionSelection = id;
         window.spyderVisionLab?.unmount();
         window.spyderWorkflows?.unmount();
@@ -428,7 +450,8 @@
         if (id === "vision-workflow-tab") window.spyderWorkflows?.mount(mode);
         else if (id === "vision-motion-tab") window.spyderVisionLab?.mount(mode);
         else mode.innerHTML = '<div id="face-gallery-tools"></div>';
-        revealSection(mode);
+        updateNavigator(content.querySelector(".vision-nav"));
+        revealSection(mode, previous < 0 ? 0 : Math.sign(next - previous));
       }
       for (const tab of visionTabs) tab.addEventListener("click", () => selectVision(tab.id));
       content.querySelector(".vision-nav").addEventListener("keydown", (event) => {
@@ -441,6 +464,7 @@
         visionTabs[next].focus();
       });
       selectVision("vision-motion-tab");
+      setupNavigator(content.querySelector(".vision-nav"));
     } else if (current === "camera-setup") {
       content.innerHTML =
         '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section><div id="onvif-camera-tools"></div>';
@@ -479,6 +503,8 @@
       content.replaceChildren(systemRoot);
       const systemTabs = [...systemRoot.querySelectorAll("[data-system-tab]")];
       function selectSystemTab(name, focus = false) {
+        const previous = systemTabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+        const next = systemTabs.findIndex((tab) => tab.dataset.systemTab === name);
         for (const tab of systemTabs) {
           const selected = tab.dataset.systemTab === name;
           tab.setAttribute("aria-selected", String(selected));
@@ -489,9 +515,11 @@
           const entering = pane.hidden && pane.dataset.systemPanel === name;
           pane.hidden = pane.dataset.systemPanel !== name;
           if (pane.hidden) sectionAnimations.get(pane)?.cancel();
-          if (entering) revealSection(pane);
+          if (entering) revealSection(pane, Math.sign(next - previous));
         }
+        updateNavigator(systemRoot.querySelector(".system-nav"));
       }
+      setupNavigator(systemRoot.querySelector(".system-nav"));
       systemRoot.querySelector(".system-nav").addEventListener("click", (event) => {
         const tab = event.target.closest("[data-system-tab]");
         if (tab) selectSystemTab(tab.dataset.systemTab);

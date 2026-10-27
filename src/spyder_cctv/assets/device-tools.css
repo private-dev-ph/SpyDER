@@ -641,9 +641,6 @@
 #face-gallery-tools .dt-gallery-help { margin-top: 16px; border-top: 1px solid var(--border); }
 #face-gallery-tools .dt-gallery-help p { color: var(--muted); font-size: 12px; line-height: 1.7; }
 #face-gallery-tools summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
-#workspace-page:has(#face-gallery-tools) > .page-heading { display: none; }
-#workspace-content:has(#face-gallery-tools) > .recording-actions:has(#vision-gallery-tab) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 12px; padding: 0; border: 0; background: transparent; }
-#workspace-content:has(#face-gallery-tools) > .recording-actions > .button { min-width: 0; min-height: 44px; padding: 8px; text-align: center; white-space: normal; }
 @media (min-width: 540px) {
   #face-gallery-tools .dt-head { flex-direction: row; }
   #face-gallery-tools .dt-detail-head > .dt-actions { width: auto; }

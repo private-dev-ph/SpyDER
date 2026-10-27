@@ -1,5 +1,6 @@
 /* Warm neutral surfaces keep the supplied reds and golds readable in both themes. */
 :root {
+  scrollbar-gutter: stable;
   scroll-padding-block-start: 132px;
   --icon-control-size: 44px;
   --icon-glyph-size: 20px;
@@ -1697,4 +1698,26 @@ input[type="search"]::-webkit-search-cancel-button {
 @media (prefers-reduced-motion: reduce) {
   :root input[type="checkbox"] { transition: none; }
   .message:not([hidden]), .workflow-alert { animation: none; }
+}
+/* Native disclosure motion preserves summary semantics, focus, and exclusive groups. */
+@supports selector(details::details-content) {
+  @media (prefers-reduced-motion: no-preference) {
+    details::details-content {
+      opacity: 0; content-visibility: hidden;
+      transition: opacity 180ms ease, content-visibility 220ms allow-discrete;
+    }
+    details[open]::details-content { opacity: 1; content-visibility: visible; }
+    details:not([open])::details-content { pointer-events: none; }
+    @supports (interpolate-size: allow-keywords) {
+      details:not(.we-studio-menu, .wall-arrangement, .dt-action-menu)::details-content {
+        interpolate-size: allow-keywords; block-size: 0; overflow: clip;
+        transition: block-size 220ms cubic-bezier(.2,.75,.25,1), opacity 180ms ease, content-visibility 220ms allow-discrete;
+      }
+      details[open]:not(.we-studio-menu, .wall-arrangement, .dt-action-menu)::details-content { block-size: auto; }
+    }
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* Focused fields must never be hidden behind a partially expanded panel. */
+  details:focus-within:not(:has(> summary:focus))::details-content { transition: none; }
 }

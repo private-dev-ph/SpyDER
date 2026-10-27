@@ -25,6 +25,7 @@ const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
 <label for="theme-select">Choose an especially long option label for responsive menu testing</label><select id="theme-select"><option value="current" selected>Current selection</option><option value="next">A deliberately long option label that remains readable on a narrow phone width</option><optgroup label="Camera group"><option value="disabled" disabled>Unavailable camera</option><option value="grouped">Available camera</option></optgroup></select>
 <label for="size-one-select">Single-row select</label><select id="size-one-select" size="1"><option selected>One</option><option>Two</option></select>
 <label><input id="motion-checkbox" type="checkbox">Animated checkbox</label>
+<details id="motion-details"><summary>Expandable settings</summary><div style="height:120px">Disclosure content</div></details>
 <label for="multiple-select">Multiple selection listbox</label><select id="multiple-select" multiple><option selected>Alpha</option><option>Beta</option></select>
 <label for="listbox-select">Tall listbox</label><select id="listbox-select" size="3"><option>Alpha</option><option>Beta</option><option>Gamma</option></select>
 <div id="field" class="we-help-field"><button class="help" type="button" aria-label="Field help">?</button><label id="threshold-label">Threshold<input id="threshold" type="number" value="0.2" min="0" max="0.4" step="0.1"></label></div>
@@ -155,6 +156,24 @@ try {
   }
 
   await until("document.querySelectorAll('.number-stepper').length === 2");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
+  const closedHeight=await evaluate("document.querySelector('#motion-details').getBoundingClientRect().height");
+  await clickElement("#motion-details > summary");
+  await delay(40);
+  const openingHeight=await evaluate("document.querySelector('#motion-details').getBoundingClientRect().height");
+  await delay(240);
+  const openHeight=await evaluate("document.querySelector('#motion-details').getBoundingClientRect().height");
+  assert.ok(openingHeight>closedHeight && openingHeight<openHeight,"Summary expands through intermediate heights");
+  await clickElement("#motion-details > summary");
+  await delay(40);
+  const closingHeight=await evaluate("document.querySelector('#motion-details').getBoundingClientRect().height");
+  assert.ok(closingHeight>closedHeight && closingHeight<openHeight,"Summary collapses smoothly");
+  await delay(240);
+  assert.equal(await evaluate("document.querySelector('#motion-details').getBoundingClientRect().height"),closedHeight,"Closed summary releases all content space");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
+  await evaluate("document.querySelector('#motion-details').open=true");
+  assert.equal(await evaluate("document.querySelector('#motion-details').getBoundingClientRect().height"),openHeight,"Reduced motion opens summaries immediately");
+  await evaluate("document.querySelector('#motion-details').open=false");
   await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
   const checkboxBox=await evaluate("document.querySelector('#motion-checkbox').getBoundingClientRect().toJSON()");
   await clickElement("#motion-checkbox");

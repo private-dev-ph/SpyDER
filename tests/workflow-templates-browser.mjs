@@ -240,13 +240,30 @@ try {
     "window.templateErrors=[];window.addEventListener('error',e=>templateErrors.push(e.message));navigator.mediaDevices.getUserMedia=()=>{throw new Error('Unexpected camera access')};location.hash='vision-lab'",
   );
   await until("spyder.cameras().length===2 && !!document.querySelector('#vision-workflow-tab')");
+  await delay(260);
+  for (const width of [1280,390]) {
+    await command("Emulation.setDeviceMetricsOverride", {width,height:800,deviceScaleFactor:1,mobile:false}, sessionId);
+    const frames=[];
+    for (const id of ["vision-motion-tab","vision-workflow-tab","vision-gallery-tab"]) {
+      await evaluate(`document.querySelector('#${id}').click()`);
+      frames.push(await evaluate(`(() => {
+        const nav=document.querySelector('.vision-nav'), r=nav.getBoundingClientRect(), s=getComputedStyle(nav);
+        return {top:r.top,left:r.left,width:r.width,padding:getComputedStyle(document.querySelector('main')).padding,border:s.borderTopWidth,background:s.backgroundColor};
+      })()`));
+    }
+    assert.deepEqual(frames[1],frames[0],`${width} selecting workflows preserves the entire navigation frame`);
+    assert.deepEqual(frames[2],frames[0],`${width} gallery navigation uses the same container`);
+    assert.ok(parseFloat(frames[0].border)>0,"Vision navigator has a bordered container in every section");
+  }
+  await command("Emulation.setDeviceMetricsOverride", {width:1280,height:800,deviceScaleFactor:1,mobile:false}, sessionId);
   await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
   assert.equal(await evaluate(`(() => {
+    document.querySelector('#vision-motion-tab').click();
     document.querySelector('#vision-gallery-tab').click();
     const panel=document.querySelector('#vision-mode-content');
     const running=panel.getAnimations().length;
     document.querySelector('#vision-motion-tab').click();
-    return running===1 && panel.getAnimations().length===1;
+    return running===1 && panel.getAnimations().length===1 && panel.getAnimations()[0].effect.getKeyframes()[0].transform.includes('translateX(-24px)');
   })()`),true,"Rapid section switching replaces the incoming animation");
   await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
   assert.equal(await evaluate(`(() => {document.querySelector('#vision-gallery-tab').click();return document.querySelector('#vision-mode-content').getAnimations().length===0;})()`),true,"Reduced motion skips section animation");
@@ -1031,9 +1048,10 @@ try {
   await openStudioPanel("models");
   await assertStudioPanelFit("models", "375x720 Models drawer");
   await assertDrawerFill("models", ".we-library", "375x720 Models drawer");
-  const registerReach = await evaluate(`(() => {
+  const registerReach = await evaluate(`(async () => {
     const content=document.querySelector('dialog[data-studio-panel=models] .we-studio-content'),outer=document.querySelector('.we-library-add'),inner=outer.querySelector('details');
     outer.open=true;inner.open=true;content.scrollTop=0;
+    await new Promise(resolve=>setTimeout(resolve,260));
     const selectors=['[data-upload-model]','[data-library-file]','[data-library-name]','[data-library-path]','[data-register-model]'];
     const controls=selectors.map(selector=>{const element=document.querySelector(selector);element.scrollIntoView({block:'center'});const r=element.getBoundingClientRect(),c=content.getBoundingClientRect();return {selector,width:r.width,height:r.height,inside:r.width>0&&r.height>0&&r.top>=c.top-1&&r.bottom<=c.bottom+1,scrollTop:content.scrollTop}});
     content.scrollTop=content.scrollHeight;
