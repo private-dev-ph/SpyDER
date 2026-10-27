@@ -13,7 +13,7 @@ const startDrawing = (h) => h.root.dispatch("click", {
   target: { closest: () => ({ classList: { contains: (name) => name === "vl-draw-roi" } }) },
 });
 
-function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
+function setup({ showcase = false, fetcher, postRequest, cameras, analysisEnabled = false } = {}) {
   const requests = [];
   const listeners = new Map();
   const timerMap = new Map();
@@ -47,7 +47,7 @@ function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
       if (selector === "form") for (const name of ["enabled", "contours", "components", "tracking", "threshold", "history", "learning_rate", "detect_shadows", "min_area_percent", "inference_fps", "input_width", "warmup_frames", "max_tracks", "overlay", "roi_x", "roi_y", "roi_w", "roi_h"])
         this.elements[name] = new Element("[name=" + name + "]");
       if (this.elements.threshold) {
-        this.elements.enabled.checked = false;
+        this.elements.enabled.checked = analysisEnabled;
         this.elements.contours.checked = true;
         this.elements.components.checked = true;
         this.elements.tracking.checked = false;
@@ -168,7 +168,7 @@ function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
       requests.push(request);
       if (fetcher) return fetcher(url, options);
       if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
-      if (url.includes("/api/cameras/") && url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: 16 }, runtime: { state: "running" } }) };
+      if (url.includes("/api/cameras/") && url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: 16, enabled: analysisEnabled }, runtime: { state: "running" } }) };
       if (url.endsWith("/release")) return { ok: true, json: async () => ({ released: true }) };
       if (url.endsWith("/frame") || url.endsWith("/mask")) return { ok: true, blob: async () => new Blob([url.endsWith("/frame") ? "frame" : "mask"]) };
       if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ camera_id: "cam-a", settings: {}, runtime: { state: "running" }, state: "running", pipeline: "vision", revision: 1 }) };
@@ -303,7 +303,7 @@ test("frame response from older draft revision cannot replace current preview", 
     if (url.endsWith("/frame")) return new Promise((resolve) => { resolveFrame = resolve; });
     if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
     if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ runtime: { state: "running" }, pipeline: "vision", revision: 1 }) };
-    return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: 16 }, runtime: {} }) };
+    return { ok: true, json: async () => ({ pipeline: "vision", settings: { threshold: 16, enabled: false }, runtime: {} }) };
   } });
   await flush();
   const frame = [...h.timerMap.values()].find((item) => item.ms === 250);
@@ -416,8 +416,20 @@ test("ROI mapping handles 4:3 source letterboxing in original and side-by-side v
   h.window.spyderVisionLab.unmount();
 });
 
-test("mask image loads as binary blob and cleanup revokes it on unmount", async () => {
+test("disabled analysis shows guidance instead of a broken mask or endless warmup", async () => {
   const h = setup();
+  await flush();
+  h.root.viewSelect.value = "mask";
+  h.root.dispatch("change", { target: h.root.viewSelect });
+  await flush();
+  assert.equal(h.root.maskImage.hidden, true);
+  assert.match(h.root.maskNote.textContent, /Enable analysis/);
+  assert.equal(h.requests.some(r=>r.url?.endsWith("/mask")), false);
+  h.window.spyderVisionLab.unmount();
+});
+
+test("mask image loads as binary blob and cleanup revokes it on unmount", async () => {
+  const h = setup({ analysisEnabled: true });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
   await flush();
@@ -431,16 +443,16 @@ test("mask image loads as binary blob and cleanup revokes it on unmount", async 
 test("mask refresh keeps prior image visible until replacement arrives", async () => {
   let resolveReplacement;
   let maskCalls = 0;
-  const h = setup({ fetcher: async (url) => {
+  const h = setup({ analysisEnabled: true, fetcher: async (url) => {
     if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
-    if (url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
+    if (url.endsWith("/analysis")) return { ok: true, json: async () => ({ pipeline: "vision", settings: { enabled: true }, runtime: {} }) };
     if (url.endsWith("/mask")) {
     maskCalls++;
     if (maskCalls === 1) return { ok: true, blob: async () => new Blob(["first"]) };
     return new Promise((resolve) => { resolveReplacement = resolve; });
     }
     if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ pipeline: "vision", runtime: {} }) };
-    return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
+    return { ok: true, json: async () => ({ pipeline: "vision", settings: { enabled: true }, runtime: {} }) };
   } });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
@@ -459,7 +471,7 @@ test("mask refresh keeps prior image visible until replacement arrives", async (
 });
 
 test("removing selected camera revokes its mask and moves selection", async () => {
-  const h = setup();
+  const h = setup({ analysisEnabled: true });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
   await flush();
@@ -473,10 +485,10 @@ test("removing selected camera revokes its mask and moves selection", async () =
 
 test("late mask response after camera switch cannot create stale object URL", async () => {
   const resolveMasks = [];
-  const h = setup({ fetcher: async (url) => {
+  const h = setup({ analysisEnabled: true, fetcher: async (url) => {
     if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
     if (url.endsWith("/mask")) return new Promise((resolve) => { resolveMasks.push(resolve); });
-    return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
+    return { ok: true, json: async () => ({ pipeline: "vision", settings: { enabled: true }, runtime: {} }) };
   } });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
@@ -509,16 +521,27 @@ test("camera switch serializes polls and unmount aborts active requests", async 
 });
 
 test("mask warming status is shown without reporting a request error", async () => {
-  const h = setup({ fetcher: async (url) => {
+  let maskCalls = 0;
+  const h = setup({ analysisEnabled: true, fetcher: async (url) => {
     if (url.endsWith("/analysis/capacity")) return { ok: true, json: async () => ({ state: "idle" }) };
-    if (url.endsWith("/mask")) return { status: 503, ok: false };
+    if (url.endsWith("/mask")) return ++maskCalls === 1 ? { status: 503, ok: false } : {ok: true, blob: async () => new Blob(["mask"])};
     if (url.includes("/api/analysis/preview/")) return { ok: true, json: async () => ({ pipeline: "vision", runtime: {} }) };
-    return { ok: true, json: async () => ({ pipeline: "vision", settings: {}, runtime: {} }) };
+    return { ok: true, json: async () => ({ pipeline: "vision", settings: { enabled: true }, runtime: {} }) };
   } });
   h.root.viewSelect.value = "mask";
   h.root.dispatch("change", { target: h.root.viewSelect });
   await flush();
   assert.match(h.root.maskNote.textContent, /Foreground mask warming up/);
+  assert.equal(h.root.maskImage.hidden, true);
+  const frame = [...h.timerMap.values()].find(item=>item.fn.name === "loadFrame");
+  await frame.fn();
+  await flush();
+  assert.match(h.root.maskNote.textContent, /Foreground mask warming up/, "Frame updates cannot erase mask status");
+  const retry = [...h.timerMap.values()].find(item=>item.ms===1200&&item.fn.toString().includes("loadMask"));
+  retry.fn();
+  await flush();
+  assert.equal(h.root.maskImage.hidden, false);
+  assert.match(h.root.maskNote.textContent, /Native foreground mask/);
   assert.equal(h.root.message.classList.contains("vl-error"), false);
   h.window.spyderVisionLab.unmount();
 });

@@ -43,7 +43,8 @@
       let pipeline = "none",
         capacityError = "",
         maskURL = "",
-        maskState = "";
+        maskState = "",
+        frameState = "";
       let viewMode = "original",
         timer = 0,
         token = 0,
@@ -80,7 +81,7 @@
       let messageText = "",
         messageError = false;
       const showcase = !!window.spyderShowcase;
-      if (!showcase) maskState = "Loading isolated draft preview…";
+      if (!showcase) frameState = "Loading isolated draft preview…";
       const root = document.createElement("div");
       root.className = "vision-lab";
       container.replaceChildren(root);
@@ -206,7 +207,7 @@
             <section class="workspace-panel vl-preview-panel">
               <div class="vl-section-head"><h2>Camera preview</h2><span class="vl-status vl-preview-state" data-state="${esc(effective.state || c?.state || "idle")}">${esc(effective.state || c?.state || "offline")}</span></div>
               <label class="vl-view-picker"><span>View</span><select class="vl-view-mode" ${showcase ? "disabled" : ""}><option value="original" ${viewMode === "original" ? "selected" : ""}>Original</option><option value="mask" ${viewMode === "mask" ? "selected" : ""}>Foreground mask</option><option value="side-by-side" ${viewMode === "side-by-side" ? "selected" : ""}>Side by side</option></select></label>
-              <div class="vl-stage" tabindex="0" role="region" aria-label="Camera preview" aria-describedby="vl-draw-hint"><div class="vl-image-pair"><img class="vl-image" draggable="false" alt="Selected camera live frame"><img class="vl-mask-image" draggable="false" alt="Draft foreground mask"></div><div class="vl-roi-box" hidden></div></div>
+              <div class="vl-stage" tabindex="0" role="region" aria-label="Camera preview" aria-describedby="vl-draw-hint"><div class="vl-image-pair"><img class="vl-image" draggable="false" alt="Selected camera live frame"><img class="vl-mask-image" draggable="false" alt="Draft foreground mask" hidden><div class="vl-mask-placeholder" aria-hidden="true" hidden>Foreground mask unavailable</div></div><div class="vl-roi-box" hidden></div></div>
               <div class="vl-roi-tools"><button type="button" class="button secondary vl-draw-roi" aria-pressed="false" ${unavailable ? "disabled" : ""}><svg class="icon" aria-hidden="true"><use href="/icons.svg#lucide-scan"/></svg><span>Draw ROI</span></button><button type="button" class="button secondary vl-clear-roi" ${unavailable ? "disabled" : ""}>Clear ROI</button><span class="vl-roi-summary" role="status"></span></div>
               <p class="vl-help" id="vl-draw-hint">Choose Draw ROI, then drag across the image. Or enter precise coordinates in settings.</p>
               <p class="vl-mask-note" role="status"></p><p class="vl-runtime-note" role="status"></p><p class="vl-tracking-note" role="status"></p>
@@ -282,13 +283,23 @@
             : ""
           : imageURL;
         img.draggable = false;
-        mask.src = maskURL || "";
+        if (maskURL && mask.src !== maskURL) mask.src = maskURL;
         mask.draggable = false;
         img.hidden = viewMode === "mask";
-        mask.hidden = viewMode === "original";
+        mask.hidden = viewMode === "original" || !maskURL;
+        const placeholder = root.querySelector(".vl-mask-placeholder");
+        if (placeholder) {
+          placeholder.hidden = viewMode === "original" || !!maskURL;
+          placeholder.textContent = cfg.enabled ? "Waiting for foreground mask" : "Analysis is off";
+        }
         pair.dataset.mode = viewMode;
         pair.classList.toggle("vl-side-by-side", viewMode === "side-by-side");
-        if (note) note.textContent = maskState;
+        const previewNote = viewMode === "original" ? frameState
+          : !cfg.enabled ? "Enable analysis in Motion settings to preview a foreground mask. Apply is not needed for preview."
+          : draftRevision !== appliedRevision ? "Updating draft analysis…"
+          : ["paused", "loading", "error"].includes(runtime?.state) ? runtime.message || "Waiting for a running camera and analysis."
+          : maskState || frameState || "Waiting for a foreground mask…";
+        if (note && note.textContent !== previewNote) note.textContent = previewNote;
         const stage = root.querySelector(".vl-stage");
         if (stage) stage.dataset.frame = String(!!img.src);
         drawROI();
@@ -463,7 +474,7 @@
         maskState = "";
       }
       async function loadMask() {
-        if (showcase || !selected || !previewSession || viewMode === "original")
+        if (showcase || !selected || !previewSession || viewMode === "original" || !cfg.enabled || draftRevision !== appliedRevision)
           return;
         if (maskController) return;
         const id = selected,
@@ -496,6 +507,14 @@
           }
           if (!response.ok) throw new Error("Foreground mask unavailable.");
           const blob = await response.blob();
+          if (typeof createImageBitmap === "function") {
+            try {
+              const bitmap = await createImageBitmap(blob);
+              bitmap.close();
+            } catch {
+              throw new Error("Foreground mask image could not be decoded. Retrying…");
+            }
+          }
           if (
             !mounted ||
             t !== token ||
@@ -510,7 +529,7 @@
           if (previousURL) URL.revokeObjectURL(previousURL);
           maskState = "Native foreground mask";
         } catch (error) {
-          if (mounted && t === token && error.name !== "AbortError")
+          if (mounted && t === token && revision === draftRevision && revision === appliedRevision && error.name !== "AbortError")
             maskState = error.message;
         } finally {
           clearTimeout(timeout);
@@ -526,7 +545,7 @@
         if (showcase || !mounted || !selected || !previewSession) return;
         draftRevision++;
         releaseMask();
-        maskState = "Updating draft preview…";
+        frameState = "Updating draft preview…";
         updatePreview();
         clearTimeout(draftTimer);
         clearTimeout(frameTimer);
@@ -571,7 +590,7 @@
           if (revision === draftRevision) {
             appliedRevision = revision;
             sessionRecovered = false;
-            maskState = "";
+            frameState = "";
             runtime = data.runtime || data;
             pipeline = data.pipeline || pipeline;
             updateLive();
@@ -582,7 +601,7 @@
           }
         } catch (error) {
           if (mounted && t === token && error.name !== "AbortError") {
-            maskState = error.message;
+            frameState = error.message;
             updatePreview();
           }
         } finally {
@@ -629,7 +648,7 @@
           )
             return;
           if (response.status === 503) {
-            maskState = "Preview warming up. Waiting for a fresh frame.";
+            frameState = "Preview warming up. Waiting for a fresh frame.";
           } else {
             if (!response.ok) throw new Error("Draft frame unavailable.");
             const blob = await response.blob();
@@ -646,11 +665,11 @@
               previousURL = imageURL;
             imageURL = nextURL;
             if (previousURL) URL.revokeObjectURL(previousURL);
-            maskState = "";
+            frameState = "";
           }
         } catch (error) {
           if (mounted && t === token && error.name !== "AbortError")
-            maskState = error.message;
+            frameState = error.message;
         } finally {
           clearTimeout(timeout);
           if (frameController === requestController) frameController = null;
@@ -723,7 +742,7 @@
           !mounted ||
           selected !== id ||
           token !== t ||
-          viewMode === "original"
+          viewMode === "original" || !cfg.enabled
         )
           return;
         maskRefreshTimer = setTimeout(() => {
@@ -732,6 +751,7 @@
             mounted &&
             selected === id &&
             token === t &&
+            cfg.enabled &&
             viewMode !== "original"
           )
             loadMask();

@@ -61,6 +61,7 @@ def test_preview_is_raw_and_drafts_do_not_change_live_or_persisted_settings(rig)
     worker = manager.get_worker("cam")
     previews.configure("draft-tab", "cam", {"enabled": False})
     wait_for(lambda: previews.image("draft-tab") is not None)
+    assert previews.image("draft-tab", mask=True) is None
     draft = cv2.imdecode(np.frombuffer(previews.image("draft-tab"), np.uint8), cv2.IMREAD_COLOR)
     live = cv2.imdecode(np.frombuffer(worker.jpeg(), np.uint8), cv2.IMREAD_COLOR)
     assert draft.mean() < 1 and live.mean() > 200

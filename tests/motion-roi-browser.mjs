@@ -224,6 +224,22 @@ try {
   await evaluate("document.querySelector('[data-vl-disclosure=advanced]').open=true");
   await edit('inference_fps',6);
   await edit('history',450);
+  await evaluate("window.motionMaskResponse='warming';document.querySelector('.vl-view-mode').value='mask';document.querySelector('.vl-view-mode').dispatchEvent(new Event('change',{bubbles:true}))");
+  assert.equal(await evaluate("document.querySelector('.vl-mask-image').hidden"), true);
+  assert.match(await evaluate("document.querySelector('.vl-mask-note').textContent"), /Enable analysis/);
+  assert.equal(await evaluate("motionRequests.some(r=>r.path.endsWith('/mask'))"), false);
+  await click('[name=enabled]');
+  await until("document.querySelector('.vl-mask-note').textContent.includes('warming up')");
+  assert.equal(await evaluate("document.querySelector('.vl-mask-placeholder').hidden"), false);
+  await delay(500);
+  assert.match(await evaluate("document.querySelector('.vl-mask-note').textContent"), /warming up/, "Frame refresh preserves mask status");
+  await evaluate("window.motionMaskResponse='invalid'");
+  await until("document.querySelector('.vl-mask-note').textContent.includes('could not be decoded')");
+  assert.equal(await evaluate("document.querySelector('.vl-mask-image').hidden"), true);
+  await evaluate("window.motionMaskResponse='ready'");
+  await until("document.querySelector('.vl-mask-image').naturalWidth===640&&!document.querySelector('.vl-mask-image').hidden");
+  assert.equal(await evaluate("document.querySelector('.vl-mask-placeholder').hidden"), true);
+  assert.equal((await saved()).length,0,"Enabling draft mask never saves camera settings");
   for (const mode of ['mask','side-by-side','original']) {
     await evaluate(`document.querySelector('.vl-view-mode').value='${mode}';document.querySelector('.vl-view-mode').dispatchEvent(new Event('change',{bubbles:true}))`);
     await until(`document.querySelector('.vl-image-pair').dataset.mode==='${mode}'`);
@@ -245,7 +261,6 @@ try {
   assert.equal(await evaluate("document.querySelector('[name=inference_fps]').value"), "4");
   assert.equal((await saved()).length, 1, "Recommendations do not apply themselves");
   assert.equal(await evaluate("!!document.querySelector('.vl-disable,.vl-more-actions')"), false);
-  await click('[name=enabled]');
   assert.equal(await evaluate("document.querySelector('[name=enabled]').checked"), true);
   await click('[name=enabled]');
   assert.equal(await evaluate("document.querySelector('[name=enabled]').checked"), false);
@@ -261,9 +276,11 @@ try {
   console.log('PASS: Motion & ROI responsive layouts, touch drawing, precise ROI, preview modes, isolated Apply, capacity recommendations, single analysis toggle, staged reset and camera switching.');
 } finally {
   socket?.close();
+  const exited = chrome.exitCode !== null ? Promise.resolve() : new Promise(resolve=>chrome.once('exit',resolve));
   chrome.kill();
+  await exited;
   server.closeAllConnections();
   await new Promise(resolve=>server.close(resolve));
   await delay(200);
-  await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200});
+  await rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:400});
 }

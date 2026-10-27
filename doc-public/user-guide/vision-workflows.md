@@ -23,6 +23,12 @@ percentages. Letterboxing is excluded; side-by-side coordinates use the source
 image. Choose **Original**, **Foreground mask**, or **Side by side** in the View
 selector to inspect the draft.
 
+Foreground masks require **Enable analysis** to be checked. You can preview them
+before applying settings; checking the box alone does not change Control Room.
+When analysis is off, the mask view explains this instead of repeatedly warming
+up. While an enabled mask is loading, a placeholder is shown until a valid image
+arrives. Camera-frame refreshes do not clear mask loading or error messages.
+
 **Apply settings** is the only action that saves the camera configuration.
 The **Enable analysis** checkbox controls both ON and OFF. **Reset defaults** and
 capacity **Use recommendation** stage changes for preview; apply them when ready. Runtime

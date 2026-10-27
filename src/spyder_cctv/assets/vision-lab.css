@@ -82,7 +82,8 @@
 .vl-stage img { user-select: none; -webkit-user-drag: none; }
 .vl-image-pair { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; align-items: center; justify-content: center; }
 .vl-image, .vl-mask-image { display: block; width: 100%; height: 100%; object-fit: contain; }
-.vl-side-by-side .vl-image, .vl-side-by-side .vl-mask-image { width: 50%; }
+.vl-mask-placeholder { display: grid; place-items: center; width: 100%; height: 100%; padding: 16px; color: #e8e8e8; font-size: 13px; text-align: center; }
+.vl-side-by-side .vl-image, .vl-side-by-side .vl-mask-image, .vl-side-by-side .vl-mask-placeholder { width: 50%; }
 .vl-image[hidden], .vl-mask-image[hidden], .vl-roi-box[hidden] { display: none; }
 .vl-roi-box { position: absolute; border: 2px solid var(--gold, #f6ca69); background: #f6ca6926; pointer-events: none; box-shadow: 0 0 0 1px #151515; }
 .vl-roi-tools { justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
