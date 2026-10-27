@@ -157,17 +157,35 @@
     const host = hostByInput.get(input);
     const field = input.getBoundingClientRect();
     const bounds = host.getBoundingClientRect();
-    const scaleX = bounds.width / (host.offsetWidth || bounds.width) || 1;
-    const scaleY = bounds.height / (host.offsetHeight || bounds.height) || 1;
+    const hostStyle = getComputedStyle(host);
+    // offsetWidth/Height round fractional grid sizes, creating false scaling.
+    const usedSize = (axis, edges, fallback) => {
+      let size = parseFloat(hostStyle[axis]);
+      if (!Number.isFinite(size)) return fallback;
+      if (hostStyle.boxSizing !== "border-box")
+        for (const edge of edges) size += parseFloat(hostStyle[edge]) || 0;
+      return size;
+    };
+    const hostWidth = usedSize("width", ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"], host.offsetWidth);
+    const hostHeight = usedSize("height", ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"], host.offsetHeight);
+    const scaleX = bounds.width / (hostWidth || bounds.width) || 1;
+    const scaleY = bounds.height / (hostHeight || bounds.height) || 1;
     const width = controls.offsetWidth;
-    const height = controls.offsetHeight;
-    const rtl = getComputedStyle(input).direction === "rtl";
+    const style = getComputedStyle(input);
+    const rtl = style.direction === "rtl";
     const left = rtl
       ? field.left - bounds.left
       : field.right - bounds.left - width * scaleX;
-    const top = field.top - bounds.top + (field.height - height * scaleY) / 2;
-    controls.style.left = `${(left + host.scrollLeft - host.clientLeft) / scaleX}px`;
-    controls.style.top = `${(top + host.scrollTop - host.clientTop) / scaleY}px`;
+    const top = field.top - bounds.top;
+    controls.style.height = `${field.height / scaleY}px`;
+    controls.style.direction = style.direction;
+    const topRadius = (rtl ? style.borderTopLeftRadius : style.borderTopRightRadius) || "7px";
+    const bottomRadius = (rtl ? style.borderBottomLeftRadius : style.borderBottomRightRadius) || "7px";
+    controls.style.borderRadius = rtl
+      ? `${topRadius} 0 0 ${bottomRadius}`
+      : `0 ${topRadius} ${bottomRadius} 0`;
+    controls.style.left = `${left / scaleX + host.scrollLeft - (parseFloat(hostStyle.borderLeftWidth) || host.clientLeft)}px`;
+    controls.style.top = `${top / scaleY + host.scrollTop - (parseFloat(hostStyle.borderTopWidth) || host.clientTop)}px`;
   }
 
   function schedulePosition(input) {

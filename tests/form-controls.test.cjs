@@ -418,7 +418,8 @@ test("wrapped labels remain intact and controls keep their own accessible names"
     "Increase Exposure",
   );
   assert.equal(controls.style.left, "160px");
-  assert.equal(controls.style.top, "61px");
+  assert.equal(controls.style.top, "60px");
+  assert.equal(controls.style.height, "42px");
 });
 
 test("duplicate ids do not redirect controls and attribute changes update limits", () => {

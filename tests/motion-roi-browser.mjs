@@ -167,6 +167,13 @@ try {
       assert.equal(fit.overflow, false, `${viewport.width}/${theme}: overflow`);
       for (const c of fit.controls) assert.ok(c.height>=43.9, `${viewport.width}/${theme}/${c.name}: touch height ${c.height}`);
       await evaluate("document.querySelector('[data-vl-disclosure=advanced]').open=true;document.querySelector('[data-vl-disclosure=roi]').open=true;document.querySelector('[data-vl-disclosure=capacity]').open=true;document.querySelector('[data-vl-disclosure=diagnostics]').open=true");
+      await evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      const steppers = await evaluate(`([...document.querySelectorAll('.vision-lab input[type=number]')].map(input=>{
+        const field=input.getBoundingClientRect(), control=input.labels[0].nextElementSibling.getBoundingClientRect();
+        return {name:input.name,top:Math.abs(control.top-field.top),bottom:Math.abs(control.bottom-field.bottom),right:Math.abs(control.right-field.right)};
+      }))`);
+      for (const stepper of steppers)
+        assert.ok(stepper.top<.6&&stepper.bottom<.6&&stepper.right<.6, `${viewport.width}/${theme}: seamless stepper ${JSON.stringify(stepper)}`);
       assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth+1"), true);
       assert.equal(await evaluate("document.querySelector('[data-metric=regions]').textContent"), "1");
       await evaluate("document.querySelectorAll('[data-vl-disclosure]').forEach(d=>d.open=false)");

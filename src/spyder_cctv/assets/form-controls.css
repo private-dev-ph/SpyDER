@@ -1,8 +1,9 @@
-input[type="number"].themed-number-input {
+:root input[type="number"].themed-number-input {
   appearance: textfield;
   -moz-appearance: textfield;
-  min-height: 44px;
-  padding-inline-end: 5.5rem;
+  /* Reserve 44px hit targets inside the input border, including mobile resets. */
+  min-height: 46px !important;
+  padding-inline-end: 89px;
 }
 input[type="number"].themed-number-input::-webkit-inner-spin-button,
 input[type="number"].themed-number-input::-webkit-outer-spin-button {
@@ -15,8 +16,12 @@ input[type="number"].themed-number-input::-webkit-outer-spin-button {
   z-index: 2;
   display: grid;
   grid-template-columns: repeat(2, 44px);
-  width: 5.5rem;
-  height: 44px;
+  width: 89px;
+  min-height: 46px;
+  padding-block: 1px;
+  padding-inline-end: 1px;
+  box-sizing: border-box;
+  overflow: hidden;
   pointer-events: none;
 }
 
@@ -25,14 +30,16 @@ input[type="number"].themed-number-input::-webkit-outer-spin-button {
 }
 
 .number-stepper-button {
+  box-sizing: border-box;
   display: grid;
   min-width: 44px;
   min-height: 44px;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--border, #d8d4ca);
+  border: 0;
+  border-inline-start: 1px solid var(--border, #d8d4ca);
   color: var(--ink, #25241f);
-  background: var(--surface, #fffefa);
+  background: transparent;
   font: inherit;
   font-size: 0.8rem;
   line-height: 1;
@@ -48,8 +55,7 @@ input[type="number"].themed-number-input::-webkit-outer-spin-button {
 }
 
 .number-stepper-button:last-child {
-  border-inline-start: 0;
-  border-radius: 0 var(--radius-small, 5px) var(--radius-small, 5px) 0;
+  border-radius: 0;
 }
 
 .number-stepper-button:hover:not(:disabled) {
@@ -61,7 +67,12 @@ input[type="number"].themed-number-input::-webkit-outer-spin-button {
   position: relative;
   z-index: 1;
   outline: 2px solid var(--focus, #830000);
-  outline-offset: 1px;
+  outline-offset: -3px;
+}
+
+/* Keep the shared input border stationary during presses. */
+.number-stepper-button:active:not(:disabled) {
+  transform: none;
 }
 
 .number-stepper-button:disabled {
