@@ -544,12 +544,30 @@
     status.textContent =
       "Draft changes · save and apply to update the Control Room.";
   }
+  function syncDraftState() {
+    const state = $("#layout-draft-state", root);
+    const matchesWall = applied && JSON.stringify(draft) === JSON.stringify(applied);
+    state.textContent = (draft.name.trim() || "Unnamed arrangement") + " · " + (dirty ? "Unsaved changes · preview only" : matchesWall
+      ? "Applied to Control Room & fullscreen" : "Draft · active wall unchanged");
+    state.dataset.dirty = String(dirty);
+  }
   function preview() {
     if (!root?.isConnected) return;
     const container = $("#layout-preview", root),
       list = $("#layout-camera-list", root);
     const cameras = all(draft),
       visible = arranged(draft, cameras);
+    syncDraftState();
+    for (const [field, mode] of [["columns", "grid"], ["featured", "featured"], ["interval", "sequence"]])
+      $("#layout-" + field, root).closest("label").hidden = draft.mode !== mode;
+    $("#layout-priority-options", root).hidden = !draft.autoPriority;
+    for (const preset of root.querySelectorAll("[data-layout-preset]"))
+      preset.setAttribute("aria-pressed", String(preset.dataset.layoutPreset === draft.mode &&
+        (draft.mode !== "grid" || Number(preset.dataset.columns) === draft.columns)));
+    const focusedRow = document.activeElement?.closest(".layout-camera-row");
+    const focusedIndex = focusedRow ? [...list.children].indexOf(focusedRow) : -1;
+    const focusedControl = focusedRow ? [...focusedRow.querySelectorAll("input,button,select")].indexOf(document.activeElement) : -1;
+    const listScroll = list.scrollTop;
     container.replaceChildren();
     list.replaceChildren();
     const screenShape = $("#layout-viewport", root).value;
@@ -566,7 +584,7 @@
     const featured = visible.some((c) => c.id === draft.featured)
       ? draft.featured
       : visible[0]?.id;
-    const shown = draft.mode === "sequence" ? visible.slice(0, 1) : visible;
+    const shown = draft.mode === "sequence" ? policy.order(draft, cameras, ranks, 0) : visible;
     for (const [index, camera] of shown.entries()) {
       const tile = document.createElement("div");
       tile.className = "layout-preview-tile";
@@ -672,6 +690,7 @@
         move.disabled =
           order.indexOf(id) + direction < 0 ||
           order.indexOf(id) + direction >= order.length;
+        move.setAttribute("aria-label", text + ": " + (camera?.name || id));
         actions.append(move);
       }
       if (camera?.dummy || !camera)
@@ -725,13 +744,22 @@
       });
       pin.prepend(svgIcon("pin"));
       pin.setAttribute("aria-pressed", String(draft.pinned.includes(id)));
+      pin.setAttribute("aria-label", (draft.pinned.includes(id) ? "Unpin: " : "Pin: ") + (camera?.name || id));
       actions.append(pin);
       row.append(actions);
       list.append(row);
     }
+    if (focusedIndex >= 0) {
+      const destination = [...list.children].find((row) => row.dataset.id === focusedRow.dataset.id) || list.children[Math.min(focusedIndex, list.children.length - 1)];
+      const controls = destination?.querySelectorAll("input,button,select");
+      const target = controls?.[focusedControl];
+      const fallback = [...(controls || [])].find((control) => !control.disabled);
+      (target && !target.disabled ? target : fallback)?.focus({ preventScroll: true });
+    }
+    list.scrollTop = listScroll;
     $("#layout-count", root).textContent =
       visible.length +
-      " visible · " +
+      " included · " +
       draft.dummies.length +
       "/24 dummy cameras";
   }
@@ -748,6 +776,10 @@
   }
   function save(apply) {
     draft.name = $("#layout-name", root).value;
+    if (!draft.name.trim() || layouts.some((layout) => layout.id !== editingId && layout.config.name.toLowerCase() === draft.name.trim().toLowerCase())) {
+      $(".layout-library-tools", root).open = true;
+      $("#layout-name", root).focus();
+    }
     const config = validate(draft);
     const id = $("#layout-saved", root).value || uid("layout");
     if (!layouts.some((l) => l.id === id) && layouts.length >= 50)
@@ -784,6 +816,7 @@
         ? "Saved and applied to the Control Room and fullscreen wall."
         : "Layout saved. The active wall is unchanged until applied.",
     );
+    syncDraftState();
   }
   function savedMenu(selected = "") {
     const select = $("#layout-saved", root);
@@ -805,7 +838,80 @@
     draft = structuredClone(
       layouts.find((l) => l.id === activeId)?.config || applied || defaults(),
     );
-    root.innerHTML = `<div class="layout-studio"><section class="workspace-panel layout-editor"><div class="layout-title"><div><p class="eyebrow">WALL DESIGNER</p><h2>Every angle, in its place.</h2></div><span id="layout-count" class="field-help"></span></div><p class="workspace-description">Arrange real feeds and generated dummy cameras. Save named walls, feature an entrance or rotate through your views. Layouts belong to this browser.</p><div class="layout-fields"><label>Saved arrangements<select id="layout-saved"></select></label><label>Name<input id="layout-name" maxlength="80" required /></label></div><div id="layout-preset-actions" class="layout-actions"></div><div class="layout-fields"><label>Arrangement<select id="layout-mode"><option value="auto">Automatic grid</option><option value="grid">Fixed columns</option><option value="featured">Featured camera</option><option value="sequence">Rotating single view</option></select></label><label>Preferred columns<select id="layout-columns"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label><label>Image fit<select id="layout-fit"><option value="fit">Fit · preserve whole image</option><option value="fill">Fill · crop edges</option></select></label><label>Tile spacing (px)<input id="layout-gap" type="number" min="0" max="32" /></label><label>Rotation interval (seconds)<input id="layout-interval" type="number" min="3" max="120" /></label><label>Featured camera<select id="layout-featured"></select></label></div><fieldset class="layout-priority-settings"><legend>Activity priority</legend><label><input id="layout-priority-enabled" type="checkbox" /> Move active unpinned cameras forward</label><div class="layout-priority-sources"><label><input id="layout-source-motion" type="checkbox" /> Movement / motion regions</label><label><input id="layout-source-cv" type="checkbox" /> CV detections</label><label><input id="layout-source-events" type="checkbox" /> Workflow events / notifications</label></div><label>Keep priority after activity ends (seconds)<input id="layout-priority-hold" type="number" min="3" max="120" /></label><p class="field-help">Pinned cameras keep their slots and override hidden/rotation settings. Activity must be fresh; idle cameras return to manual order after the hold period. Pins also appear in a small dock when you scroll past them.</p></fieldset><div class="layout-preview-heading"><h3>Wall preview</h3><label>Screen shape<select id="layout-viewport"><option value="16 / 9">Desktop · 16:9</option><option value="4 / 3">Monitor · 4:3</option><option value="1 / 1">Square</option><option value="9 / 16">Mobile · portrait</option></select></label></div><div id="layout-preview" class="layout-preview" aria-label="Layout simulation"></div><p class="field-help">Fixed columns adapt on narrow screens. Featured view stacks on mobile. Rotation starts after applying. Hiding a camera changes only the wall; capture, CV and recording keep their own settings.</p><div id="layout-save-actions" class="layout-actions"></div><p id="layout-status" role="status" aria-live="polite"></p></section><aside><section class="workspace-panel"><h2>Camera lineup</h2><p class="field-help">Drag rows to reorder, or use Move up / Move down. Uncheck a camera to hide it from this arrangement.</p><div id="layout-camera-list" class="layout-camera-list"></div></section><section class="workspace-panel"><h2>Simulation cameras</h2><p class="field-help">Generated locally. No permission prompts, camera access, server processing or recordings. Up to 24 per arrangement.</p><div class="layout-fields"><label>Name prefix<input id="dummy-name" value="Demo camera" maxlength="60" /></label><label>Camera shape<select id="dummy-ratio"><option>16:9</option><option>4:3</option><option>1:1</option><option>9:16</option></select></label><label>How many?<input id="dummy-count" type="number" min="1" max="24" value="4" /></label></div><div id="layout-dummy-actions" class="layout-actions"></div><p class="field-help">Save and apply to place dummy cameras in the Control Room. Remove them here or use Automatic wall to return to real cameras.</p></section></aside></div>`;
+    root.innerHTML = `
+      <div class="layout-workspace">
+        <section class="workspace-panel layout-toolbar" aria-label="Arrangement and saving">
+          <div class="layout-fields layout-identity">
+            <label>Saved arrangements<select id="layout-saved"></select></label>
+          </div>
+          <div class="layout-toolbar-actions">
+            <div id="layout-save-actions" class="layout-actions"></div>
+            <details class="layout-library-tools">
+              <summary>Name &amp; layout tools</summary>
+              <div class="layout-fields"><label>Name<input id="layout-name" maxlength="80" required /></label></div>
+              <div id="layout-library-actions" class="layout-actions"></div>
+            </details>
+          </div>
+          <p id="layout-draft-state" class="field-help"></p>
+          <p id="layout-status" role="status" aria-live="polite"></p>
+        </section>
+        <div class="layout-studio">
+          <section class="workspace-panel layout-editor" aria-labelledby="layout-preview-title">
+            <div class="layout-preview-heading">
+              <div><h2 id="layout-preview-title">Wall preview</h2><span id="layout-count" class="field-help"></span></div>
+              <label>Screen shape<select id="layout-viewport"><option value="16 / 9">Desktop · 16:9</option><option value="4 / 3">Monitor · 4:3</option><option value="1 / 1">Square</option><option value="9 / 16">Mobile · portrait</option></select></label>
+            </div>
+            <div id="layout-preview" class="layout-preview" aria-label="Layout simulation"></div>
+            <p class="field-help">Preview changes here, then save and apply to update the Control Room. Layouts stay in this browser; camera capture, CV and recording settings are unchanged.</p>
+            <details class="layout-preview-help"><summary>How the preview works</summary><p class="field-help">Fixed columns adapt on narrow screens. Featured view stacks on mobile. Rotation starts after applying. Pinned cameras remain visible alongside the rotating view. Dummy tiles are generated simulations.</p></details>
+          </section>
+          <aside class="layout-settings" aria-label="Layout settings">
+            <details class="workspace-panel layout-section" data-layout-section="arrangement" open>
+              <summary>Arrangement</summary>
+              <div class="layout-section-body">
+                <div class="layout-fields">
+                  <label>Arrangement<select id="layout-mode"><option value="auto">Automatic grid</option><option value="grid">Fixed columns</option><option value="featured">Featured camera</option><option value="sequence">Rotating single view</option></select></label>
+                  <label>Preferred columns<select id="layout-columns"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
+                  <label>Featured camera<select id="layout-featured"></select></label>
+                  <label>Rotation interval (seconds)<input id="layout-interval" type="number" min="3" max="120" /></label>
+                  <label>Image fit<select id="layout-fit"><option value="fit">Fit · preserve whole image</option><option value="fill">Fill · crop edges</option></select></label>
+                  <label>Tile spacing (px)<input id="layout-gap" type="number" min="0" max="32" /></label>
+                </div>
+                <details class="layout-presets"><summary>Quick presets</summary><div id="layout-preset-actions" class="layout-actions"></div></details>
+              </div>
+            </details>
+            <details class="workspace-panel layout-section" data-layout-section="cameras" open>
+              <summary>Camera lineup</summary>
+              <div class="layout-section-body">
+                <p class="field-help">Uncheck to hide a view. Drag or use Move up / Move down to reorder; moved cameras become pinned. Unpin before hiding a pinned view.</p>
+                <div id="layout-camera-list" class="layout-camera-list"></div>
+              </div>
+            </details>
+            <details class="workspace-panel layout-section" data-layout-section="priority">
+              <summary>Activity priority</summary>
+              <div class="layout-section-body">
+                <fieldset class="layout-priority-settings"><legend>Activity priority</legend>
+                  <label><input id="layout-priority-enabled" type="checkbox" /> Move active unpinned cameras forward</label>
+                  <div id="layout-priority-options">
+                    <div class="layout-priority-sources"><label><input id="layout-source-motion" type="checkbox" /> Movement / motion regions</label><label><input id="layout-source-cv" type="checkbox" /> CV detections</label><label><input id="layout-source-events" type="checkbox" /> Workflow events / notifications</label></div>
+                    <label>Keep priority after activity ends (seconds)<input id="layout-priority-hold" type="number" min="3" max="120" /></label>
+                  </div>
+                  <p class="field-help">Pinned cameras keep their slots and override hidden/rotation settings. Activity must be fresh; idle cameras return to manual order after the hold period. Pins also appear in a small dock when you scroll past them.</p>
+                </fieldset>
+              </div>
+            </details>
+            <details class="workspace-panel layout-section" data-layout-section="simulation">
+              <summary>Simulation cameras</summary>
+              <div class="layout-section-body">
+                <p class="field-help">Generated locally without camera access, CV or recordings. Up to 24 per arrangement.</p>
+                <div class="layout-fields"><label>Name prefix<input id="dummy-name" value="Demo camera" maxlength="60" /></label><label>Camera shape<select id="dummy-ratio"><option>16:9</option><option>4:3</option><option>1:1</option><option>9:16</option></select></label><label>How many?<input id="dummy-count" type="number" min="1" max="24" value="4" /></label></div>
+                <div id="layout-dummy-actions" class="layout-actions"></div>
+                <p class="field-help">Save and apply to place dummy cameras in the Control Room. Remove them here or use Automatic wall to return to real cameras.</p>
+              </div>
+            </details>
+          </aside>
+        </div>
+      </div>`;
     savedMenu(activeId);
     fill();
     $("#layout-priority-enabled", root).addEventListener("change", (event) => {
@@ -843,6 +949,7 @@
     $("#layout-name", root).addEventListener("input", (event) => {
       draft.name = event.target.value;
       dirty = true;
+      syncDraftState();
     });
     for (const name of [
       "mode",
@@ -865,19 +972,25 @@
       ["3-column wall", "grid", 3],
       ["Featured view", "featured", 3],
       ["Rotate views", "sequence", 1],
-    ])
-      $("#layout-preset-actions", root).append(
-        button(label, () => {
+    ]) {
+      const preset = button(label, () => {
           draft.mode = mode;
           draft.columns = columns;
           fill();
           changed();
-        }),
-      );
+        });
+      preset.dataset.layoutPreset = mode;
+      preset.dataset.columns = String(columns);
+      preset.setAttribute("aria-pressed", String(mode === draft.mode && (mode !== "grid" || columns === draft.columns)));
+      $("#layout-preset-actions", root).append(preset);
+    }
     const actions = $("#layout-save-actions", root);
     actions.append(
       button("Save & apply", () => save(true), true),
       button("Save draft", () => save(false)),
+    );
+    const libraryActions = $("#layout-library-actions", root);
+    libraryActions.append(
       button("Duplicate", () => {
         draft.name = draft.name.slice(0, 70) + " copy";
         savedMenu("");
@@ -930,7 +1043,7 @@
     input.accept = ".json,application/json";
     input.id = "layout-import";
     input.hidden = true;
-    actions.append(input);
+    libraryActions.append(input);
     input.addEventListener("change", async () => {
       try {
         const mounted = root;

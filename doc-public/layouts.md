@@ -5,13 +5,25 @@ It changes the presentation, not camera capture, computer vision or recording me
 
 ## Create an arrangement
 
-1. Open **Layouts** and choose a preset: automatic grid, fixed columns, featured view or rotation.
-2. Give the arrangement a name. Set image fit, spacing and preferred columns.
+The preview comes first, with saving controls above it. Arrangement and Camera lineup
+start expanded. Activity priority and Simulation cameras start collapsed; each heading
+opens with a click, tap, or keyboard Enter. Settings stay intact while sections are closed.
+Naming, duplicate, delete, import, and export are grouped under **Name & layout tools**.
+
+1. Open **Layouts → Arrangement** and choose automatic grid, fixed columns, featured view or rotation.
+   **Quick presets** also offers common starting points.
+2. Set the name under **Name & layout tools**. Set image fit, spacing and preferred columns
+   under **Arrangement**.
 3. Drag Camera lineup rows to reorder them, or use **Move up / Move down** with a keyboard.
    Uncheck cameras to hide them from this wall. Choose a featured camera when using Featured view.
 4. Test desktop, square and portrait screen shapes in the preview.
 5. Choose **Save draft** to keep the configuration without changing the active wall.
    Choose **Save & apply** to update both Control Room and fullscreen.
+
+Columns, featured-camera selection, and rotation interval appear only for the relevant
+arrangement. Enable Activity priority to choose its sources and hold period. The status
+above the preview distinguishes unsaved changes, saved drafts, and applied settings.
+Rotation previews include the pinned views plus the first cycling camera.
 
 Use the **Arrangement** selector in the Control Room or fullscreen Live tools to switch saved walls.
 Choose **Automatic wall** to return to the standard camera wall and tile-size controls.

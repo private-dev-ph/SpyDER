@@ -218,6 +218,20 @@ try {
     "window.layoutErrors=[];window.addEventListener('error',e=>layoutErrors.push(e.message));navigator.mediaDevices.getUserMedia=()=>{throw new Error('Unexpected camera access')};location.hash='layouts'",
   );
   await until("!!document.querySelector('#dummy-count')");
+  assert.deepEqual(await evaluate(`({
+    advancedClosed:!document.querySelector('[data-layout-section=priority]').open && !document.querySelector('[data-layout-section=simulation]').open,
+    toolsClosed:!document.querySelector('.layout-library-tools').open,
+    saves:[...document.querySelectorAll('#layout-save-actions button')].map(b=>b.textContent),
+    previewFirst:!!(document.querySelector('.layout-editor').compareDocumentPosition(document.querySelector('.layout-settings')) & Node.DOCUMENT_POSITION_FOLLOWING),
+    contextualHidden:['columns','featured','interval'].every(id=>document.querySelector('#layout-'+id).closest('label').hidden)
+  })`), {advancedClosed:true,toolsClosed:true,saves:['Save & apply','Save draft'],previewFirst:true,contextualHidden:true}, "Preview-first editor starts with focused controls");
+  await change("layout-mode", "sequence");
+  assert.equal(await evaluate("!document.querySelector('#layout-interval').closest('label').hidden && document.querySelector('#layout-columns').closest('label').hidden"), true, "Rotation exposes its interval only");
+  await change("layout-mode", "auto");
+  await evaluate("document.querySelector('[data-layout-section=simulation] > summary').focus()");
+  await pressEnter();
+  assert.equal(await evaluate("document.querySelector('[data-layout-section=simulation]').open"), true, "Keyboard opens simulation tools");
+  await evaluate("document.querySelector('.layout-presets').open=true");
   await evaluate("document.querySelector('.skip-link').click()");
   assert.deepEqual(
     await evaluate(`({
@@ -257,8 +271,9 @@ try {
     "document.querySelector('#layout-name').value='Security wall';document.querySelector('#layout-name').dispatchEvent(new Event('input'))",
   );
   await evaluate(
-    "const row=[...document.querySelectorAll('.layout-camera-row')].find(r=>r.dataset.id==='cam-demo-south');row.querySelector('input').click()",
+    "const row=[...document.querySelectorAll('.layout-camera-row')].find(r=>r.dataset.id==='cam-demo-south');row.querySelector('input').focus();row.querySelector('input').click()",
   );
+  assert.equal(await evaluate("document.activeElement.closest('.layout-camera-row')?.dataset.id"), "cam-demo-south", "Hiding a view retains keyboard focus on the rebuilt row");
   await click("Featured view");
   await change("layout-featured", "dummy-unused");
   await evaluate(
@@ -337,6 +352,7 @@ try {
   await evaluate("spyderWall.exit();location.hash='layouts'");
   await until("!!document.querySelector('#layout-mode')");
   await change("layout-mode", "sequence");
+  assert.equal(await evaluate("document.querySelectorAll('#layout-preview > div').length === JSON.parse(localStorage.getItem('spyder-layouts-v1-showcase')).applied.pinned.length + 1"), true, "Rotation preview includes pinned cameras and one cycling view");
   await change("layout-interval", 3);
   await click("Save & apply");
   await evaluate("location.hash='control-room'");
@@ -395,6 +411,15 @@ try {
   );
   await evaluate("location.hash='layouts'");
   await until("!!document.querySelector('#layout-import')");
+  for (const theme of ["light", "dark"]) {
+    await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.querySelectorAll('.layout-workspace details').forEach(d=>d.open=true)`);
+    for (const width of [320, 390, 768, 1280]) {
+      await command("Emulation.setDeviceMetricsOverride", {width,height:700,deviceScaleFactor:1,mobile:false}, sessionId);
+      await delay(100);
+      assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth"), true, `${theme} ${width} all Layouts tools fit`);
+      assert.equal(await evaluate("[...document.querySelectorAll('.layout-workspace button')].filter(b=>b.checkVisibility()).every(b=>{const r=b.getBoundingClientRect();return r.height>=44 && r.width>=44})"), true, `${theme} ${width} visible controls meet touch sizes`);
+    }
+  }
   await evaluate(
     `(() => {const config=JSON.parse(localStorage.getItem('spyder-layouts-v1-showcase')).applied;config.name='Imported wall';const file=new File([JSON.stringify(config)],'wall.json',{type:'application/json'});const transfer=new DataTransfer();transfer.items.add(file);const input=document.querySelector('#layout-import');input.files=transfer.files;input.dispatchEvent(new Event('change'));})()`,
   );
