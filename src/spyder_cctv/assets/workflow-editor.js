@@ -5701,7 +5701,9 @@
     if (button.hasAttribute("data-preview-toggle")) icon = button.getAttribute("aria-pressed") === "true" ? "pause" : "play";
     const text = button.textContent.trim();
     if (!icon || !text) return;
-    if ((button.hasAttribute("data-activate") || button.dataset.action === "toggle") && /^Disable/.test(text)) icon = "power-off";
+    // Power glyph shows the current state; the action label describes the click.
+    if (button.hasAttribute("data-activate") || button.dataset.action === "toggle")
+      icon = /^Disable/.test(text) ? "power" : "power-off";
     const old = records.get(button);
     if (old?.text === text && old.icon === icon && button.querySelector(".we-action-label")) return;
     // Menu entries retain visible labels; names, choices and confirmations stay text.
