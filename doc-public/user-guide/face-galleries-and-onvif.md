@@ -15,14 +15,18 @@ No models, face samples, or camera credentials are sent to the showcase server.
    dependencies in the same Python environment if they are missing.
 2. Open **Vision Lab → Face galleries**. Existing galleries load automatically.
    Choose **Create gallery** to add a collection. Give the
-   gallery a name and select its detector and recognition models.
+   gallery a name and select its detector and recognition models. If either model
+   is missing, the dialog explains what to add in Models & Workflows.
 3. Select the gallery and choose **Enroll someone**. All enrollment controls are
    inside the enrollment studio, including the identity name and media source. It
    accepts a running camera, a JPEG/PNG image, or a browser-supported video.
    A camera preview uses the existing capture worker; it does not start or stop
    the camera. Keep the camera running while inspecting it.
-4. Drag a focus rectangle over the person you want to enroll. The focus fields
-   also accept percentages for keyboard control. Dragging freezes a live camera
+4. Choose **Set focus area**, then drag a rectangle over the person you want to
+   enroll. Drawing ends after the gesture; Escape or **Cancel focus drawing** exits
+   this mode without closing the studio. Outside drawing mode, you can scroll
+   normally over the preview or tap a detected face to select it. Expand **Precise
+   focus coordinates** for percentage-based keyboard entry. Drawing freezes a live camera
    preview or pauses video playback so the picture stays still while you focus.
    Choose **Analyze current frame**
    to freeze and inspect the exact frame used by the detector. Face boxes and
@@ -59,8 +63,17 @@ local server memory after five minutes. The older single-image API retains a pen
 selection in RAM for up to 60 seconds. Keep enrollment images below
 8 MiB; decoded JPEG/PNG images are limited to 24 megapixels.
 
-Search galleries and identities, rename entries, remove individual samples, or
-remove identities from the gallery panel. Gallery cards, identities, and sample
+Use **Choose gallery → Search galleries** to find a collection; selecting it
+collapses the browser. **Search identities** filters people in the selected gallery
+independently. **Enroll someone** and each person's **Add sample** stay visible.
+Expand **Saved samples** to review crops or remove a sample. Use **Manage** for
+identity rename/removal and **Gallery actions** for gallery rename, export, or
+removal. Sample lists and management menus start closed; removals still require
+confirmation. **Storage & workflow help** contains retention and recognition guidance.
+
+The enrollment studio is arranged as source, inspection, and explicit review/save.
+Phones use one column; larger screens place sample review alongside the source.
+The close button remains visible while you scroll. Gallery cards, identities, and sample
 rows display their saved portraits. The latest sample with a portrait represents
 an identity; removing it falls back to another saved sample. Removing the final
 sample removes its identity and its portrait.

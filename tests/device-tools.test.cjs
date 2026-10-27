@@ -93,7 +93,7 @@ function harness(showcase = false) {
 
 test("native face panel loads galleries on mount", async () => {
   const app = harness(false);
-  assert.match(app.hosts["face-gallery-tools"].innerHTML, /Face enrollment/);
+  assert.match(app.hosts["face-gallery-tools"].innerHTML, /Face galleries/);
   assert.match(
     app.hosts["onvif-camera-tools"].innerHTML,
     /ONVIF discovery and PTZ/,

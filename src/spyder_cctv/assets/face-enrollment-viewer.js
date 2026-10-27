@@ -48,12 +48,12 @@
     dialog.setAttribute("aria-labelledby", "fe-studio-title");
     const cameras = window.spyder?.cameras?.() || [];
     dialog.innerHTML = `<header class="fe-heading"><div><p class="dt-eyebrow">REVIEW BEFORE ENROLLMENT</p><h3 id="fe-studio-title">Build a face profile</h3><p>${escape(options.galleryName || "Face gallery")} · Choose samples of one person.</p></div><button type="button" class="dt-icon-button" data-fe-close aria-label="Close enrollment viewer">${closeIcon}</button></header>
-      <div class="fe-body"><section class="fe-main"><div class="fe-source-controls"><label>Source<select data-fe-source><option value="camera">Live camera</option><option value="image">Image / capture</option><option value="video">Video / clip</option></select></label><label data-fe-camera-label>Camera<select data-fe-camera><option value="">Choose running camera</option>${cameras.map((c) => `<option value="${escape(c.id)}">${escape(c.name || c.id)}</option>`).join("")}</select></label><label data-fe-file-label hidden>Local media<input type="file" data-fe-file accept="image/jpeg,image/png"></label></div>
-      <div class="fe-viewer"><canvas data-fe-stage width="960" height="540" tabindex="0" aria-label="Enrollment source. Drag to mark the focus area; use focus fields below for keyboard control."></canvas><span data-fe-empty>Choose a source to preview it here</span></div><p class="fe-hint">Drag on the picture to focus on one person. Click a detected face box or its sample to select it.</p>
-      <div class="fe-focus"><b>Focus area (%)</b>${["Left", "Top", "Width", "Height"].map((label, i) => `<label>${label}<input data-fe-roi="${i}" type="number" min="0" max="100" step="1" value="${i < 2 ? 0 : 100}"></label>`).join("")}<button type="button" class="dt-button" data-fe-reset-roi>Whole frame</button></div>
+      <div class="fe-body"><section class="fe-main"><p class="fe-step">1 · Choose a source</p><div class="fe-source-controls"><label>Source<select data-fe-source><option value="camera">Live camera</option><option value="image">Image / capture</option><option value="video">Video / clip</option></select></label><label data-fe-camera-label>Camera<select data-fe-camera><option value="">Choose running camera</option>${cameras.map((c) => `<option value="${escape(c.id)}">${escape(c.name || c.id)}</option>`).join("")}</select></label><label data-fe-file-label hidden>Local media<input type="file" data-fe-file accept="image/jpeg,image/png"></label></div>
+      <div class="fe-viewer"><canvas data-fe-stage width="960" height="540" tabindex="0" aria-label="Enrollment source. Select a face box or enable Set focus area to draw; precise focus fields are available below."></canvas><span data-fe-empty>Choose a source to preview it here</span></div><div class="fe-focus-tools"><button type="button" class="dt-button" data-fe-focus-toggle aria-pressed="false">Set focus area</button><p class="fe-hint">Select a detected face box or sample card. Use focus controls to inspect one part of the image.</p></div>
+      <details class="fe-focus-settings"><summary>Precise focus coordinates (%)</summary><div class="fe-focus"><b>Focus area (%)</b>${["Left", "Top", "Width", "Height"].map((label, i) => `<label>${label}<input data-fe-roi="${i}" type="number" min="0" max="100" step="1" value="${i < 2 ? 0 : 100}"></label>`).join("")}<button type="button" class="dt-button" data-fe-reset-roi>Whole frame</button></div></details>
       <section class="fe-trim" data-fe-trim hidden><div class="fe-trim-head"><b>Use only a short range</b><output data-fe-range></output></div><label>Start time<input type="range" data-fe-start min="0" max="0" step="0.1" value="0"></label><div class="fe-actions"><label>Range length<select data-fe-duration>${[5, 6, 7, 8, 9, 10].map((seconds) => `<option value="${seconds}">${seconds} seconds</option>`).join("")}</select></label><button type="button" class="dt-button" data-fe-play>Play selected range</button><button type="button" class="dt-button dt-primary" data-fe-sample-video>Inspect range</button></div><p>Up to 10 evenly spaced frames are inspected locally. The full video is never sent to the server.</p><p data-fe-recording-note hidden>New SpyDER recordings keep detection overlays out of saved footage. Boxes already baked into older clips or camera-provided video cannot be removed here. Use a clean source when available.</p></section>
-      <div class="fe-actions"><button type="button" class="dt-button" data-fe-live>Pause preview</button><button type="button" class="dt-button dt-primary" data-fe-inspect>Analyze current frame</button><button type="button" class="dt-button" data-fe-cancel hidden>Cancel inspection</button></div><p class="fe-status" data-fe-status role="status" aria-live="polite">Nothing is saved until you select samples and confirm.</p></section>
-      <aside class="fe-review"><label>Identity name<input data-fe-name maxlength="128" placeholder="Who is this person?" value="${escape(options.identityName || "")}"></label><div class="fe-review-head"><h4>Detected samples <span data-fe-count>0 selected</span></h4><div class="fe-actions"><button type="button" class="dt-button" data-fe-select-all>Select all</button><button type="button" class="dt-button" data-fe-clear>Clear review</button></div></div><p>Inspect the crops. Select only the same person across frames. Reviews expire after 5 minutes.</p><div class="fe-samples" data-fe-samples><p>No inspected frames yet.</p></div><button type="button" class="dt-button dt-primary fe-save" data-fe-save disabled>Save selected face samples</button><p>Face vectors and small portrait crops stay on this computer. Full photos and video are not retained.</p></aside></div>`;
+      <p class="fe-step">2 · Inspect faces</p><div class="fe-actions"><button type="button" class="dt-button" data-fe-live>Pause preview</button><button type="button" class="dt-button dt-primary" data-fe-inspect>Analyze current frame</button><button type="button" class="dt-button" data-fe-cancel hidden>Cancel inspection</button></div><p class="fe-status" data-fe-status role="status" aria-live="polite">Nothing is saved until you select samples and confirm.</p></section>
+      <aside class="fe-review"><h4 class="fe-review-title">3 · Review &amp; save</h4><label>Identity name<input data-fe-name maxlength="128" placeholder="Who is this person?" value="${escape(options.identityName || "")}"></label><div class="fe-review-head"><h4>Detected samples <span data-fe-count>0 selected</span></h4><div class="fe-actions"><button type="button" class="dt-button" data-fe-select-all>Select all</button><button type="button" class="dt-button" data-fe-clear>Clear review</button></div></div><p>Inspect the crops. Select only the same person across frames. Reviews expire after 5 minutes.</p><div class="fe-samples" data-fe-samples><p>No inspected frames yet.</p></div><button type="button" class="dt-button dt-primary fe-save" data-fe-save disabled>Save selected face samples</button><p>Face vectors and small portrait crops stay on this computer. Full photos and video are not retained.</p></aside></div>`;
     document.body.append(dialog);
     const $ = (selector) => dialog.querySelector(selector);
     const canvas = $("[data-fe-stage]"),
@@ -84,6 +84,7 @@
       imageReady = false,
       imageVersion = 0;
     let roi = null,
+      focusMode = false,
       drag = null,
       dragging = false,
       samples = [],
@@ -94,6 +95,11 @@
       $("[data-fe-status]").dataset.error = String(error);
     };
     function controls() {
+      if (busy || saving || !imageReady) focusMode = false;
+      canvas.dataset.focusDrawing = String(focusMode);
+      $("[data-fe-focus-toggle]").disabled = busy || saving || !imageReady;
+      $("[data-fe-focus-toggle]").setAttribute("aria-pressed", String(focusMode));
+      $("[data-fe-focus-toggle]").textContent = focusMode ? "Cancel focus drawing" : "Set focus area";
       $("[data-fe-inspect]").disabled = busy || saving || !imageReady;
       $("[data-fe-sample-video]").disabled =
         busy ||
@@ -108,6 +114,7 @@
         !$("[data-fe-name]").value.trim();
       $("[data-fe-cancel]").hidden = !busy;
       $("[data-fe-live]").hidden = source !== "camera";
+      $("[data-fe-live]").disabled = busy || saving || !imageReady;
       $("[data-fe-live]").textContent = live ? "Pause preview" : "Resume live";
       $("[data-fe-count]").textContent =
         `${selected.size} selected / ${samples.length} samples`;
@@ -712,6 +719,9 @@
     canvas.addEventListener("dragstart", (event) => event.preventDefault());
     canvas.addEventListener("pointerdown", (event) => {
       if (busy || saving || !imageReady || event.button !== 0) return;
+      drag = point(event);
+      dragging = false;
+      if (!focusMode) return;
       event.preventDefault();
       if (source === "camera" && live) {
         live = false;
@@ -735,6 +745,7 @@
       const end = point(event);
       if (Math.abs(end.x - drag.x) + Math.abs(end.y - drag.y) > 0.015) {
         dragging = true;
+        if (!focusMode) return;
         roi = normalizedRegion(drag, end);
         syncROI();
       }
@@ -755,6 +766,8 @@
       }
       drag = null;
       dragging = false;
+      focusMode = false;
+      controls();
       if (canvas.hasPointerCapture(event.pointerId))
         canvas.releasePointerCapture(event.pointerId);
     };
@@ -762,6 +775,26 @@
     canvas.addEventListener("pointercancel", () => {
       drag = null;
       dragging = false;
+      focusMode = false;
+      controls();
+    });
+    $("[data-fe-focus-toggle]").addEventListener("click", () => {
+      focusMode = !focusMode;
+      drag = null;
+      dragging = false;
+      controls();
+      if (focusMode) canvas.focus({preventScroll:true});
+    });
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && focusMode) {
+        event.preventDefault();
+        event.stopPropagation();
+        focusMode = false;
+        drag = null;
+        dragging = false;
+        controls();
+        $("[data-fe-focus-toggle]").focus();
+      }
     });
     dialog.addEventListener("input", (event) => {
       if (event.target.matches("[data-fe-name]")) controls();

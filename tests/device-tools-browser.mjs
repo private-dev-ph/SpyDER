@@ -179,6 +179,15 @@ try {
   await until(
     "document.querySelector('#face-gallery-tools').innerText.includes('Ada')",
   );
+  assert.equal(await evaluate("document.querySelector('.dt-gallery-browser').open"), false, "Choosing a gallery collapses its browser");
+  assert.equal(await evaluate("document.querySelector('.dt-samples').open"), false, "Saved samples start closed");
+  await evaluate("document.querySelector('[data-search]').value='office';document.querySelector('[data-search]').dispatchEvent(new Event('input',{bubbles:true}))");
+  assert.equal(await evaluate("document.querySelectorAll('[data-list] [data-gid]').length"), 1);
+  assert.equal(await evaluate("document.querySelectorAll('.dt-identity').length"), 1, "Gallery search does not hide enrolled people");
+  await evaluate("document.querySelector('[data-identity-search]').value='nobody';document.querySelector('[data-identity-search]').dispatchEvent(new Event('input',{bubbles:true}))");
+  assert.equal(await evaluate("document.querySelectorAll('.dt-identity').length"), 0);
+  assert.equal(await evaluate("document.querySelectorAll('[data-list] [data-gid]').length"), 1, "Identity search does not filter gallery choices");
+  await evaluate("document.querySelector('[data-search]').value='';document.querySelector('[data-search]').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-identity-search]').value='';document.querySelector('[data-identity-search]').dispatchEvent(new Event('input',{bubbles:true}))");
   assert.equal(
     await evaluate(
       "!!document.querySelector('#face-gallery-tools .dt-identity img[src^=\"data:image/jpeg;base64,\"]')",
@@ -219,6 +228,7 @@ try {
   await until("!document.querySelector('dialog.fe-studio')");
   await click("#face-gallery-tools [data-gid=g1]");
   await until("!!document.querySelector('.dt-identity img')");
+  await evaluate("document.querySelector('.dt-samples').open=true");
   await until(
     "[...document.querySelectorAll('.dt-identity img')].every(img=>img.complete&&img.naturalWidth>0)",
   );
@@ -290,7 +300,7 @@ try {
   );
   assert.equal(
     await evaluate(
-      "!!document.querySelector('#face-gallery-tools [data-detail] input, #face-gallery-tools [data-detail] select')",
+      "!!document.querySelector('#face-gallery-tools [data-detail] input:not([data-identity-search]), #face-gallery-tools [data-detail] select')",
     ),
     false,
     "Gallery detail has no duplicate enrollment inputs",
@@ -333,8 +343,30 @@ try {
   await until(
     "document.querySelector('dialog.fe-studio [data-fe-inspect]')?.disabled===false",
   );
+  assert.equal(await evaluate("document.querySelector('.fe-focus-settings').open"), false);
+  assert.ok((await evaluate("getComputedStyle(document.querySelector('[data-fe-stage]')).touchAction")).includes('pan-y'));
+  await command('Emulation.setTouchEmulationEnabled', {enabled:true,maxTouchPoints:1}, sid);
+  await evaluate("document.querySelector('[data-fe-stage]').scrollIntoView({block:'center',behavior:'instant'})");
+  const scrollStart = await evaluate("({top:document.querySelector('.fe-studio').scrollTop,rect:document.querySelector('[data-fe-stage]').getBoundingClientRect().toJSON()})");
+  const touchX = scrollStart.rect.left + scrollStart.rect.width / 2;
+  const touchY = scrollStart.rect.top + scrollStart.rect.height * .8;
+  await command('Input.dispatchTouchEvent', {type:'touchStart',touchPoints:[{x:touchX,y:touchY}]}, sid);
+  for (let step=1;step<=5;step++) {
+    await command('Input.dispatchTouchEvent', {type:'touchMove',touchPoints:[{x:touchX,y:touchY-step*16}]}, sid);
+    await delay(30);
+  }
+  await command('Input.dispatchTouchEvent', {type:'touchEnd',touchPoints:[]}, sid);
+  await delay(150);
+  assert.ok(await evaluate(`document.querySelector('.fe-studio').scrollTop>${scrollStart.top}+20`), 'Touch scroll across the preview scrolls the studio when focus drawing is off');
+  assert.equal(await evaluate("document.querySelector('[data-fe-roi=\"2\"]').value"), '100', 'Scrolling does not draw a focus region');
+  await click('[data-fe-focus-toggle]');
+  assert.equal(await evaluate("document.querySelector('[data-fe-stage]').dataset.focusDrawing"), 'true');
+  await command('Input.dispatchKeyEvent', {type:'rawKeyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}, sid);
+  await command('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}, sid);
+  assert.equal(await evaluate("!!document.querySelector('dialog.fe-studio[open]')"), true, "Escape exits focus drawing before closing the studio");
+  assert.equal(await evaluate("document.querySelector('[data-fe-stage]').dataset.focusDrawing"), 'false');
   await evaluate(
-    "(()=>{const s=document.querySelector('dialog.fe-studio [data-fe-stage]'),r=s.getBoundingClientRect();s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;const p=(type,x,y)=>s.dispatchEvent(new PointerEvent(type,{pointerId:7,button:0,clientX:x,clientY:y,bubbles:true}));p('pointerdown',r.left+r.width*.1,r.top+r.height*.1);p('pointermove',r.right+20,r.bottom+20);p('pointerup',r.right+20,r.bottom+20)})()",
+    "(()=>{const s=document.querySelector('dialog.fe-studio [data-fe-stage]'),r=s.getBoundingClientRect();s.setPointerCapture=()=>{};s.hasPointerCapture=()=>false;document.querySelector('[data-fe-focus-toggle]').click();const p=(type,x,y)=>s.dispatchEvent(new PointerEvent(type,{pointerId:7,button:0,clientX:x,clientY:y,bubbles:true}));p('pointerdown',r.left+r.width*.1,r.top+r.height*.1);p('pointermove',r.right+20,r.bottom+20);p('pointerup',r.right+20,r.bottom+20)})()",
   );
   const focusedPixel = await evaluate(`(() => {
     const stage=document.querySelector('dialog.fe-studio [data-fe-stage]');
@@ -535,6 +567,7 @@ try {
   await evaluate(`(() => {
     const stage=document.querySelector('[data-fe-stage]'),r=stage.getBoundingClientRect();
     stage.setPointerCapture=()=>{};stage.hasPointerCapture=()=>false;
+    document.querySelector('[data-fe-focus-toggle]').click();
     stage.dispatchEvent(new PointerEvent('pointerdown',{pointerId:3,button:0,clientX:r.left+r.width*.2,clientY:r.top+r.height*.2,bubbles:true}));
     stage.dispatchEvent(new PointerEvent('pointermove',{pointerId:3,button:0,clientX:r.left+r.width*.8,clientY:r.top+r.height*.8,bubbles:true}));
     stage.dispatchEvent(new PointerEvent('pointerup',{pointerId:3,button:0,clientX:r.left+r.width*.8,clientY:r.top+r.height*.8,bubbles:true}));
@@ -623,7 +656,7 @@ try {
     `calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length>${readsBeforeSampleRemove}`,
   );
   assert.match(
-    await evaluate("document.querySelector('[data-gid=g1]').innerText"),
+    await evaluate("document.querySelector('[data-gid=g1]').textContent"),
     /1 identities.*0 samples/,
     "Removing a sample refreshes gallery counts",
   );
@@ -638,7 +671,7 @@ try {
     `calls.filter(x=>x.path==='/api/faces/galleries'&&x.method==='GET').length>${readsBeforeIdentityRemove}`,
   );
   assert.match(
-    await evaluate("document.querySelector('[data-gid=g1]').innerText"),
+    await evaluate("document.querySelector('[data-gid=g1]').textContent"),
     /0 identities.*0 samples/,
     "Removing an identity refreshes gallery counts",
   );
@@ -742,6 +775,7 @@ try {
       await until(
         "document.querySelectorAll('.fe-focus input.themed-number-input').length===4",
       );
+      await evaluate("document.querySelector('.fe-focus-settings').open=true");
       await delay(100);
       const focusAudit = await evaluate(`(() => {
         return [...document.querySelectorAll('.fe-focus input')].map(input => {
@@ -953,7 +987,9 @@ try {
   );
 } finally {
   socket?.close();
+  const exited = chrome.exitCode !== null || chrome.signalCode !== null ? Promise.resolve() : new Promise(resolve=>chrome.once('exit',resolve));
   chrome.kill();
+  await exited;
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
   await delay(150);
@@ -961,7 +997,7 @@ try {
   await rm(profile, {
     recursive: true,
     force: true,
-    maxRetries: 5,
-    retryDelay: 200,
+    maxRetries: 10,
+    retryDelay: 400,
   });
 }

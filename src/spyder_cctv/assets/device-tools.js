@@ -137,35 +137,45 @@
       gid = "",
       desc = null,
       q = "",
+      identityQuery = "",
+      detailLoading = false,
+      galleryLoading = !blocked,
       selectionVersion = 0,
       detailVersion = 0,
       galleryGeneration = 0;
+    const openSamples = new Set();
     h.classList.add("dt-host");
     h.innerHTML =
-      '<section class="dt-card"><header class="dt-head"><div><p class="dt-eyebrow">LOCAL IDENTITY GALLERY</p><h2>Face enrollment</h2><p>Gallery matches stay separate from closed-set classifiers.</p></div><button class="dt-button dt-primary" data-create>Create gallery</button></header>' +
+      '<section class="dt-card dt-gallery-workspace"><header class="dt-head"><div><h1>Face galleries</h1><p>Create a collection, enroll people, and review their samples.</p></div><button class="dt-button dt-primary" data-create>Create gallery</button></header>' +
       (blocked
         ? '<p class="dt-notice">Native enrollment unavailable in showcase. No network calls run.</p>'
         : "") +
-      '<p class="dt-privacy">Enrollment stays on this computer. Galleries store face vectors and small portrait crops, never full source photos or videos.</p><div class="dt-tools"><label>Search<input type="search" data-search></label><button class="dt-button" data-refresh>Refresh</button></div><p class="dt-status" role="status" aria-live="polite"></p><div data-list class="dt-gallery-list"></div><div data-detail class="dt-detail"></div></section>';
+      '<p class="dt-local-note">Face data stays on this computer.</p><p class="dt-status" role="status" aria-live="polite"></p><details class="dt-gallery-browser" open><summary><span>Choose gallery</span><span data-current-gallery>None selected</span><small data-gallery-count></small></summary><div class="dt-gallery-browser-body"><div class="dt-tools"><label>Search galleries<input type="search" data-search placeholder="Gallery name or ID"></label><button class="dt-button" data-refresh>Refresh</button></div><div data-list class="dt-gallery-list"></div></div></details><div data-detail class="dt-detail"></div><details class="dt-gallery-help"><summary>Storage &amp; workflow help</summary><p>Enrollment stays on this computer. Galleries store face vectors and small portrait crops, never full source photos or videos. Gallery matches stay separate from closed-set classifiers.</p><p>Use a gallery through a Classifier node connected to InsightFace Detections. Gallery exports contain identity names and face vectors; they are recognition data, not a full sample backup.</p></details></section>';
     if (blocked)
       h.querySelectorAll("button").forEach((b) => (b.disabled = true));
     async function refresh() {
       if (blocked) return;
+      galleryLoading = true;
       const version = ++selectionVersion;
       try {
         const d = await api("/api/faces/galleries");
         if (version !== selectionVersion) return;
         list = d.galleries || [];
+        galleryLoading = false;
         if (gid && !list.some((g) => g.id === gid)) {
           gid = "";
           galleryGeneration++;
           desc = null;
+          detailLoading = false;
           detailVersion++;
           delete h._pending;
         }
         paint();
+        say(h, "");
         if (d.error) say(h, d.error, true);
       } catch (e) {
+        galleryLoading = false;
+        paint();
         say(h, e.message, true);
       }
     }
@@ -173,6 +183,7 @@
       const selected = gid,
         version = ++detailVersion;
       desc = null;
+      detailLoading = !!selected;
       paint();
       if (!selected || blocked) return;
       try {
@@ -181,10 +192,14 @@
         );
         if (version !== detailVersion || selected !== gid) return;
         desc = result;
+        detailLoading = false;
         paint();
       } catch (e) {
-        if (version === detailVersion && selected === gid)
+        if (version === detailVersion && selected === gid) {
+          detailLoading = false;
+          paint();
           say(h, e.message, true);
+        }
       }
     }
     function hasPortrait(value) {
@@ -203,7 +218,7 @@
       return (
         (desc.identities || [])
           .filter((identity) =>
-            (identity.name + " " + identity.id).toLowerCase().includes(q),
+            (identity.name + " " + identity.id).toLowerCase().includes(identityQuery),
           )
           .map((identity) => {
             const image =
@@ -211,12 +226,15 @@
               (identity.samples || []).find((sample) =>
                 hasPortrait(sample.thumbnail),
               )?.thumbnail;
-            return `<article class="dt-identity"><div class="dt-identity-heading">${portrait(image, "Portrait of " + identity.name)}<div class="dt-identity-copy"><b>${esc(identity.name)}</b><span>${(identity.samples || []).length} samples</span>${hasPortrait(image) ? "" : '<span class="dt-portrait-note">No portrait yet. Add a face sample to create one.</span>'}</div></div><div class="dt-actions"><button type="button" class="dt-button" data-enroll-identity="${esc(identity.id)}" aria-haspopup="dialog">Add sample</button><button class="dt-button" data-ri="${esc(identity.id)}">Rename</button><button class="dt-button dt-danger" data-xi="${esc(identity.id)}">Remove</button></div>${(identity.samples || []).map((sample, index) => `<div class="dt-sample"><div class="dt-sample-preview">${portrait(sample.thumbnail, "Face sample " + (index + 1) + " of " + identity.name)}<span class="dt-sample-name">Sample ${index + 1}</span></div><button class="dt-button dt-danger" data-xi="${esc(identity.id)}" data-xs="${esc(sample.id)}">Remove sample</button></div>`).join("")}</article>`;
+            return `<article class="dt-identity"><div class="dt-identity-heading">${portrait(image, "Portrait of " + identity.name)}<div class="dt-identity-copy"><b>${esc(identity.name)}</b><span>${(identity.samples || []).length} samples</span>${hasPortrait(image) ? "" : '<span class="dt-portrait-note">No portrait yet. Add a face sample to create one.</span>'}</div></div><div class="dt-actions"><button type="button" class="dt-button" data-enroll-identity="${esc(identity.id)}" aria-haspopup="dialog">Add sample</button><details class="dt-action-menu"><summary aria-label="Manage ${esc(identity.name)}">Manage</summary><div><button class="dt-button" data-ri="${esc(identity.id)}">Rename</button><button class="dt-button dt-danger" data-xi="${esc(identity.id)}">Remove</button></div></details></div><details class="dt-samples" data-sample-list="${esc(identity.id)}" ${openSamples.has(identity.id) ? "open" : ""}><summary>Saved samples (${(identity.samples || []).length})</summary><div class="dt-sample-list">${(identity.samples || []).map((sample, index) => `<div class="dt-sample"><div class="dt-sample-preview">${portrait(sample.thumbnail, "Face sample " + (index + 1) + " of " + identity.name)}<span class="dt-sample-name">Sample ${index + 1}</span></div><button class="dt-button dt-danger" data-xi="${esc(identity.id)}" data-xs="${esc(sample.id)}">Remove sample</button></div>`).join("") || '<p class="dt-empty">No saved samples.</p>'}</div></details></article>`;
           })
-          .join("") || '<p class="dt-empty">No identities found.</p>'
+          .join("") || `<p class="dt-empty">${identityQuery ? "No matching identities. Try another name or ID." : "No identities yet. Choose Enroll someone to add your first person."}</p>`
       );
     }
     function paint() {
+      const current = list.find((gallery) => gallery.id === gid);
+      h.querySelector("[data-current-gallery]").textContent = current?.name || "None selected";
+      h.querySelector("[data-gallery-count]").textContent = `${list.length} ${list.length === 1 ? "gallery" : "galleries"}`;
       h.querySelector("[data-list]").innerHTML =
         list
           .filter((g) => (g.name + " " + g.id).toLowerCase().includes(q))
@@ -239,10 +257,10 @@
               " samples</span></span></button>",
           )
           .join("") ||
-        '<p class="dt-empty">No galleries. Create one to begin.</p>';
+        `<p class="dt-empty">${galleryLoading ? "Loading galleries…" : blocked ? "Galleries are stored by the local Python app." : list.length ? "No matching galleries. Try another name or ID." : "No galleries yet. Create one to begin."}</p>`;
       const p = h.querySelector("[data-detail]");
       if (!desc || desc.id !== gid) {
-        p.replaceChildren();
+        p.innerHTML = `<p class="dt-empty" ${detailLoading ? 'role="status"' : ""}>${detailLoading ? "Loading gallery…" : gid ? "Gallery details unavailable. Choose Refresh to try again." : blocked ? "Gallery management and enrollment require the local Python app." : "Choose a gallery above to view its people, or create a new collection."}</p>`;
         delete p.dataset.renderedGid;
         p._renderedDesc = null;
         return;
@@ -252,9 +270,9 @@
         return;
       }
       p.innerHTML =
-        '<header class="dt-detail-head"><h3>' +
+        '<header class="dt-detail-head"><h2>' +
         esc(desc.name) +
-        '</h3><div class="dt-actions"><button type="button" class="dt-button dt-primary" data-enroll-open aria-haspopup="dialog">Enroll someone</button><button class="dt-button" data-rg>Rename</button><button class="dt-button dt-danger" data-xg>Remove gallery</button><button class="dt-button" data-export>Export</button></div></header><section class="dt-identities"><h4>Identities</h4></section>';
+        '</h2><div class="dt-actions"><button type="button" class="dt-button dt-primary" data-enroll-open aria-haspopup="dialog">Enroll someone</button><details class="dt-action-menu"><summary>Gallery actions</summary><div><button class="dt-button" data-rg>Rename</button><button class="dt-button" data-export>Export</button><button class="dt-button dt-danger" data-xg>Remove gallery</button></div></details></div></header><div class="dt-identity-tools"><label>Search identities<input type="search" data-identity-search placeholder="Person name or ID" value="' + esc(identityQuery) + '"></label><span>' + (desc.identities || []).length + ' identities</span></div><section class="dt-identities" aria-label="Enrolled identities"></section>';
       p.querySelector(".dt-identities").innerHTML = identitiesMarkup();
       p.dataset.renderedGid = gid;
       p._renderedDesc = desc;
@@ -262,6 +280,9 @@
     h.addEventListener("input", (e) => {
       if (e.target.matches("[data-search]")) {
         q = e.target.value.trim().toLowerCase();
+        paint();
+      } else if (e.target.matches("[data-identity-search]")) {
+        identityQuery = e.target.value.trim().toLowerCase();
         paint();
       }
     });
@@ -276,8 +297,12 @@
           if (gid !== b.dataset.gid) {
             galleryGeneration++;
             delete h._pending;
+            identityQuery = "";
+            openSamples.clear();
           }
           gid = b.dataset.gid;
+          h.querySelector(".dt-gallery-browser").open = false;
+          h.querySelector(".dt-gallery-browser > summary")?.focus?.();
           paint();
           return await load();
         }
@@ -350,7 +375,8 @@
                   "</select></label>",
               )
               .join("") +
-            '<p class="dt-dialog-note">Connect this gallery’s Classifier node to InsightFace Detections to recognize enrolled identities.</p><footer class="dt-dialog-actions"><button class="dt-button" type="button" value="cancel" formnovalidate>Cancel</button><button class="dt-button dt-primary" value="create">Create gallery</button></footer></form>';
+            ((!detectors.length || !recognizers.length) ? '<p class="dt-dialog-note" role="status">Missing ' + (!detectors.length ? 'a face detector' : '') + (!detectors.length && !recognizers.length ? ' and ' : '') + (!recognizers.length ? 'an ArcFace recognizer' : '') + '. Add the missing models in Models &amp; Workflows before creating a gallery.</p>' : '') +
+            '<p class="dt-dialog-note">Connect this gallery’s Classifier node to InsightFace Detections to recognize enrolled identities.</p><footer class="dt-dialog-actions"><button class="dt-button" type="button" value="cancel" formnovalidate>Cancel</button><button class="dt-button dt-primary" value="create" ' + ((!detectors.length || !recognizers.length) ? 'disabled' : '') + '>Create gallery</button></footer></form>';
           document.body.append(d);
           showDialog(d, b);
           d.addEventListener(
@@ -364,6 +390,9 @@
                   );
                   galleryGeneration++;
                   gid = r.id;
+                  identityQuery = "";
+                  openSamples.clear();
+                  h.querySelector(".dt-gallery-browser").open = false;
                   await refresh();
                   await load();
                   window.dispatchEvent(
@@ -421,6 +450,7 @@
               {},
             );
             gid = "";
+            h.querySelector(".dt-gallery-browser").open = true;
             galleryGeneration++;
             desc = null;
             await refresh();
@@ -577,6 +607,14 @@
         say(h, error.message, true);
       }
     });
+    h.addEventListener("toggle", (event) => {
+      if (event.target.matches?.("[data-sample-list]")) {
+        const id = event.target.dataset.sampleList;
+        if (event.target.open) openSamples.add(id);
+        else openSamples.delete(id);
+      }
+    }, true);
+    paint();
     if (!blocked) refresh();
   }
   function onvif(h) {
