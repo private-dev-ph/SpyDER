@@ -168,6 +168,7 @@ try {
       for (const c of fit.controls) assert.ok(c.height>=43.9, `${viewport.width}/${theme}/${c.name}: touch height ${c.height}`);
       await evaluate("document.querySelector('[data-vl-disclosure=advanced]').open=true;document.querySelector('[data-vl-disclosure=roi]').open=true;document.querySelector('[data-vl-disclosure=capacity]').open=true;document.querySelector('[data-vl-disclosure=diagnostics]').open=true");
       await evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+      await until("[...document.querySelectorAll('.vision-lab input[type=number]')].every(input=>input.labels[0]?.nextElementSibling?.matches('[data-number-stepper]'))");
       const steppers = await evaluate(`([...document.querySelectorAll('.vision-lab input[type=number]')].map(input=>{
         const field=input.getBoundingClientRect(), control=input.labels[0].nextElementSibling.getBoundingClientRect();
         return {name:input.name,top:Math.abs(control.top-field.top),bottom:Math.abs(control.bottom-field.bottom),right:Math.abs(control.right-field.right)};
@@ -243,8 +244,10 @@ try {
   assert.equal(await evaluate("document.querySelector('[name=input_width]').value"), "320");
   assert.equal(await evaluate("document.querySelector('[name=inference_fps]').value"), "4");
   assert.equal((await saved()).length, 1, "Recommendations do not apply themselves");
-  await evaluate("document.querySelector('.vl-more-actions').open=true");
-  await click('.vl-disable');
+  assert.equal(await evaluate("!!document.querySelector('.vl-disable,.vl-more-actions')"), false);
+  await click('[name=enabled]');
+  assert.equal(await evaluate("document.querySelector('[name=enabled]').checked"), true);
+  await click('[name=enabled]');
   assert.equal(await evaluate("document.querySelector('[name=enabled]').checked"), false);
   await click('.vl-reset');
   assert.equal(await evaluate("document.querySelector('[name=threshold]').value"), "16");
@@ -255,7 +258,7 @@ try {
   assert.equal(await evaluate("document.querySelector('.vl-stage').dataset.drawing"), "false");
   assert.deepEqual(await evaluate("motionErrors"), []);
   assert.equal(networkPaths.some(p=>p.startsWith('/api/')),false,"No real runtime or saved cameras were used");
-  console.log('PASS: Motion & ROI mobile/desktop/light/dark/short layouts, disclosure access, touch drawing, Escape, precise ROI, all preview modes, isolated Apply, capacity recommendations, staged reset/disable and camera switching.');
+  console.log('PASS: Motion & ROI responsive layouts, touch drawing, precise ROI, preview modes, isolated Apply, capacity recommendations, single analysis toggle, staged reset and camera switching.');
 } finally {
   socket?.close();
   chrome.kill();

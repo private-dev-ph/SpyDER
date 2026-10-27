@@ -24,8 +24,8 @@ image. Choose **Original**, **Foreground mask**, or **Side by side** in the View
 selector to inspect the draft.
 
 **Apply settings** is the only action that saves the camera configuration.
-**More actions → Reset defaults**, **Disable analysis**, and capacity
-**Use recommendation** stage changes for preview; apply them when ready. Runtime
+The **Enable analysis** checkbox controls both ON and OFF. **Reset defaults** and
+capacity **Use recommendation** stage changes for preview; apply them when ready. Runtime
 errors and tracker warnings remain visible even while diagnostics are closed.
 The browser showcase keeps its preview and explanations available; native editing,
 mask generation, and hardware assessment require the local Python runtime.

@@ -228,7 +228,7 @@
                   <label class="vl-field"><span>Input width</span><select name="input_width">${[320, 480, 640, 960].map((x) => `<option value="${x}" ${cfg.input_width === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
                   ${num("warmup_frames", "Warmup frames", cfg.warmup_frames, 0, 120, 1)}
                 </div></div></details>
-                <div class="vl-actions"><button type="submit" class="button primary" ${busy ? "disabled" : ""}>${busy ? "Saving…" : "Apply settings"}</button><details class="vl-more-actions"><summary>More actions</summary><div><button type="button" class="button secondary vl-reset">Reset defaults</button><button type="button" class="button secondary vl-disable">Disable analysis</button></div></details></div>
+                <div class="vl-actions"><button type="submit" class="button primary" ${busy ? "disabled" : ""}>${busy ? "Saving…" : "Apply settings"}</button><button type="button" class="button secondary vl-reset">Reset defaults</button></div>
                 <p class="vl-message" role="status">${esc(messageText)}</p>
               </fieldset></form>
             </section>
@@ -937,12 +937,6 @@
           render();
           queueDraft();
           setMessage("Defaults staged. Apply settings to save.");
-        } else if (button.classList.contains("vl-disable")) {
-          cfg = { ...cfg, enabled: false };
-          root.querySelector('[name="enabled"]').checked = false;
-          dirty = true;
-          root.querySelector(".vl-dirty").textContent = "Unsaved changes";
-          queueDraft();
         } else if (button.classList.contains("vl-assess")) {
           const t = token;
           capacityBusy = true;

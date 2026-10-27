@@ -93,7 +93,7 @@
 .vl-mask-note, .vl-runtime-note, .vl-tracking-note { margin: 8px 0; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 :is(.vl-mask-note, .vl-runtime-note, .vl-tracking-note, .vl-message, .vl-capacity-error):empty { display: none; }
 .vl-disclosure { min-width: 0; border-top: 1px solid var(--border); }
-.vl-disclosure > summary, .vl-more-actions > summary {
+.vl-disclosure > summary {
   min-height: 48px;
   padding: 14px 0;
   color: var(--ink);
@@ -101,7 +101,7 @@
   font-weight: 600;
   cursor: pointer;
 }
-.vl-disclosure > summary:focus-visible, .vl-more-actions > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
+.vl-disclosure > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
 .vl-disclosure-body { padding: 0 0 12px; min-width: 0; }
 .vl-disclosure-body > :first-child { margin-top: 0; }
 .vl-disclosure-body > :last-child { margin-bottom: 0; }
@@ -129,9 +129,6 @@
 .vl-basic-fields { margin-bottom: 18px; }
 .vl-actions { position: relative; align-items: flex-start; gap: 8px; margin-top: 16px; }
 .vl-actions > .button { flex: 1 1 auto; }
-.vl-more-actions { flex: 0 0 auto; }
-.vl-more-actions > summary { min-height: 44px; padding: 12px 10px; border: 1px solid var(--control-border); border-radius: 7px; font-size: 12px; background: var(--surface); }
-.vl-more-actions > div { position: absolute; z-index: 3; inset-inline: 0; top: calc(100% + 8px); display: grid; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
 .vl-message { margin: 12px 0 0; color: var(--accent); font-size: 12px; line-height: 1.6; }
 .vl-showcase { margin-top: 12px; padding-inline-start: 12px; border-inline-start: 3px solid var(--accent); }
 .vl-showcase strong { font-size: 12px; }
