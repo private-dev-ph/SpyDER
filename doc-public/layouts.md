@@ -25,6 +25,11 @@ arrangement. Enable Activity priority to choose its sources and hold period. The
 above the preview distinguishes unsaved changes, saved drafts, and applied settings.
 Rotation previews include the pinned views plus the first cycling camera.
 
+Dragging previews the proposed lineup with a smooth row transition. Use the drag handle
+on a touchscreen. Drop to update the draft, or cancel to restore the original order;
+the Control Room changes only after **Save & apply**. Moved cameras become pinned.
+The preview respects the system's reduced-motion preference.
+
 Use the **Arrangement** selector in the Control Room or fullscreen Live tools to switch saved walls.
 Choose **Automatic wall** to return to the standard camera wall and tile-size controls.
 Rotation supports **Pause rotation**, **Resume rotation** and **Next view** in both modes.

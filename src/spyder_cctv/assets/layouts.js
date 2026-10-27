@@ -212,9 +212,9 @@
   let rotationPaused = false;
   let rotation = 0,
     timer = null,
-    dragging = null,
     signature = "",
     storageWarning = "";
+  let lineupDrag = null, lineupRefreshTimer = null, lineupScrollFrame = null;
   const dummyElements = new Map();
   function load() {
     try {
@@ -551,8 +551,101 @@
       ? "Applied to Control Room & fullscreen" : "Draft · active wall unchanged");
     state.dataset.dirty = String(dirty);
   }
+  function beginLineupDrag(id, pointerId) {
+    clearTimeout(lineupRefreshTimer);
+    if (lineupDrag) finishLineupDrag(false);
+    const list = $("#layout-camera-list", root);
+    for (const row of list.children)
+      for (const animation of row.getAnimations()) animation.cancel();
+    const top = list.getBoundingClientRect().top;
+    const rows = [...list.children].map((element) => {
+      const box = element.getBoundingClientRect();
+      return { element, id: element.dataset.id, top: box.top - top, height: box.height };
+    });
+    const order = rows.map((row) => row.id);
+    lineupDrag = { id, pointerId, list, rows, order, proposed: order, gap: parseFloat(getComputedStyle(list).rowGap) || 0 };
+    list.classList.add("is-reordering");
+    rows.find((row) => row.id === id)?.element.classList.add("layout-row-dragging");
+  }
+  function moveLineupDrag(clientY) {
+    const session = lineupDrag;
+    if (!session) return;
+    session.clientY = clientY;
+    const y = clientY - session.list.getBoundingClientRect().top;
+    const others = session.rows.filter((row) => row.id !== session.id);
+    const index = others.filter((row) => y > row.top + row.height / 2).length;
+    const next = others.map((row) => row.id);
+    next.splice(index, 0, session.id);
+    if (next.every((id, i) => id === session.proposed[i])) return;
+    session.proposed = next;
+    const byId = new Map(session.rows.map((row) => [row.id, row]));
+    let top = 0;
+    for (const id of next) {
+      const row = byId.get(id);
+      row.element.style.transform = `translateY(${top - row.top}px)`;
+      top += row.height + session.gap;
+    }
+  }
+  function finishLineupDrag(commit) {
+    const session = lineupDrag;
+    if (!session) return;
+    lineupDrag = null;
+    cancelAnimationFrame(lineupScrollFrame);
+    clearTimeout(lineupRefreshTimer);
+    const moved = commit && session.proposed.some((id, i) => id !== session.order[i]);
+    const animate = moved && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const previousTops = animate ? new Map(session.rows.map((row) => [row.id, row.element.getBoundingClientRect().top])) : null;
+    session.list.classList.remove("is-reordering");
+    for (const row of session.rows) {
+      row.element.classList.remove("layout-row-dragging");
+      row.element.style.removeProperty("transform");
+    }
+    if (moved) {
+      draft.order = session.proposed;
+      draft.pinned = [...new Set([...draft.pinned, session.id])];
+      changed();
+      if (previousTops) {
+        const offsets = [...session.list.children].map((row) => ({row, delta: previousTops.get(row.dataset.id) - row.getBoundingClientRect().top}));
+        for (const {row, delta} of offsets)
+          if (Math.abs(delta) > .5) row.animate([{transform: `translateY(${delta}px)`}, {transform: "translateY(0px)"}], {duration: 180, easing: "cubic-bezier(.2,.75,.25,1)"});
+      }
+      tell("Camera moved to position " + (session.proposed.indexOf(session.id) + 1) + ". Save & apply to update the wall.");
+    } else {
+      // Let a cancelled preview settle before rebuilding any deferred camera updates.
+      lineupRefreshTimer = setTimeout(() => { if (root?.isConnected && !lineupDrag) preview(); }, 200);
+    }
+  }
+  function scrollTouchLineup(time = performance.now()) {
+    const session = lineupDrag;
+    if (!session || session.pointerId === undefined) return;
+    const y = session.clientY;
+    const elapsed = Math.max(0, Math.min(32, time - (session.lastScrollTime ?? time)));
+    session.lastScrollTime = time;
+    const pressure = y < 70 ? (y - 70) / 70 : y > innerHeight - 70 ? (y - innerHeight + 70) / 70 : 0;
+    const delta = Math.max(-1, Math.min(1, pressure)) * 420 * elapsed / 1000;
+    const box = session.list.getBoundingClientRect();
+    if ((delta < 0 && box.top < 70) || (delta > 0 && box.bottom > innerHeight - 70)) {
+      window.scrollBy(0, delta);
+      moveLineupDrag(y);
+    }
+    lineupScrollFrame = requestAnimationFrame(scrollTouchLineup);
+  }
+  function installLineupDrag(list) {
+    list.addEventListener("dragover", (event) => {
+      if (!lineupDrag || lineupDrag.pointerId !== undefined) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      moveLineupDrag(event.clientY);
+    });
+    list.addEventListener("drop", (event) => {
+      if (!lineupDrag || lineupDrag.pointerId !== undefined) return;
+      event.preventDefault();
+      moveLineupDrag(event.clientY);
+      finishLineupDrag(true);
+    });
+  }
   function preview() {
-    if (!root?.isConnected) return;
+    if (!root?.isConnected || lineupDrag) return;
     const container = $("#layout-preview", root),
       list = $("#layout-camera-list", root);
     const cameras = all(draft),
@@ -625,28 +718,42 @@
       row.draggable = true;
       row.dataset.id = id;
       row.addEventListener("dragstart", (event) => {
-        dragging = id;
+        if (event.target.closest("button,input,select,a") || lineupDrag) {
+          event.preventDefault();
+          return;
+        }
+        beginLineupDrag(id);
         event.dataTransfer.setData("text/plain", id);
         event.dataTransfer.effectAllowed = "move";
       });
-      row.addEventListener("dragover", (event) => {
+      row.addEventListener("dragend", () => finishLineupDrag(false));
+      const handle = document.createElement("span");
+      handle.className = "layout-lineup-handle";
+      handle.setAttribute("aria-hidden", "true");
+      handle.title = "Drag to reorder";
+      handle.append(svgIcon("reorder"));
+      handle.addEventListener("pointerdown", (event) => {
+        if (event.pointerType === "mouse" || lineupDrag) return;
         event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
+        beginLineupDrag(id, event.pointerId);
+        lineupDrag.clientY = event.clientY;
+        handle.setPointerCapture(event.pointerId);
+        scrollTouchLineup();
       });
-      row.addEventListener("drop", (event) => {
-        event.preventDefault();
-        if (dragging && dragging !== id) {
-          const next = order.filter((x) => x !== dragging);
-          next.splice(next.indexOf(id), 0, dragging);
-          draft.order = next;
-          draft.pinned = [...new Set([...draft.pinned, dragging])];
-          dragging = null;
-          changed();
+      handle.addEventListener("pointermove", (event) => {
+        if (lineupDrag?.pointerId === event.pointerId) moveLineupDrag(event.clientY);
+      });
+      handle.addEventListener("pointerup", (event) => {
+        if (lineupDrag?.pointerId === event.pointerId) {
+          moveLineupDrag(event.clientY);
+          finishLineupDrag(true);
         }
       });
-      row.addEventListener("dragend", () => {
-        dragging = null;
-      });
+      for (const type of ["pointercancel", "lostpointercapture"])
+        handle.addEventListener(type, (event) => {
+          if (lineupDrag?.pointerId === event.pointerId) finishLineupDrag(false);
+        });
+      row.append(handle);
       const label = document.createElement("label");
       const check = document.createElement("input");
       check.type = "checkbox";
@@ -912,6 +1019,7 @@
           </aside>
         </div>
       </div>`;
+    installLineupDrag($("#layout-camera-list", root));
     savedMenu(activeId);
     fill();
     $("#layout-priority-enabled", root).addEventListener("change", (event) => {
@@ -1111,8 +1219,9 @@
       );
   }
   function unmount() {
+    finishLineupDrag(false);
+    clearTimeout(lineupRefreshTimer);
     root = null;
-    dragging = null;
   }
   const rotationControls = document.createElement("div");
   rotationControls.className = "layout-actions layout-rotation-controls";
@@ -1196,12 +1305,19 @@
       }
   });
   window.addEventListener("resize", () => {
+    if (lineupDrag) finishLineupDrag(false);
     if (root?.isConnected) preview();
   });
   window.addEventListener("pagehide", () => clearInterval(timer));
   window.addEventListener("pageshow", () => scheduleRotation(false));
   window.addEventListener("hashchange", () => scheduleRotation(false));
-  document.addEventListener("visibilitychange", () => scheduleRotation(false));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) finishLineupDrag(false);
+    scheduleRotation(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") finishLineupDrag(false);
+  });
   function installFullscreen() {
     const tools = $("#wall-tools-panel");
     if (!tools || $("#wall-layout-fullscreen")) return;

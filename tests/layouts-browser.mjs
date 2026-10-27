@@ -267,6 +267,35 @@ try {
     2,
     "Draft dummies must not change actual wall",
   );
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
+  const lineupBefore = await evaluate("[...document.querySelector('#layout-camera-list').children].map(r=>r.dataset.id)");
+  await evaluate(`(() => {
+    const list=document.querySelector('#layout-camera-list'), rows=[...list.children];
+    window.lineupTransfer=new DataTransfer();window.lineupSource=rows.at(-1);
+    lineupSource.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:lineupTransfer}));
+    const box=rows[0].getBoundingClientRect();
+    rows[0].dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:lineupTransfer,clientY:box.top+4}));
+  })()`);
+  assert.deepEqual(await evaluate("[...document.querySelector('#layout-camera-list').children].map(r=>r.dataset.id)"), lineupBefore, "Hover leaves source DOM and draft order intact");
+  assert.equal(await evaluate("[...document.querySelector('#layout-camera-list').children].some(r=>r.style.transform && r.style.transform!=='translateY(0px)')"), true, "Drag hover previews the proposed lineup with transforms");
+  assert.equal(await evaluate("parseFloat(getComputedStyle(document.querySelector('.layout-camera-row')).transitionDuration)>0"), true, "Row movement has a smooth transition");
+  await evaluate("lineupSource.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:lineupTransfer}))");
+  await delay(250);
+  assert.deepEqual(await evaluate("[...document.querySelector('#layout-camera-list').children].map(r=>r.dataset.id)"), lineupBefore, "Cancelled drag restores the original lineup");
+  await evaluate(`(() => {
+    const rows=[...document.querySelector('#layout-camera-list').children], source=rows.at(-1), target=rows.at(-2), transfer=new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:transfer}));
+    const box=target.getBoundingClientRect();
+    target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:transfer,clientY:box.top+4}));
+    target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientY:box.top+4}));
+    source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:transfer}));
+  })()`);
+  const lineupAfter = [...lineupBefore];
+  [lineupAfter[4],lineupAfter[5]]=[lineupAfter[5],lineupAfter[4]];
+  assert.deepEqual(await evaluate("[...document.querySelector('#layout-camera-list').children].map(r=>r.dataset.id)"), lineupAfter, "Drop commits the exact previewed draft order");
+  assert.equal((await visible()).length, 2, "Reordering a draft does not change the active wall");
+  await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('.layout-camera-row')).transitionDuration"), "0s", "Reduced-motion preference disables row animation");
   await evaluate(
     "document.querySelector('#layout-name').value='Security wall';document.querySelector('#layout-name').dispatchEvent(new Event('input'))",
   );
@@ -411,6 +440,29 @@ try {
   );
   await evaluate("location.hash='layouts'");
   await until("!!document.querySelector('#layout-import')");
+  await command("Emulation.setDeviceMetricsOverride", {width:390,height:700,deviceScaleFactor:1,mobile:true}, sessionId);
+  await command("Emulation.setTouchEmulationEnabled", {enabled:true}, sessionId);
+  const touchOrder = await evaluate("[...document.querySelector('#layout-camera-list').children].map(r=>r.dataset.id)");
+  const touchDrag = async (cancel) => {
+    const points = await evaluate(`(() => {
+      const rows=[...document.querySelector('#layout-camera-list').children], handle=rows[2].querySelector('.layout-lineup-handle');
+      handle.scrollIntoView({block:'center',behavior:'instant'});
+      const start=handle.getBoundingClientRect(), target=rows[3].getBoundingClientRect();
+      return {x:start.left+start.width/2,y:start.top+start.height/2,end:target.top+target.height/2+8};
+    })()`);
+    await command("Input.dispatchTouchEvent", {type:"touchStart",touchPoints:[{x:points.x,y:points.y}]}, sessionId);
+    await command("Input.dispatchTouchEvent", {type:"touchMove",touchPoints:[{x:points.x,y:points.end}]}, sessionId);
+    assert.equal(await evaluate("document.querySelector('#layout-camera-list').classList.contains('is-reordering')"), true, "Touch handle starts a reorder preview without scrolling the gesture");
+    await command("Input.dispatchTouchEvent", {type:cancel?"touchCancel":"touchEnd",touchPoints:[]}, sessionId);
+    await delay(250);
+  };
+  await touchDrag(true);
+  assert.deepEqual(await evaluate("[...document.querySelector('#layout-camera-list').children].map(r=>r.dataset.id)"), touchOrder, "Cancelled touch drag restores camera order");
+  await touchDrag(false);
+  const touchAfter=[...touchOrder];
+  [touchAfter[2],touchAfter[3]]=[touchAfter[3],touchAfter[2]];
+  assert.deepEqual(await evaluate("[...document.querySelector('#layout-camera-list').children].map(r=>r.dataset.id)"), touchAfter, "Touch drop commits the previewed position");
+  await command("Emulation.setTouchEmulationEnabled", {enabled:false}, sessionId);
   for (const theme of ["light", "dark"]) {
     await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.querySelectorAll('.layout-workspace details').forEach(d=>d.open=true)`);
     for (const width of [320, 390, 768, 1280]) {
