@@ -5655,3 +5655,147 @@
   };
   window.dispatchEvent(new Event("spyder:workflows-ready"));
 })();
+
+// Presentation only: keep the action text and existing event/data hooks intact.
+// Locally bundled Lucide symbols also work in the offline/static showcase.
+(() => {
+  if (typeof MutationObserver === "undefined" || !document.body) return;
+  const scope = ".workflow-editor, .workflow-manager, .wt-dialog";
+  const icons = {
+    save: "save", activate: "power", undo: "undo-2", redo: "redo-2",
+    "edit-selected": "square-pen", "copy-node": "copy", "paste-node": "clipboard-paste",
+    "zoom-in": "zoom-in", "zoom-out": "zoom-out", "zoom-reset": "rotate-ccw",
+    center: "crosshair", "open-templates": "layout-template", "open-subflows": "workflow",
+    "open-history": "history", import: "file-input", export: "file-output", remove: "trash-2",
+    "delete-node": "trash-2", "delete-edge": "unplug", connect: "link-2",
+    "connect-in": "log-in", "connect-out": "log-out", unbind: "link-2-off",
+    "add-rule": "circle-plus", "remove-rule": "trash-2", "code-test": "flask-conical",
+    "run-test": "play", "refresh-models": "refresh-cw", "refresh-detectors": "refresh-cw",
+    "library-clear": "filter-x", "library-prev": "chevron-left", "library-next": "chevron-right",
+    "library-use": "package-plus", "request-remove-model": "trash-2",
+    "inspect-model": "file-search", "save-classes": "save", "use-label-source": "tags",
+    "upload-model": "upload", "register-model": "file-plus-2", "install-detector": "download",
+    "notification-test": "bell", "notification-permission": "shield-check",
+    "publish-subflow": "upload", "prepare-callable": "workflow", "subflow-back": "chevron-left",
+    "open-subflow-definition": "workflow", "load-pinned-subflow": "download",
+    "reset-subflow-arg": "rotate-ccw", "hist-reset": "filter-x", "hist-refresh": "refresh-cw",
+    "hist-prev": "chevron-left", "hist-next": "chevron-right",
+    create: "circle-plus", "create-callable": "workflow", prev: "chevron-left", next: "chevron-right",
+    "hist-settings": "settings-2", "hist-export": "download", "hist-export-selected": "download",
+    "hist-delete-selected": "trash-2", "hist-open": "file-search", "hist-detail": "file-search",
+    "hist-original": "workflow", "hist-replay": "play", "hist-node-inspector": "scan-search",
+    "hist-overview": "list-video", "use-signal": "link-2", "call-entry": "log-in", "call-return": "log-out",
+  };
+  const panels = {nodes: "circle-plus", models: "boxes", inspector: "scan-search", settings: "settings-2", activity: "list-video"};
+  const manager = {toggle: "power", open: "workflow", call: "workflow", publish: "upload", rename: "square-pen", duplicate: "copy", export: "file-output", delete: "trash-2"};
+  const records = new WeakMap();
+  let active = null, tip = null, hideTimer;
+
+  function enhance(button) {
+    if (!button.closest(scope)) return;
+    let icon = panels[button.dataset.studioOpen];
+    for (const [key, value] of Object.entries(icons)) {
+      if (button.hasAttribute(`data-${key}`)) { icon = value; break; }
+    }
+    if (button.closest(".workflow-manager")) icon ||= manager[button.dataset.action];
+    if (button.hasAttribute("data-preview-toggle")) icon = button.getAttribute("aria-pressed") === "true" ? "pause" : "play";
+    const text = button.textContent.trim();
+    if (!icon || !text) return;
+    if ((button.hasAttribute("data-activate") || button.dataset.action === "toggle") && /^Disable/.test(text)) icon = "power-off";
+    const old = records.get(button);
+    if (old?.text === text && old.icon === icon && button.querySelector(".we-action-label")) return;
+    // Menu entries retain visible labels; names, choices and confirmations stay text.
+    const labelled = !!button.closest(".we-studio-menu-items, .wm-actions details");
+    const label = button.hasAttribute("data-zoom-in") ? "Zoom in" : button.hasAttribute("data-zoom-out") ? "Zoom out" : button.hasAttribute("data-zoom-reset") ? "Reset zoom" : text.replace(/^\+\s*/, "");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    svg.classList.add("we-action-icon");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `/icons.svg#lucide-${icon}`);
+    svg.append(use);
+    const caption = document.createElement("span");
+    caption.className = `we-action-label${labelled ? "" : " sr-only"}`;
+    caption.textContent = text;
+    button.replaceChildren(svg, caption);
+    button.classList.toggle("we-action-button", !labelled);
+    button.classList.toggle("we-action-labelled", labelled);
+    if (!button.hasAttribute("aria-label") || old?.autoLabel === button.getAttribute("aria-label")) button.setAttribute("aria-label", label);
+    records.set(button, {text, icon, label, autoLabel: old?.autoLabel || (!old && button.getAttribute("aria-label") === label ? label : null)});
+    if (old?.autoLabel) records.get(button).autoLabel = label;
+    // Custom short tooltip replaces the browser's delayed native title.
+    if (button.title) {
+      if (!button.hasAttribute("aria-description")) button.setAttribute("aria-description", button.title);
+      button.removeAttribute("title");
+    }
+    if (active === button) hide();
+  }
+
+  function hide() {
+    clearTimeout(hideTimer);
+    if (active && tip) {
+      const ids = (active.getAttribute("aria-describedby") || "").split(/\s+/).filter((id) => id && id !== tip.id);
+      if (ids.length) active.setAttribute("aria-describedby", ids.join(" "));
+      else active.removeAttribute("aria-describedby");
+    }
+    active = null;
+    if (!tip) return;
+    if (typeof tip.hidePopover === "function" && tip.matches(":popover-open")) tip.hidePopover();
+    tip.hidden = true;
+  }
+  function show(button) {
+    clearTimeout(hideTimer);
+    if (!records.has(button) || active === button) return;
+    hide();
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.id = "we-action-tooltip";
+      tip.className = "we-action-tooltip";
+      tip.setAttribute("role", "tooltip");
+      tip.setAttribute("popover", "manual");
+      document.body.append(tip);
+    }
+    active = button;
+    tip.textContent = records.get(button).label;
+    tip.hidden = false;
+    if (typeof tip.showPopover === "function") tip.showPopover();
+    else (button.closest("dialog[open]") || document.body).append(tip);
+    const ids = new Set((button.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+    ids.add(tip.id);
+    button.setAttribute("aria-describedby", [...ids].join(" "));
+    const rect = button.getBoundingClientRect(), size = tip.getBoundingClientRect();
+    tip.style.left = `${Math.max(8, Math.min(innerWidth - size.width - 8, rect.left + (rect.width - size.width) / 2))}px`;
+    tip.style.top = `${Math.max(8, rect.bottom + size.height + 16 < innerHeight ? rect.bottom + 8 : rect.top - size.height - 8)}px`;
+  }
+  document.addEventListener("pointerover", (event) => {
+    if (tip?.contains(event.target)) { clearTimeout(hideTimer); return; }
+    if (event.pointerType !== "touch") show(event.target.closest?.("button"));
+  });
+  document.addEventListener("pointerout", (event) => {
+    if (active && !active.contains(event.relatedTarget) && !tip?.contains(event.relatedTarget)) hideTimer = setTimeout(hide, 120);
+  });
+  document.addEventListener("focusin", (event) => show(event.target.closest?.("button")));
+  document.addEventListener("focusout", hide);
+  document.addEventListener("click", hide);
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") hide(); });
+  document.addEventListener("scroll", hide, true);
+  window.addEventListener("resize", hide);
+  const observer = new MutationObserver((mutations) => {
+    const buttons = new Set();
+    for (const mutation of mutations) {
+      const parent = mutation.target.nodeType === 1 ? mutation.target : mutation.target.parentElement;
+      const owner = parent?.closest?.("button");
+      if (owner) buttons.add(owner);
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        if (node.matches("button")) buttons.add(node);
+        node.querySelectorAll("button").forEach((button) => buttons.add(button));
+      }
+    }
+    buttons.forEach(enhance);
+    if (active && (!active.isConnected || !active.getClientRects().length)) hide();
+  });
+  observer.observe(document.body, {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["aria-pressed"]});
+  document.querySelectorAll(`${scope.split(", ").map((selector) => `${selector} button`).join(", ")}`).forEach(enhance);
+})();

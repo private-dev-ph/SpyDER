@@ -3098,3 +3098,67 @@ main:has(.workflow-editor) {
     white-space: normal;
   }
 }
+
+/* Workflow action icons: one local SVG family, full-size touch targets. */
+:is(.workflow-editor, .workflow-manager, .wt-dialog) button.we-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  height: 44px;
+  padding: 10px;
+  gap: 0;
+  vertical-align: middle;
+}
+:is(.workflow-editor, .workflow-manager, .wt-dialog) button.we-action-labelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+.we-action-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  overflow: visible;
+}
+/* Delegated handlers sometimes match event.target directly. */
+:is(.we-action-button, .we-action-labelled) > * {
+  pointer-events: none;
+}
+.workflow-editor .we-studio-tools,
+.workflow-editor .we-studio-footer-actions,
+.workflow-editor .we-zoom-controls {
+  gap: 8px;
+}
+.workflow-editor .we-studio-primary {
+  gap: 8px;
+}
+.we-action-tooltip {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font: 500 12px/1.4 var(--font-body, sans-serif);
+  overflow-wrap: anywhere;
+  z-index: 10000;
+}
+.we-action-tooltip[hidden] {
+  display: none;
+}
+@media (max-width: 420px) {
+  .workflow-editor .we-studio-primary {
+    grid-template-columns: 44px 44px minmax(0, 1fr);
+  }
+}

@@ -145,6 +145,11 @@ pipeline behavior. The static showcase continues to perform no server inference.
 
 The canvas is the main workspace. Tools open only when you need them:
 
+Action buttons use locally bundled SVG icons. Hover over an icon or focus it with
+Tab to see its short action name, such as **Undo**, **Save workflow**, or **Inspect
+node**. Escape dismisses the helper. Node names, template choices, menu entries,
+and confirmation choices keep their visible labels.
+
 | Control | What it opens |
 | --- | --- |
 | Current workflow name | Saved workflow library: open, create, search, filter, duplicate, publish, enable/disable, rename, export, or delete. |

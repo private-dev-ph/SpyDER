@@ -1,0 +1,65 @@
+# Workflow action icons
+
+Workflow action SVG symbols in `icons.svg` are sourced from [Lucide](https://github.com/lucide-icons/lucide/tree/f12b0de177fbc2a6795e99be065887e72b237123) at commit `f12b0de177fbc2a6795e99be065887e72b237123`. The SVG paths are retained and the symbols use the `lucide-` prefix. The complete upstream ISC and applicable Feather MIT notices are embedded in the sprite metadata so static and installed distributions retain the license.
+
+Included upstream icons:
+
+- `save`
+- `power`
+- `power-off`
+- `circle-plus`
+- `boxes`
+- `scan-search`
+- `square-pen`
+- `copy`
+- `clipboard-paste`
+- `undo-2`
+- `redo-2`
+- `zoom-in`
+- `zoom-out`
+- `rotate-ccw`
+- `crosshair`
+- `settings-2`
+- `layout-template`
+- `workflow`
+- `history`
+- `list-video`
+- `file-input`
+- `file-output`
+- `trash-2`
+- `refresh-cw`
+- `upload`
+- `file-plus-2`
+- `filter-x`
+- `chevron-left`
+- `chevron-right`
+- `package-plus`
+- `file-search`
+- `tags`
+- `unplug`
+- `check`
+- `x`
+- `flask-conical`
+- `play`
+- `pause`
+- `download`
+- `link-2`
+- `link-2-off`
+- `log-in`
+- `log-out`
+- `camera`
+- `box`
+- `brain-circuit`
+- `scan-eye`
+- `filter`
+- `scan`
+- `hash`
+- `timer`
+- `code-xml`
+- `monitor-play`
+- `bell`
+- `image`
+- `circle-dot`
+- `send`
+- `shield-check`
+- `circle-help`

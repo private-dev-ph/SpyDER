@@ -1136,6 +1136,46 @@ try {
       }
     }
   }
+  // Icon actions retain their names and work in the static export, at both sizes.
+  await evaluate("location.hash='vision-lab'");
+  await until("!!document.querySelector('#vision-workflow-tab')");
+  await evaluate("document.querySelector('#vision-workflow-tab').click()");
+  await until("!!document.querySelector('[data-undo].we-action-button')");
+  const sprite = await readFile(path.join(assets, "icons.svg"), "utf8");
+  for (const viewport of [
+    {width: 1280, height: 800, deviceScaleFactor: 1, mobile: false},
+    {width: 375, height: 720, deviceScaleFactor: 1, mobile: true},
+  ]) {
+    await command("Emulation.setDeviceMetricsOverride", viewport, sessionId);
+    const actions = await evaluate(`([...document.querySelectorAll('.workflow-editor .we-action-button')]
+      .filter(b=>b.getClientRects().length).map(b=>({name:b.getAttribute('aria-label'),
+      href:b.querySelector('use')?.getAttribute('href'), width:b.getBoundingClientRect().width,
+      height:b.getBoundingClientRect().height, caption:getComputedStyle(b.querySelector('.we-action-label')).position})))`);
+    assert.ok(actions.length >= 10);
+    for (const action of actions) {
+      assert.ok(action.name, "Every icon action has an accessible name");
+      assert.ok(action.width >= 43.9 && action.height >= 43.9, `${action.name}: touch target`);
+      assert.equal(action.caption, "absolute", `${action.name}: text is visually hidden`);
+      assert.ok(sprite.includes(`id="${action.href.split('#')[1]}"`), `${action.name}: bundled SVG symbol`);
+    }
+    await evaluate("document.querySelector('[data-undo]').focus()");
+    const tooltip = await evaluate(`(() => {const t=document.querySelector('#we-action-tooltip'),r=t.getBoundingClientRect();
+      return {label:t.textContent,open:t.matches(':popover-open'),inside:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,
+      described:document.querySelector('[data-undo]').getAttribute('aria-describedby')};})()`);
+    assert.equal(tooltip.label, "Undo");
+    assert.equal(tooltip.open, true);
+    assert.equal(tooltip.inside, true);
+    assert.equal(tooltip.described, "we-action-tooltip");
+    await command("Input.dispatchKeyEvent", {type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27}, sessionId);
+    assert.equal(await evaluate("document.querySelector('#we-action-tooltip').hidden"), true);
+    // Icon actions keep the existing delegated handler and open the drawer.
+    await evaluate("document.querySelector('[data-studio-open=inspector]').click()");
+    await until("document.querySelector('[data-studio-panel=inspector]').open");
+    await evaluate("document.querySelector('[data-studio-panel=inspector] [data-connect]').focus()");
+    assert.equal(await evaluate("document.querySelector('#we-action-tooltip').textContent"), "Connect");
+    await closeStudioPanel("inspector");
+    assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth+1"), true);
+  }
   assert.deepEqual(await evaluate("templateErrors"), []);
   assert.equal(
     networkPaths.some((url) => url.startsWith("/api/")),
