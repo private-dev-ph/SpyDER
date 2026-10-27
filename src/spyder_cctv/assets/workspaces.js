@@ -435,7 +435,7 @@
       switchMode(false);
     } else if (current === "camera-setup") {
       content.innerHTML =
-        '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section><section class="workspace-panel"><div id="onvif-camera-tools"></div></section>';
+        '<section class="workspace-panel"><h2></h2><p class="workspace-description"></p><div id="device-list" class="device-list"></div></section><div id="onvif-camera-tools"></div>';
       find("h2", content).textContent =
         current === "vision-lab" ? "Vision pipelines" : "Connected cameras";
       find(".workspace-description", content).textContent =
