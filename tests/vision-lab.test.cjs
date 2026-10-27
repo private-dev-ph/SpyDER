@@ -9,6 +9,9 @@ const source = fs.readFileSync(
   "utf8",
 );
 const flush = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve)); };
+const startDrawing = (h) => h.root.dispatch("click", {
+  target: { closest: () => ({ classList: { contains: (name) => name === "vl-draw-roi" } }) },
+});
 
 function setup({ showcase = false, fetcher, postRequest, cameras } = {}) {
   const requests = [];
@@ -252,8 +255,35 @@ test("edits made during Apply remain dirty after earlier save completes", async 
   h.window.spyderVisionLab.unmount();
 });
 
+test("ROI drawing is opt-in and exits on completion or Escape", () => {
+  const h = setup();
+  const down = () => h.root.dispatch("pointerdown", {button: 0, clientX: 64, clientY: 96, pointerId: 1, target: h.root.stage});
+  const move = () => h.root.dispatch("pointermove", {clientX: 576, clientY: 384, pointerId: 1, target: h.root.stage});
+  down(); move();
+  assert.equal(h.root.form.elements.roi_w.value, "", "Normal scrolling cannot create a region");
+  h.root.image.naturalWidth = 0;
+  startDrawing(h);
+  down(); move();
+  assert.equal(h.root.form.elements.roi_w.value, "", "A missing frame cannot create a region from placeholder dimensions");
+  h.root.image.naturalWidth = 640;
+  h.root.dispatch("keydown", {key: "Escape", preventDefault() {}});
+  startDrawing(h);
+  assert.equal(h.root.stage.dataset.drawing, "true");
+  down(); move();
+  h.root.dispatch("pointerup", {target: h.root.stage});
+  assert.equal(+h.root.form.elements.roi_w.value, 80);
+  assert.equal(h.root.stage.dataset.drawing, "false");
+  startDrawing(h);
+  let prevented = false;
+  h.root.dispatch("keydown", {key: "Escape", preventDefault() {prevented = true;}});
+  assert.equal(prevented, true);
+  assert.equal(h.root.stage.dataset.drawing, "false");
+  h.window.spyderVisionLab.unmount();
+});
+
 test("ROI pointerdown prevents image drag and pointercancel clears drag", () => {
   const h = setup();
+  startDrawing(h);
   let prevented = false;
   h.root.dispatch("pointerdown", { button: 0, clientX: 64, clientY: 96, pointerId: 1, target: h.root.image, preventDefault() { prevented = true; } });
   assert.equal(prevented, true);
@@ -351,6 +381,7 @@ test("camera resume recreates preview with paused draft settings", async () => {
 
 test("ROI pointer coordinates exclude preview letterboxing", () => {
   const h = setup();
+  startDrawing(h);
   const stage = h.root.stage;
   h.root.dispatch("pointerdown", { button: 0, clientX: 64, clientY: 96, pointerId: 1, target: stage });
   h.root.dispatch("pointermove", { clientX: 576, clientY: 384, pointerId: 1, target: stage });
@@ -371,8 +402,10 @@ test("ROI mapping handles 4:3 source letterboxing in original and side-by-side v
   h.root.image.naturalHeight = 480;
   h.root.stage.bounds = { left: 0, top: 0, width: 640, height: 360 };
   const draw = (a, b) => {
+    startDrawing(h);
     h.root.dispatch("pointerdown", { button: 0, clientX: a[0], clientY: a[1], pointerId: 1, target: h.root.stage });
     h.root.dispatch("pointermove", { clientX: b[0], clientY: b[1], pointerId: 1, target: h.root.stage });
+    h.root.dispatch("pointerup", { target: h.root.stage });
   };
   draw([128, 36], [512, 324]);
   assert.deepEqual([+h.root.form.elements.roi_x.value, +h.root.form.elements.roi_y.value, +h.root.form.elements.roi_w.value, +h.root.form.elements.roi_h.value], [10, 10, 80, 80]);

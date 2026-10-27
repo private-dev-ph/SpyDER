@@ -9,6 +9,27 @@ independent per camera and disabled by default. Edits update a temporary preview
 **Apply** makes the draft active in Control Room and saves it. Draft analysis reuses
 the existing camera rather than opening another device.
 
+The preview comes first on phones, with motion settings below it. Larger screens
+show the preview and settings side by side. The main settings include analysis,
+contours, connected components, tracking, overlays, threshold, and minimum region
+area. **Advanced tuning**, **Live diagnostics**, and **Hardware capacity** start
+closed and expand when needed.
+
+Choose **Draw ROI**, then drag across the preview to select a region. Drawing ends
+after the gesture so you can scroll the page normally again. **Cancel drawing** or
+Escape exits drawing mode. **Clear ROI** restores full-frame analysis. For keyboard
+entry, expand **Precise ROI coordinates** and enter X, Y, width, and height as image
+percentages. Letterboxing is excluded; side-by-side coordinates use the source
+image. Choose **Original**, **Foreground mask**, or **Side by side** in the View
+selector to inspect the draft.
+
+**Apply settings** is the only action that saves the camera configuration.
+**More actions → Reset defaults**, **Disable analysis**, and capacity
+**Use recommendation** stage changes for preview; apply them when ready. Runtime
+errors and tracker warnings remain visible even while diagnostics are closed.
+The browser showcase keeps its preview and explanations available; native editing,
+mask generation, and hardware assessment require the local Python runtime.
+
 | Feature | Purpose |
 | --- | --- |
 | MOG2 background subtraction | Separate foreground changes from a learned stationary background. |

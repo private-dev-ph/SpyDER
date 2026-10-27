@@ -71,6 +71,8 @@
         busy = false,
         capacityBusy = false,
         mounted = true;
+      let drawingROI = false;
+      let capacityBodyNode = null, capacityBodyState = "";
       let cameraSignature = "",
         loadedFor = null,
         polling = false,
@@ -187,52 +189,61 @@
       function fields() {
         const c = camera();
         const effective = runtime || {};
+        const expanded = new Set(
+          [...(root.querySelectorAll?.("details[data-vl-disclosure][open]") || [])]
+            .map((item) => item.dataset.vlDisclosure),
+        );
+        const open = (name) => expanded.has(name) ? "open" : "";
+        const unavailable = showcase || !selected || !savedSettingsLoaded;
         root.innerHTML = `
           <section class="workspace-panel vl-intro">
-            <div class="vl-title"><div><p class="eyebrow">NATIVE COMPUTER VISION</p><h2>Motion analysis controls</h2></div><span class="vl-chip">Local processing</span></div>
-            <p class="workspace-description">Configure OpenCV motion regions, optional tracking and overlays per camera. This processing stays separate from each camera’s YOLO and InsightFace pipeline.</p>
-            ${showcase ? '<div class="vl-showcase" role="status"><strong>Native controls unavailable in browser showcase</strong><p>Preview remains available. Install the local Python app to configure and assess OpenCV analysis. Demo motion preview is browser generated.</p></div>' : ""}
-            <div class="vl-picker"><label for="vl-camera">Camera</label><select id="vl-camera"></select><span class="vl-pipeline-label">App pipeline: <b class="vl-pipeline-value">${esc(c?.pipeline || pipeline)}</b> · MOG2 motion analysis</span></div>
+            <div class="vl-title"><div><h1>Motion &amp; ROI</h1><p>Choose a camera, frame the area, then tune motion detection.</p></div><span class="vl-chip">Local processing</span></div>
+            <div class="vl-picker"><label for="vl-camera">Camera<select id="vl-camera" ${cams().length ? "" : "disabled"}></select></label><span class="vl-pipeline-label">App pipeline: <b class="vl-pipeline-value">${esc(c?.pipeline || pipeline)}</b><small>Motion analysis runs separately.</small></span></div>
+            ${!cams().length ? '<p class="vl-empty" role="status">No cameras yet. Add a camera in Camera Setup to get started.</p>' : ""}
+            ${showcase ? '<div class="vl-showcase" role="status"><strong>Browser preview</strong><p>Demo motion is browser generated. Editing, foreground masks and capacity assessment require the local Python app.</p></div>' : ""}
           </section>
           <div class="vl-grid">
             <section class="workspace-panel vl-preview-panel">
-              <div class="vl-section-head"><div><h2>Live preview</h2><span class="vl-sub">Temporary draft preview. Apply activates settings in Control Room.</span></div><span class="vl-status vl-preview-state" data-state="${esc(effective.state || c?.state || "idle")}">${esc(effective.state || c?.state || "offline")}</span></div>
-              <p class="vl-preview-banner">Preview only — Apply activates Control Room</p>
-              <label class="vl-view-picker"><span>Preview</span><select class="vl-view-mode" ${showcase ? "disabled" : ""}><option value="original" ${viewMode === "original" ? "selected" : ""}>Original</option><option value="mask" ${viewMode === "mask" ? "selected" : ""}>Foreground mask</option><option value="side-by-side" ${viewMode === "side-by-side" ? "selected" : ""}>Side by side</option></select><span class="vl-mask-note" role="status"></span></label>
-              <div class="vl-stage" tabindex="0" aria-label="Camera preview. Drag to draw a region of interest."><div class="vl-image-pair"><img class="vl-image" draggable="false" alt="Selected camera live frame"><img class="vl-mask-image" draggable="false" alt="Draft foreground mask"></div><div class="vl-roi-box" hidden></div></div>
-              <div class="vl-metrics"><div><span>Processing</span><b data-metric="processing">—</b></div><div><span>Result age</span><b data-metric="age">—</b></div><div><span>Dropped frames</span><b data-metric="dropped">—</b></div><div><span>Regions</span><b data-metric="regions">0</b></div><div><span>Tracks</span><b data-metric="tracks">0</b></div></div>
-              <p class="vl-preview-note">ROI uses normalized source-image coordinates. Letterboxing is excluded. Draft preview never changes Control Room frames.</p><p class="vl-runtime-note" role="status"></p><p class="vl-tracking-note" role="status"></p><div class="vl-results"></div>
+              <div class="vl-section-head"><h2>Camera preview</h2><span class="vl-status vl-preview-state" data-state="${esc(effective.state || c?.state || "idle")}">${esc(effective.state || c?.state || "offline")}</span></div>
+              <label class="vl-view-picker"><span>View</span><select class="vl-view-mode" ${showcase ? "disabled" : ""}><option value="original" ${viewMode === "original" ? "selected" : ""}>Original</option><option value="mask" ${viewMode === "mask" ? "selected" : ""}>Foreground mask</option><option value="side-by-side" ${viewMode === "side-by-side" ? "selected" : ""}>Side by side</option></select></label>
+              <div class="vl-stage" tabindex="0" role="region" aria-label="Camera preview" aria-describedby="vl-draw-hint"><div class="vl-image-pair"><img class="vl-image" draggable="false" alt="Selected camera live frame"><img class="vl-mask-image" draggable="false" alt="Draft foreground mask"></div><div class="vl-roi-box" hidden></div></div>
+              <div class="vl-roi-tools"><button type="button" class="button secondary vl-draw-roi" aria-pressed="false" ${unavailable ? "disabled" : ""}><svg class="icon" aria-hidden="true"><use href="/icons.svg#lucide-scan"/></svg><span>Draw ROI</span></button><button type="button" class="button secondary vl-clear-roi" ${unavailable ? "disabled" : ""}>Clear ROI</button><span class="vl-roi-summary" role="status"></span></div>
+              <p class="vl-help" id="vl-draw-hint">Choose Draw ROI, then drag across the image. Or enter precise coordinates in settings.</p>
+              <p class="vl-mask-note" role="status"></p><p class="vl-runtime-note" role="status"></p><p class="vl-tracking-note" role="status"></p>
+              <details class="vl-disclosure vl-diagnostics" data-vl-disclosure="diagnostics" ${open("diagnostics")}><summary>Live diagnostics</summary><div class="vl-disclosure-body"><div class="vl-metrics"><div><span>Processing</span><b data-metric="processing">—</b></div><div><span>Result age</span><b data-metric="age">—</b></div><div><span>Dropped frames</span><b data-metric="dropped">—</b></div><div><span>Regions</span><b data-metric="regions">0</b></div><div><span>Tracks</span><b data-metric="tracks">0</b></div></div><div class="vl-results"></div></div></details>
             </section>
             <section class="workspace-panel vl-config">
-              <div class="vl-section-head"><div><h2>Per-camera configuration</h2><span class="vl-sub">Edits preview live · Apply activates Control Room</span></div><span class="vl-dirty" role="status">${dirty ? "Unsaved changes" : "Saved settings"}</span></div>
-              ${showcase ? '<p class="vl-disabled-note">Configuration and server capacity assessment require the installed app.</p>' : ""}
-              <form><fieldset ${showcase || !selected || !savedSettingsLoaded ? "disabled" : ""}><legend>Analysis settings</legend>
-                <label class="vl-toggle"><input name="enabled" type="checkbox" ${cfg.enabled ? "checked" : ""}><span><b>Enable analysis</b><small>Independent per-camera switch. Off by default.</small></span></label>
-                <p class="vl-help">OpenCV MOG2 foreground analysis runs separately from the app pipeline shown above.</p>
-                <div class="vl-check-grid">${check("contours", "Contour detection")}${check("components", "Connected components")}${check("tracking", "MIL tracking")}</div>
-                <details open><summary>Advanced settings</summary><div class="vl-fields">
-                  ${num("threshold", "Threshold", cfg.threshold, 4, 128, 1)}${num("history", "History frames", cfg.history, 20, 2000, 1)}
+              <div class="vl-section-head"><h2>Motion settings</h2><span class="vl-dirty" role="status">${dirty ? "Unsaved changes" : "Saved settings"}</span></div>
+              <p class="vl-preview-banner">Edits preview live. Apply settings to update Control Room.</p>
+              <form><fieldset ${unavailable ? "disabled" : ""}><legend class="sr-only">Analysis settings</legend>
+                <label class="vl-toggle"><input name="enabled" type="checkbox" ${cfg.enabled ? "checked" : ""}><span><b>Enable analysis</b><small>For this camera only. Changes apply when saved.</small></span></label>
+                <div class="vl-check-grid">${check("contours", "Contour detection")}${check("components", "Connected components")}${check("tracking", "MIL tracking")}${check("overlay", "Draw analysis overlay")}</div>
+                <div class="vl-fields vl-basic-fields">${num("threshold", "Motion threshold", cfg.threshold, 4, 128, 1)}${num("min_area_percent", "Minimum region area (%)", cfg.min_area_percent, 0.01, 25, 0.01)}</div>
+                <details class="vl-disclosure" data-vl-disclosure="roi" ${open("roi")}><summary>Precise ROI coordinates</summary><div class="vl-disclosure-body"><p class="vl-help">Percentages of the source image, excluding letterboxing. Zero width or height uses the full frame.</p><div class="vl-roi-fields">${num("roi_x", "X (%)", roiPercent(0), 0, 100, 0.1)}${num("roi_y", "Y (%)", roiPercent(1), 0, 100, 0.1)}${num("roi_w", "Width (%)", roiPercent(2), 0, 100, 0.1)}${num("roi_h", "Height (%)", roiPercent(3), 0, 100, 0.1)}</div></div></details>
+                <details class="vl-disclosure" data-vl-disclosure="advanced" ${open("advanced")}><summary>Advanced tuning</summary><div class="vl-disclosure-body"><p class="vl-help">Use Auto learning rate for most cameras. Shadow suppression helps reduce illumination changes.</p><div class="vl-fields">
+                  ${num("history", "History frames", cfg.history, 20, 2000, 1)}
                   <label class="vl-field"><span>Learning rate</span><select name="learning_rate"><option value="auto" ${cfg.learning_rate === -1 ? "selected" : ""}>Auto</option>${[0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1].map((x) => `<option value="${x}" ${cfg.learning_rate === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
-                  ${check("detect_shadows", "Detect shadows")}<p class="vl-help">Shadow suppression helps reduce illumination changes. Use Auto learning rate for most cameras.</p>
-                  ${num("min_area_percent", "Minimum region area (%)", cfg.min_area_percent, 0.01, 25, 0.01)}${num("inference_fps", "Analysis rate (FPS)", cfg.inference_fps, 1, 15, 1)}
+                  ${check("detect_shadows", "Detect shadows")}${num("max_tracks", "Maximum tracks", cfg.max_tracks, 1, 4, 1)}
+                  ${num("inference_fps", "Analysis rate (FPS)", cfg.inference_fps, 1, 15, 1)}
                   <label class="vl-field"><span>Input width</span><select name="input_width">${[320, 480, 640, 960].map((x) => `<option value="${x}" ${cfg.input_width === x ? "selected" : ""}>${x}</option>`).join("")}</select></label>
-                  ${num("warmup_frames", "Warmup frames", cfg.warmup_frames, 0, 120, 1)}${num("max_tracks", "Maximum tracks", cfg.max_tracks, 1, 4, 1)}${check("overlay", "Draw analysis overlay")}
-                </div></details>
-                <div class="vl-roi-head"><div><b>Region of interest</b><p class="vl-help">Draw on preview or enter normalized image percentages.</p></div><button type="button" class="button secondary vl-clear-roi">Clear ROI</button></div>
-                <div class="vl-roi-fields">${num("roi_x", "X %", roiPercent(0), 0, 100, 0.1)}${num("roi_y", "Y %", roiPercent(1), 0, 100, 0.1)}${num("roi_w", "Width %", roiPercent(2), 0, 100, 0.1)}${num("roi_h", "Height %", roiPercent(3), 0, 100, 0.1)}</div>
-                <div class="vl-actions"><button type="submit" class="button primary" ${busy ? "disabled" : ""}>${busy ? "Saving…" : "Apply settings"}</button><button type="button" class="button secondary vl-reset">Reset defaults</button><button type="button" class="button secondary vl-disable">Disable analysis</button></div>
+                  ${num("warmup_frames", "Warmup frames", cfg.warmup_frames, 0, 120, 1)}
+                </div></div></details>
+                <div class="vl-actions"><button type="submit" class="button primary" ${busy ? "disabled" : ""}>${busy ? "Saving…" : "Apply settings"}</button><details class="vl-more-actions"><summary>More actions</summary><div><button type="button" class="button secondary vl-reset">Reset defaults</button><button type="button" class="button secondary vl-disable">Disable analysis</button></div></details></div>
                 <p class="vl-message" role="status">${esc(messageText)}</p>
               </fieldset></form>
-              <p class="vl-help">MOG2 learns background; a static camera gives best results. MIL tracking assigns local track IDs, not identities. YOLO and InsightFace remain independent.</p>
             </section>
           </div>
-          <section class="workspace-panel vl-capacity"><div class="vl-section-head"><div><h2>Hardware capacity</h2><span class="vl-sub">Estimated analysis load from this computer</span></div><span class="vl-status vl-capacity-state" data-state="${esc(capacity?.state || "idle")}">${esc(capacityBusy ? "Assessing…" : capacity?.state || "Not assessed")}</span></div>
-            <p class="vl-help">Estimates depend on settings, camera resolution and frame rate, plus competing YOLO or GPU workloads. They cannot guarantee a fixed stream count.</p><p class="vl-capacity-error vl-error">${esc(capacityError)}</p><div class="vl-capacity-body"></div><button type="button" class="button secondary vl-assess" ${showcase || capacityBusy ? "disabled" : ""}>Assess capacity</button>
-          </section>`;
+          <details class="workspace-panel vl-capacity vl-disclosure" data-vl-disclosure="capacity" ${open("capacity")}><summary><span>Hardware capacity</span><span class="vl-status vl-capacity-state" data-state="${esc(capacity?.state || "idle")}">${esc(capacityBusy ? "Assessing…" : capacity?.state || "Not assessed")}</span></summary><div class="vl-disclosure-body">
+            <p class="vl-help">Estimate this computer’s analysis load. Camera resolution, frame rate and competing YOLO or GPU workloads affect results; estimates cannot guarantee a fixed stream count.</p><p class="vl-capacity-error vl-error" role="status">${esc(capacityError)}</p><div class="vl-capacity-body"></div><button type="button" class="button secondary vl-assess" ${showcase || capacityBusy ? "disabled" : ""}>Assess capacity</button>
+          </div></details>
+          <details class="vl-disclosure vl-guide" data-vl-disclosure="guide" ${open("guide")}><summary>How motion analysis works</summary><div class="vl-disclosure-body"><p>OpenCV MOG2 learns the background; a static camera gives the best results. MIL tracking assigns local track IDs, not identities. Motion analysis stays separate from YOLO and InsightFace.</p><p>Draft previews never change Control Room frames. Apply settings saves and activates your configuration for the selected camera.</p></div></details>`;
         updateCameraOptions();
         updatePreview();
         updateLive();
         updateCapacity();
+        updateROITools();
+        const image = root.querySelector(".vl-image");
+        if (image) image.onload = () => drawROI();
         const msg = root.querySelector(".vl-message");
         msg.classList.toggle("vl-error", messageError);
       }
@@ -345,14 +356,19 @@
             : cams().filter((c) => c.analysis_enabled && c.state === "running")
                 .length;
         const body = root.querySelector(".vl-capacity-body");
-        if (body)
+        const bodyState = JSON.stringify({report: capacity?.report, state: capacity?.state, activeCount});
+        if (body && (body !== capacityBodyNode || bodyState !== capacityBodyState)) {
+          capacityBodyNode = body;
+          capacityBodyState = bodyState;
           body.innerHTML = capacity?.report
             ? `<div class="vl-cap-facts"><span>Logical CPUs <b>${esc(capacity.report.hardware?.logical_cpus ?? "—")}</b></span><span>Memory <b>${bytes(capacity.report.hardware?.memory_bytes)}</b></span><span>Analysis running <b>${activeCount}</b></span></div><p>${esc(capacity.report.message || "")}</p><div class="vl-profiles">${(capacity.report.profiles || []).map((p) => `<article><div><b>${esc(p.name)}</b><span>${esc(p.cost_ms)} ms/frame · ${esc(p.suggested_instances)} estimated cameras</span></div><button type="button" class="button secondary vl-recommend" data-fps="${esc(p.inference_fps)}" data-width="${esc(p.input_width)}">Use recommendation</button></article>`).join("")}</div>`
             : `<p>${capacity?.state === "running" ? "Assessment is running…" : "Assess current hardware to see profile estimates."}</p>`;
+        }
         const assess = root.querySelector(".vl-assess");
         if (assess) assess.disabled = showcase || capacityBusy;
       }
       function drawROI() {
+        updateROITools();
         const box = root.querySelector(".vl-roi-box");
         if (!box) return;
         const r = cfg.roi;
@@ -363,6 +379,28 @@
         box.style.top = rect.y + r[1] * rect.h + "px";
         box.style.width = r[2] * rect.w + "px";
         box.style.height = r[3] * rect.h + "px";
+      }
+      function updateROITools() {
+        const stage = root.querySelector(".vl-stage");
+        if (stage) stage.dataset.drawing = String(drawingROI);
+        const button = root.querySelector(".vl-draw-roi");
+        button?.setAttribute("aria-pressed", String(drawingROI));
+        const image = root.querySelector(".vl-image");
+        const hasFrame = !!(image?.naturalWidth && image?.naturalHeight);
+        if (button) button.disabled = showcase || !selected || !savedSettingsLoaded || !hasFrame;
+        const label = button?.querySelector("span");
+        if (label) label.textContent = drawingROI ? "Cancel drawing" : "Draw ROI";
+        const hint = root.querySelector("#vl-draw-hint");
+        if (hint) hint.textContent = drawingROI
+          ? "Drag across the image to set the region. Press Escape or Cancel drawing to exit."
+          : showcase ? "ROI editing requires the local Python app."
+          : !hasFrame ? "Waiting for a camera frame. You can enter precise coordinates in settings."
+          : "Choose Draw ROI, then drag across the image. Or enter precise coordinates in settings.";
+        const summary = root.querySelector(".vl-roi-summary");
+        const summaryText = cfg.roi
+          ? `${(cfg.roi[2] * 100).toFixed(1)}% × ${(cfg.roi[3] * 100).toFixed(1)}% region`
+          : "Full frame";
+        if (summary && summary.textContent !== summaryText) summary.textContent = summaryText;
       }
       function imageRect() {
         const stage = root.querySelector(".vl-stage"),
@@ -778,6 +816,8 @@
         if (id === selected) return;
         releaseMask();
         releaseSession();
+        drawingROI = false;
+        drag = null;
         selected = id;
         token++;
         loadedFor = null;
@@ -875,8 +915,14 @@
         if (showcase || !mounted) return;
         const button = event.target.closest("button");
         if (!button) return;
-        if (button.classList.contains("vl-clear-roi")) {
+        if (button.classList.contains("vl-draw-roi")) {
+          drawingROI = !drawingROI;
+          drag = null;
+          updateROITools();
+          if (drawingROI) root.querySelector(".vl-stage")?.focus?.({ preventScroll: true });
+        } else if (button.classList.contains("vl-clear-roi")) {
           cfg.roi = null;
+          drawingROI = false;
           ["roi_x", "roi_y", "roi_w", "roi_h"].forEach((name) => {
             root.querySelector(`[name="${name}"]`).value = 0;
           });
@@ -885,6 +931,7 @@
           drawROI();
           queueDraft();
         } else if (button.classList.contains("vl-reset")) {
+          drawingROI = false;
           cfg = { ...DEFAULTS };
           dirty = true;
           render();
@@ -928,8 +975,11 @@
         }
       };
       const onPointerDown = (event) => {
+        const image = root.querySelector(".vl-image");
         if (
           showcase ||
+          !drawingROI ||
+          !image?.naturalWidth || !image?.naturalHeight ||
           event.button !== 0 ||
           !selected ||
           !event.target.closest(".vl-stage")
@@ -957,13 +1007,28 @@
         if (drag) {
           drag = null;
           dirty = true;
+          drawingROI = false;
+          updateROITools();
         }
       };
       const onPointerCancel = () => {
         drag = null;
+        drawingROI = false;
+        updateROITools();
+      };
+      const onKeyDown = (event) => {
+        if (event.key === "Escape" && drawingROI) {
+          event.preventDefault();
+          onPointerCancel();
+          root.querySelector(".vl-draw-roi")?.focus?.();
+        }
       };
       const onDragStart = (event) => {
         if (event.target.closest?.(".vl-image")) event.preventDefault?.();
+      };
+      const onInvalid = (event) => {
+        const disclosure = event.target.closest?.("details");
+        if (disclosure) disclosure.open = true;
       };
       const resize = () => drawROI();
       const refresh = () => {
@@ -979,6 +1044,8 @@
           releaseMask();
           releaseSession();
           selected = cams()[0]?.id || "";
+          drawingROI = false;
+          drag = null;
           token++;
           loadedFor = null;
           savedSettingsLoaded = false;
@@ -1038,6 +1105,8 @@
       root.addEventListener("pointercancel", onPointerCancel);
       root.addEventListener("lostpointercapture", onPointerCancel);
       root.addEventListener("dragstart", onDragStart);
+      root.addEventListener("keydown", onKeyDown);
+      root.addEventListener("invalid", onInvalid, true);
       window.addEventListener("resize", resize);
       window.addEventListener("spyder:cameras", refresh);
       document.addEventListener("spyder:camera-update", refresh);
@@ -1071,6 +1140,8 @@
         root.removeEventListener("pointercancel", onPointerCancel);
         root.removeEventListener("lostpointercapture", onPointerCancel);
         root.removeEventListener("dragstart", onDragStart);
+        root.removeEventListener("keydown", onKeyDown);
+        root.removeEventListener("invalid", onInvalid, true);
         root.remove();
       };
     },
