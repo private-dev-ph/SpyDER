@@ -360,3 +360,54 @@
   border-color: var(--focus);
   cursor: text;
 }
+/* System: focused tasks, retained drafts, and touch-friendly controls. */
+.page-heading:has(+ #workspace-content .system-workspace) { display: none; }
+.system-workspace { display: grid; gap: 20px; min-width: 0; }
+.system-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
+.system-head h1 { margin: 0 0 8px; font-size: 24px; }
+.system-head p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.system-health-shortcut { min-height: 44px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 24px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+.system-health-shortcut[data-state=warning], .system-health-shortcut[data-state=error], .system-health-shortcut[data-state=unavailable] { border-color: var(--accent); color: var(--accent); }
+.system-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.system-nav button { min-height: 44px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.system-nav button[aria-selected=true] { background: var(--accent); color: white; }
+.system-workspace :is(button, summary, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.system-workspace [data-system-panel] { display: grid; align-content: start; gap: 16px; min-width: 0; }
+.system-workspace [hidden] { display: none !important; }
+.system-workspace .workspace-panel { margin: 0; padding: 18px; min-width: 0; }
+.system-workspace h2 { font-size: 17px; margin: 0 0 12px; }
+.system-workspace .field-help { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.system-workspace p:empty, .system-workspace ul:empty { display: none; }
+.system-workspace .activity-policy { border: 0; margin: 0; padding: 0; }
+.system-workspace .activity-policy legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.system-workspace :is(input:not([type=checkbox]), select) { min-height: 44px; font-size: 16px; max-width: 100%; min-width: 0; }
+.system-workspace .button { min-height: 44px; white-space: normal; }
+.system-workspace .system-storage, .system-workspace .recording-storage-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.system-workspace .system-details { overflow-wrap: anywhere; line-height: 1.7; margin-bottom: 18px; }
+.system-workspace .system-metrics { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.system-workspace .system-metric { padding: 14px; min-width: 0; overflow-wrap: anywhere; }
+.system-disclosure { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 4px; }
+.system-disclosure > summary { min-height: 44px; padding-block: 12px; box-sizing: border-box; cursor: pointer; font-size: 13px; font-weight: 600; }
+.system-disclosure[open] > summary { margin-bottom: 12px; }
+.system-workspace .system-allowance-editor fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.system-workspace .complete-backup-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.system-workspace .backup-task-card { display: block; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.system-workspace .backup-task-header { display: list-item; padding: 16px; min-height: 52px; box-sizing: border-box; cursor: pointer; font-size: 14px; font-weight: 600; }
+.system-workspace .backup-task-body { display: grid; gap: 12px; padding: 0 16px 16px; }
+.system-workspace .backup-task-body > p { margin: 0; }
+.system-workspace .backup-path-row { grid-template-columns: minmax(0, 1fr); }
+.system-workspace .backup-safety, #system-pending-restore { padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--surface); line-height: 1.7; }
+.system-workspace .health-summary { display: block; font-size: 15px; line-height: 1.7; }
+.system-workspace .health-issues { margin-block: 16px; line-height: 1.7; }
+.system-workspace .browser-settings-tools > .button { margin-top: 12px; }
+@media (min-width: 540px) {
+  .system-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .system-workspace .system-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .system-workspace .backup-path-row { grid-template-columns: minmax(0, 1fr) auto; }
+}
+@media (min-width: 1100px) {
+  .system-workspace #system-storage-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .system-workspace .system-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+#system-heading:focus { outline: none; }
+.system-workspace .health-review-link { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 8px; color: var(--accent); text-underline-offset: 3px; }

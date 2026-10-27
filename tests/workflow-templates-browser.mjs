@@ -1062,7 +1062,7 @@ try {
   );
   assert.equal(
     await evaluate(
-      "(() => {const input=document.querySelector('.backup-file-label input');input.parentElement.parentElement.hidden=false;const r=input.getBoundingClientRect();return r.width>0 && r.right<=innerWidth;})()",
+      "(() => {document.querySelector('[data-system-tab=backups]').click();document.querySelector('#browser-settings-tools').open=true;const input=document.querySelector('.backup-file-label input');input.parentElement.parentElement.hidden=false;const r=input.getBoundingClientRect();return r.width>0 && r.right<=innerWidth;})()",
     ),
     true,
   );

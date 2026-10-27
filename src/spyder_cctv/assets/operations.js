@@ -122,11 +122,12 @@
       const summary = node("strong", "Checking health…", "health-summary"),
         issues = node("ul", "", "health-issues"),
         stamp = node("small");
+      summary.setAttribute("role", "status");
       health.append(summary, issues, stamp);
-      content.prepend(health);
+      (content.querySelector("#system-overview") || content).prepend(health);
       const complete = panel(
         "Complete backup & restore",
-        "Portable ZIP archive of application settings, workflows and published versions, models, face galleries, events, schedules, and execution history. Footage is optional. All work stays on this computer.",
+        "Create a complete local ZIP archive, or verify and restore a separate copy. Footage is optional.",
       );
       complete.id = "complete-backup";
       const fields = node("div", "", "complete-backup-grid");
@@ -464,14 +465,13 @@
           status.textContent = error.message;
         }
       }
-      const createCard = node("section", "", "backup-task-card");
-      const createHeader = node("div", "", "backup-task-header");
-      createHeader.append(
-        node("span", "01", "backup-step"),
-        node("h3", "Create a backup"),
-      );
-      createCard.append(
-        createHeader,
+      const createCard = node("details", "", "backup-task-card");
+      createCard.name = "spyder-complete-backup-task";
+      createCard.open = true;
+      createCard.dataset.backupTask = "create";
+      const createHeader = node("summary", "Create a backup", "backup-task-header");
+      const createBody = node("div", "", "backup-task-body");
+      createBody.append(
         node(
           "p",
           "Save a portable copy of your application data.",
@@ -482,14 +482,13 @@
         browserLabel,
         create,
       );
-      const restoreCard = node("section", "", "backup-task-card");
-      const restoreHeader = node("div", "", "backup-task-header");
-      restoreHeader.append(
-        node("span", "02", "backup-step"),
-        node("h3", "Verify & restore"),
-      );
-      restoreCard.append(
-        restoreHeader,
+      createCard.append(createHeader, createBody);
+      const restoreCard = node("details", "", "backup-task-card");
+      restoreCard.name = "spyder-complete-backup-task";
+      restoreCard.dataset.backupTask = "restore";
+      const restoreHeader = node("summary", "Verify & restore", "backup-task-header");
+      const restoreBody = node("div", "", "backup-task-body");
+      restoreBody.append(
         node(
           "p",
           "Choose an archive to verify it before creating a separate restored copy.",
@@ -501,22 +500,22 @@
         ackLabel,
         restore,
       );
+      restoreCard.append(restoreHeader, restoreBody);
       create.dataset.backupCreate = "";
       inspect.dataset.backupInspect = "";
       restore.dataset.backupRestore = "";
       fields.append(createCard, restoreCard);
+      const included = node("details", "", "system-disclosure backup-scope");
+      included.append(node("summary", "What's included?"), node("p", "Application settings, workflows and published versions, models, face galleries, events, schedules, and execution history. Recordings and captures are included only when selected. Browser layouts, preferences and drafts are optional.", "field-help"));
       complete.append(
+        node("p", "Before archiving or restoring, stop cameras and recordings, disable workflows and schedules, and wait for finalization. Archives include models and sensitive face profiles; keep them private. Restored automation starts disabled.", "field-help backup-safety"),
+        included,
         fields,
         advanced,
         cancel,
         progress,
         status,
         report,
-        node(
-          "p",
-          "Before creating an archive, stop cameras and recordings, disable workflows and schedules, and wait for finalization. Model files and sensitive face profiles are included; keep the archive private. Restored automation starts disabled.",
-          "field-help",
-        ),
       );
       const browserImport = node(
           "label",
@@ -527,7 +526,13 @@
       browserFile.type = "file";
       browserFile.accept = ".json,application/json";
       browserImport.append(browserFile);
-      complete.append(
+      const browserSettings = node("details", "", "system-disclosure browser-settings-tools");
+      browserSettings.id = "browser-settings-tools";
+      const browserStatus = node("p", "", "field-help");
+      browserStatus.setAttribute("role", "status");
+      browserSettings.append(
+        node("summary", "Browser layouts & preferences"),
+        node("p", "Export or import SpyDER layouts, preferences and drafts for this browser origin. This JSON file is separate from the installation archive; import only after switching to restored data.", "field-help"),
         browserImport,
         button("Export browser settings", () => {
           try {
@@ -535,13 +540,15 @@
               JSON.stringify(collectBrowserBackup(localStorage), null, 2),
               "browser-state.json",
             );
-            status.textContent =
+            browserStatus.textContent =
               "Browser layouts, preferences, and drafts exported locally.";
           } catch (error) {
-            status.textContent = error.message;
+            browserStatus.textContent = error.message;
           }
         }),
       );
+      browserSettings.append(browserStatus);
+      complete.append(browserSettings);
       browserFile.addEventListener("change", async () => {
         try {
           const file = browserFile.files[0];
@@ -570,23 +577,21 @@
               if (value !== null) localStorage.setItem(key, value);
             throw error;
           }
-          status.textContent =
+          browserStatus.textContent =
             "Browser settings imported. Reload to apply the layouts and preferences.";
         } catch (error) {
-          status.textContent = error.message;
+          browserStatus.textContent = error.message;
         }
       });
-      content.append(complete);
+      (content.querySelector("#system-backups") || content).append(complete);
       refreshButtons();
       if (window.spyderShowcase) {
         status.textContent =
           "Complete archives require the installed app. This static showcase sends no native backup requests.";
         browserFile.disabled = true;
       } else pollJob();
-      const backup = panel(
-        "Configuration backup & restore",
-        "Back up camera settings, profiles, workflows, focus preference, and recording quality. Excludes models, media, events, schedules, output paths, and browser layouts.",
-      );
+      const backup = node("details", "", "workspace-panel operations-panel system-disclosure");
+      backup.append(node("summary", "Configuration JSON backup & restore"), node("p", "Back up camera settings, profiles, workflows, focus preference, and recording quality. Excludes models, media, events, schedules, output paths, and browser layouts.", "field-help"));
       backup.id = "configuration-backup";
       backup.append(
         node(
@@ -655,7 +660,7 @@
       });
       review.append(reviewText, acknowledgment, restoreButton);
       backup.append(actions, review, result);
-      content.append(backup);
+      (content.querySelector("#system-backups") || content).append(backup);
       file.addEventListener("change", async () => {
         imported = null;
         review.hidden = true;
@@ -680,6 +685,7 @@
       });
       if (window.spyderShowcase) {
         summary.textContent = "Browser-local showcase";
+        healthLabel("Browser showcase", "showcase");
         for (const camera of app.cameras())
           if (camera.error)
             issues.append(node("li", `${camera.name}: ${camera.error}`));
@@ -691,12 +697,22 @@
         return;
       }
       let lastSignature = "";
+      function healthLabel(text, state) {
+        const label = content.querySelector("[data-system-health-label]");
+        if (label) { label.textContent = text; label.dataset.state = state; }
+      }
       async function poll() {
         if (disposed) return;
         if (!document.hidden) {
           try {
             const data = await get("/api/system/health");
             if (disposed) return;
+            healthLabel(data.state === "healthy" ? "All systems clear" : "Needs attention", data.state);
+            const pendingRestore = content.querySelector("#system-pending-restore");
+            if (pendingRestore) {
+              pendingRestore.hidden = !data.restore_pending;
+              pendingRestore.textContent = data.restore_pending ? "Configuration restore pending. Restart SpyDER to apply it; configuration changes are locked until restart." : "";
+            }
             const signature = JSON.stringify([
               data.state,
               data.issues,
@@ -708,13 +724,24 @@
               summary.textContent = `${data.state === "healthy" ? "All systems clear" : "Needs attention"} · ${data.running_cameras}/${data.camera_count} cameras running · Recording ${data.recording_state}`;
               health.dataset.state = data.state;
               issues.replaceChildren(
-                ...data.issues.map((issue) =>
-                  node(
+                ...data.issues.map((issue) => {
+                  const item = node(
                     "li",
                     `${issue.area}: ${issue.message}`,
                     `health-${issue.severity}`,
-                  ),
-                ),
+                  );
+                  if (issue.area === "storage" || issue.area === "recovery") {
+                    const link = node("a", issue.area === "storage" ? "Review storage" : "Review recordings", "health-review-link");
+                    link.href = issue.area === "storage" ? "#system" : "#recordings";
+                    if (issue.area === "storage") link.addEventListener("click", (event) => {
+                      event.preventDefault();
+                      content.querySelector("[data-system-tab=storage]")?.click();
+                      content.querySelector("[data-system-tab=storage]")?.focus();
+                    });
+                    item.append(document.createTextNode(" "), link);
+                  }
+                  return item;
+                }),
               );
             }
             stamp.textContent = `Last checked ${new Date(data.checked_at).toLocaleTimeString()}`;
@@ -724,7 +751,11 @@
               file.disabled = true;
             }
           } catch (error) {
-            if (!disposed) summary.textContent = error.message;
+            if (!disposed) {
+              lastSignature = "";
+              summary.textContent = error.message;
+              healthLabel("Health unavailable", "unavailable");
+            }
           }
         }
         if (!disposed) timer = setTimeout(poll, 5000);

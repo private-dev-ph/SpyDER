@@ -2,10 +2,22 @@
 
 [Documentation home](../README.md)
 
-Open **System → System health** to view a combined snapshot of camera capture,
+Open **System → Overview** to view a combined snapshot of camera capture,
 inference, workflow execution, recording, and storage. It refreshes about every
 five seconds while the page is visible. It uses existing status snapshots and does
 not open another camera or run a benchmark.
+
+System groups its tools into four sections. **Overview** contains health and camera
+focus behavior. **Storage** contains the media folder, usage, allowance editing,
+and storage alerts. **Backups** contains complete ZIP backups, browser preferences,
+and configuration JSON tools. **Diagnostics** contains runtime and dependency details.
+Switching sections preserves unsaved form values. Use the arrow keys, Home, and
+End to navigate the section tabs.
+
+Allowance editing starts collapsed; the selected policy explains its consequences
+before saving. Backup creation opens first, with **Verify & restore** available as
+a separate expandable task. Restoring still requires archive verification and
+explicit acknowledgment before creating a separate restored folder.
 
 The summary reports configured/running camera counts and recorder state. Issues can
 include failed cameras, frames/results older than three seconds, inference errors,

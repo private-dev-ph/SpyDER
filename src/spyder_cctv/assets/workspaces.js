@@ -449,13 +449,91 @@
     } else {
       content.innerHTML =
         '<section class="workspace-panel"><h2>Local system</h2><div id="system-details" class="system-details"></div><div id="system-metrics" class="system-metrics"></div><fieldset class="activity-policy"><legend>Camera focus preference</legend><label class="release-toggle"><input id="system-pause-unfocused" type="checkbox" checked /><span>Pause cameras when unfocused</span></label><p id="system-pause-status" class="field-help" role="status" aria-live="polite"></p><p class="field-help">When off, cameras keep running while the local server runs, even if you close this browser. Browser desktop notifications require this page to stay open.</p></fieldset><form id="system-storage" class="system-storage"><label for="system-output">Recordings and captures folder</label><input id="system-output" type="text" required maxlength="4096" placeholder="Absolute local folder path" /><div class="recording-actions"><button class="button primary" type="submit">Save output folder</button><button id="system-output-reset" class="button secondary" type="button">Use default folder</button></div><p class="field-help">A dedicated folder on a local drive is recommended. Keep enough free space for video. Changes apply after restarting SpyDER; files stay in their original folders, and previous folders remain available for playback. Models and configuration stay in their current locations.</p><p id="system-storage-status" class="field-help" role="status"></p></form></section>';
+      // Keep the existing controls mounted while switching focused System views.
+      const systemRoot = document.createElement("div");
+      systemRoot.className = "system-workspace";
+      systemRoot.innerHTML = '<header class="system-head"><div><h1 id="system-heading" tabindex="-1">System</h1><p>Health, storage, backups and local runtime details.</p></div><button type="button" class="system-health-shortcut" data-system-health-label aria-controls="system-overview">Checking health…</button></header><p id="system-pending-restore" role="status" hidden></p><div class="system-nav" role="tablist" aria-label="System sections">' + ["overview", "storage", "backups", "diagnostics"].map((name, index) => `<button type="button" role="tab" id="system-tab-${name}" data-system-tab="${name}" aria-controls="${name === "storage" ? "system-storage-panel" : "system-" + name}" aria-selected="${index === 0}" tabindex="${index === 0 ? 0 : -1}">${name[0].toUpperCase() + name.slice(1)}</button>`).join("") + '</div>' + ["overview", "storage", "backups", "diagnostics"].map((name, index) => `<section role="tabpanel" id="${name === "storage" ? "system-storage-panel" : "system-" + name}" data-system-panel="${name}" aria-labelledby="system-tab-${name}" ${index ? "hidden" : ""}></section>`).join("");
+      const localPanel = content.firstElementChild;
+      const overview = systemRoot.querySelector("#system-overview");
+      const storagePane = systemRoot.querySelector("#system-storage-panel");
+      const focusPanel = document.createElement("section");
+      focusPanel.className = "workspace-panel system-focus-panel";
+      focusPanel.innerHTML = '<h2>Camera behavior</h2>';
+      focusPanel.append(localPanel.querySelector(".activity-policy"));
+      overview.append(focusPanel);
+      const folderPanel = document.createElement("section");
+      folderPanel.className = "workspace-panel system-folder-panel";
+      folderPanel.innerHTML = '<h2>Media folder</h2>';
+      folderPanel.append(localPanel.querySelector("#system-details"), localPanel.querySelector("#system-storage"));
+      storagePane.append(folderPanel);
+      localPanel.querySelector("h2").textContent = "Runtime & dependencies";
+      systemRoot.querySelector("#system-diagnostics").append(localPanel);
+      content.replaceChildren(systemRoot);
+      const systemTabs = [...systemRoot.querySelectorAll("[data-system-tab]")];
+      function selectSystemTab(name, focus = false) {
+        for (const tab of systemTabs) {
+          const selected = tab.dataset.systemTab === name;
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+          if (selected && focus) tab.focus();
+        }
+        for (const pane of systemRoot.querySelectorAll("[data-system-panel]"))
+          pane.hidden = pane.dataset.systemPanel !== name;
+      }
+      systemRoot.querySelector(".system-nav").addEventListener("click", (event) => {
+        const tab = event.target.closest("[data-system-tab]");
+        if (tab) selectSystemTab(tab.dataset.systemTab);
+      });
+      systemRoot.querySelector(".system-nav").addEventListener("keydown", (event) => {
+        const index = systemTabs.indexOf(event.target);
+        if (index < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? systemTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + systemTabs.length) % systemTabs.length;
+        selectSystemTab(systemTabs[next].dataset.systemTab, true);
+      });
+      systemRoot.querySelector("[data-system-health-label]").addEventListener("click", () => selectSystemTab("overview", true));
       const allowancePanel = document.createElement("section");
       allowancePanel.className = "workspace-panel";
       allowancePanel.innerHTML =
         '<h2>Recording storage allowance</h2><p class="field-help">Applies to videos in the active output folder. Captures, models and previous folders are excluded.</p><p id="allowance-usage" role="status">Loading recording usage…</p><progress id="allowance-meter" max="1" value="0" aria-label="Recording storage used"></progress><p id="allowance-status" class="field-help" role="status"></p><form id="allowance-form"><fieldset disabled><div class="recording-storage-fields"><label>Maximum storage (GB)<input id="allowance-limit" type="number" min="0" max="17592" step="any" value="0" required aria-describedby="allowance-limit-help" /></label><label>When the allowance fills<select id="allowance-action"><option value="stop">Stop &amp; save · block new recordings</option><option value="compress">Recompress oldest · stop if insufficient</option><option value="delete">Delete oldest unprotected recordings</option></select></label></div><p id="allowance-limit-help" class="field-help">0 means unlimited. Decimal GB. A 4 MiB safety margin is reserved to finish the current clip. The limit is a software allowance; encoder buffers can cause small overshoots.</p><p class="field-help">Recompression is lossy, runs once per eligible MP4, and replaces the original only after playback validation and at least 5% savings. If it cannot free enough space, recording stops. Delete permanently removes oldest eligible clips, including event attachments. Mark important videos “Keep forever” in Recordings to exclude them from both policies. The current clip is preserved.</p><div class="recording-actions"><button class="button primary" type="submit">Save allowance</button><button id="allowance-retry" class="button secondary" type="button">Check space / retry cleanup</button></div></fieldset></form><p id="allowance-feedback" class="field-help" role="status"></p><div class="recording-actions"><button type="button" class="button secondary" data-notification-permission>Enable desktop alerts</button><span class="field-help" data-notification-status>In-app storage alerts are automatic. Desktop alerts need browser permission and an open SpyDER page.</span></div><details><summary>Recent storage alerts</summary><ul id="allowance-alerts"></ul></details>';
-      content.append(allowancePanel);
+      storagePane.append(allowancePanel);
+      const allowanceEditor = document.createElement("details");
+      allowanceEditor.className = "system-disclosure system-allowance-editor";
+      allowanceEditor.innerHTML = '<summary>Edit recording allowance</summary>';
+      const allowanceForm = find("#allowance-form", allowancePanel);
+      allowanceForm.before(allowanceEditor);
+      allowanceEditor.append(allowanceForm);
+      const limitHelp = find("#allowance-limit-help", allowancePanel);
+      const policyCopy = allowanceForm.querySelectorAll("fieldset > .field-help")[1];
+      const policyDetails = document.createElement("details");
+      policyDetails.className = "system-disclosure system-policy-details";
+      policyDetails.innerHTML = '<summary>Policy limits &amp; protections</summary>';
+      const fullPolicy = document.createElement("p");
+      fullPolicy.className = "field-help";
+      fullPolicy.textContent = limitHelp.textContent + " " + policyCopy.textContent;
+      policyDetails.append(fullPolicy);
+      policyCopy.replaceWith(policyDetails);
+      limitHelp.textContent = "0 means unlimited. Values use decimal GB.";
+      const policyHelp = document.createElement("p");
+      policyHelp.id = "allowance-policy-help";
+      policyHelp.className = "field-help system-policy-help";
+      policyHelp.setAttribute("role", "status");
+      find(".recording-storage-fields", allowancePanel).after(policyHelp);
+      find("#allowance-action", allowancePanel).setAttribute("aria-describedby", policyHelp.id);
+      function updatePolicyHelp() {
+        const action = find("#allowance-action", allowancePanel).value;
+        policyHelp.textContent = action === "delete"
+          ? 'Permanently deletes the oldest unprotected recordings, including event attachments. Mark important videos “Keep forever” to protect them. The current clip is preserved.'
+          : action === "compress"
+            ? 'Lossy recompression replaces an original only after playback validation and at least 5% savings. If space is still insufficient, recording stops. Kept and current clips are protected.'
+            : 'Stops and saves the current clip, then blocks new recordings until space is available. Stopped sessions do not resume automatically.';
+      }
+      find("#allowance-action", allowancePanel).addEventListener("change", updatePolicyHelp);
+      allowancePanel.addEventListener("spyder:allowance-ready", updatePolicyHelp);
+      updatePolicyHelp();
       window.spyderNotifications?.refresh?.();
       if (window.spyderShowcase) {
+        allowanceEditor.hidden = true;
         find("#allowance-form").hidden = true;
         find("#allowance-usage").textContent =
           "Browser showcase: a fixed 128 MiB tab buffer. Use the installed app for persistent storage allowances and keep-forever protection.";
@@ -627,7 +705,7 @@
       }
     }
     update();
-    find("#workspace-title").focus({ preventScroll: true });
+    (find("#system-heading") || find("#workspace-title")).focus({ preventScroll: true });
     window.scrollTo(0, 0);
   }
   function addCardActions() {
@@ -678,6 +756,7 @@
       find("#allowance-action").value = quota.action;
       form.dataset.ready = "true";
       form.querySelector("fieldset").disabled = false;
+      form.closest(".workspace-panel").dispatchEvent(new Event("spyder:allowance-ready"));
     }
     const used = (quota.used_bytes / 1e9).toFixed(3);
     find("#allowance-usage").textContent =

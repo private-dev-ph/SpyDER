@@ -157,6 +157,12 @@ try {
     sessionId,
   );
   await until("!!document.querySelector('#complete-backup')", 300);
+  assert.equal(await evaluate("document.querySelector('[data-system-tab=overview]').getAttribute('aria-selected')"), "true", "System starts with health overview");
+  assert.equal(await evaluate("document.querySelector('[data-backup-task=restore]').open"), false, "Restore starts collapsed");
+  await evaluate("document.querySelector('[data-system-tab=overview]').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.systemTab"), "diagnostics", "End selects and focuses the last System tab");
+  await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}))");
+  assert.equal(await evaluate("document.activeElement.dataset.systemTab"), "overview", "Home returns to overview");
   assert.equal(
     await evaluate(
       "document.querySelector('#complete-backup input[type=checkbox]').checked",
@@ -199,12 +205,16 @@ try {
   await until(
     "!!document.querySelector('[data-backup-pick=save_archive]:not(:disabled)')",
   );
+  await evaluate("document.querySelector('[data-system-tab=storage]').click(); document.querySelector('#allowance-limit').value='7.5';document.querySelector('#allowance-action').value='delete';document.querySelector('#allowance-action').dispatchEvent(new Event('change'));document.querySelector('[data-system-tab=diagnostics]').click();document.querySelector('[data-system-tab=storage]').click()");
+  assert.equal(await evaluate("document.querySelector('#allowance-limit').value"), "7.5", "Section switching preserves allowance drafts");
+  assert.match(await evaluate("document.querySelector('#allowance-policy-help').textContent"), /Permanently deletes.*event attachments/, "Deletion consequences appear beside policy selection");
   assert.equal(
     await evaluate(
       "document.querySelector('[data-backup-path=save_archive]').readOnly",
     ),
     true,
   );
+  await evaluate("document.querySelector('[data-system-tab=backups]').click()");
   await evaluate(
     "document.querySelector('[data-backup-pick=save_archive]').click()",
   );
@@ -231,6 +241,7 @@ try {
     await evaluate("backupRequests[0].body.browser_data.version"),
     1,
   );
+  await evaluate("document.querySelector('[data-backup-task=restore]').open=true");
   await evaluate(
     "document.querySelector('[data-backup-pick=open_archive]').click()",
   );
@@ -314,9 +325,15 @@ try {
         true,
         `${theme} ${width}x${height} backup overflow`,
       );
+      assert.equal(await evaluate(`(() => {
+        const tabs=[...document.querySelectorAll('[data-system-tab]')];
+        const fits=tabs.every(tab=>{tab.click();return document.documentElement.scrollWidth<=innerWidth+1 && tab.getBoundingClientRect().height>=44});
+        document.querySelector('[data-system-tab=backups]').click();
+        return fits;
+      })()`), true, `${theme} ${width} all System sections fit and tabs meet touch sizes`);
       assert.equal(
         await evaluate(
-          "[...document.querySelectorAll('[data-backup-pick]')].every(b=>b.getBoundingClientRect().height>=44)",
+          "[...document.querySelectorAll('[data-backup-pick]')].filter(b=>b.checkVisibility()).every(b=>b.getBoundingClientRect().height>=44)",
         ),
         true,
         "browse touch targets",
