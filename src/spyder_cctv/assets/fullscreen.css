@@ -285,11 +285,6 @@
   z-index: 33;
 }
 @media (hover: none), (pointer: coarse) {
-  .camera-footer {
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
-  }
   .wall-fullscreen .tile-actions button {
     min-width: 44px;
     min-height: 44px;
@@ -301,5 +296,49 @@
   }
   .camera-footer {
     transition: none;
+  }
+}
+/* Touch uses an explicit feed tap, while desktop retains hover/focus controls. */
+.camera-controls-toggle {
+  display: none;
+}
+@media (hover: none), (pointer: coarse) {
+  .camera-controls-toggle {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    color: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .camera-controls-toggle:active:not(:disabled) {
+    transform: none;
+  }
+  .camera-controls-toggle:focus-visible {
+    outline: 3px solid #f7d87f;
+    outline-offset: -4px;
+  }
+  #cameras .camera-card:not(.is-controls-visible) :is(.camera-footer, .tile-priority-tools) {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  #cameras .camera-card.is-controls-visible :is(.camera-footer, .tile-priority-tools) {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+  }
+  body.wall-reordering #cameras .camera-card .tile-priority-tools {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
   }
 }

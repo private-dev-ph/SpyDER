@@ -36,6 +36,69 @@
   if (typeof window === "undefined") return;
   const app = window.spyder;
   const find = (s) => document.querySelector(s);
+  const cameraWall = find("#cameras");
+  const touchControls = window.matchMedia("(hover: none), (pointer: coarse)");
+  let controlsId = 0;
+  function showTileControls(card, visible) {
+    card.classList.toggle("is-controls-visible", visible);
+    const toggle = card.querySelector(".camera-controls-toggle");
+    if (toggle) {
+      const name =
+        card.querySelector(".camera-name")?.textContent ||
+        card.querySelector(".camera-image")?.alt || "camera";
+      toggle.setAttribute("aria-expanded", String(visible));
+      toggle.setAttribute(
+        "aria-label", `${visible ? "Hide" : "Show"} controls for ${name}`,
+      );
+    }
+  }
+  function hideTileControls(except = null) {
+    for (const card of cameraWall.querySelectorAll(".is-controls-visible"))
+      if (card !== except) showTileControls(card, false);
+  }
+  function installTileToggle(card) {
+    const stage = card.querySelector(".video-stage");
+    if (!stage || stage.querySelector(".camera-controls-toggle")) return;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "camera-controls-toggle";
+    const footer = card.querySelector(".camera-footer");
+    if (footer) {
+      if (!footer.id) footer.id = "camera-tile-controls-" + ++controlsId;
+      toggle.setAttribute("aria-controls", footer.id);
+    }
+    stage.append(toggle);
+    showTileControls(card, false);
+  }
+  for (const card of cameraWall.querySelectorAll(".camera-card"))
+    installTileToggle(card);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        if (node.matches(".camera-card")) installTileToggle(node);
+        for (const card of node.querySelectorAll(".camera-card"))
+          installTileToggle(card);
+      }
+    }
+  }).observe(cameraWall, { childList: true, subtree: true });
+  cameraWall.addEventListener("click", (event) => {
+    let toggle = event.target.closest(".camera-controls-toggle");
+    if (!toggle && !event.target.closest("button,a,input,select,textarea"))
+      toggle = event.target.closest(".video-stage")?.querySelector(".camera-controls-toggle");
+    if (!toggle || !touchControls.matches ||
+        document.body.classList.contains("wall-reordering")) return;
+    const card = toggle.closest(".camera-card");
+    const visible = !card.classList.contains("is-controls-visible");
+    hideTileControls(card);
+    showTileControls(card, visible);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!touchControls.matches || document.querySelector("dialog[open]")) return;
+    hideTileControls(event.target.closest(".camera-card"));
+  });
+  window.addEventListener("hashchange", () => hideTileControls());
+  touchControls.addEventListener("change", () => hideTileControls());
   let active = false;
   let ownsFullscreen = false;
   let generation = 0;
