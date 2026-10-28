@@ -433,8 +433,9 @@ main:has(.vision-nav) { padding: 8px 12px; }
 :is(.system-nav, .vision-nav).has-nav-indicator::before {
   content: ""; position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
   width: var(--nav-width); height: var(--nav-height); border-radius: 7px;
-  background: var(--accent); transform: translate(var(--nav-x), var(--nav-y));
-  transition: transform 220ms cubic-bezier(.2,.75,.25,1);
+  background: var(--accent); transform: translate3d(var(--nav-x), var(--nav-y), 0);
+  will-change: transform;
+  transition: transform 340ms cubic-bezier(.22,.61,.36,1);
 }
 :is(.system-nav, .vision-nav) > button { position: relative; z-index: 1; }
 :is(.system-nav, .vision-nav).has-nav-indicator > button[aria-selected=true] { background: transparent; }

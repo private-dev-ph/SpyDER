@@ -13,20 +13,36 @@
     ));
   }
   const navigatorObservers = [];
-  function updateNavigator(nav) {
+  const navigatorPositions = new WeakMap();
+  let pendingVisionRender = null;
+  function cancelVisionRender() {
+    if (!pendingVisionRender) return;
+    cancelAnimationFrame(pendingVisionRender.frame);
+    clearTimeout(pendingVisionRender.timer);
+    pendingVisionRender = null;
+  }
+  function updateNavigator(nav, measure = false) {
     const selected = nav.querySelector('[aria-selected="true"]');
     if (!selected) return;
-    const box = selected.getBoundingClientRect(), frame = nav.getBoundingClientRect(), style = getComputedStyle(nav);
-    nav.style.setProperty("--nav-x", `${box.left - frame.left - parseFloat(style.borderLeftWidth)}px`);
-    nav.style.setProperty("--nav-y", `${box.top - frame.top - parseFloat(style.borderTopWidth)}px`);
-    nav.style.setProperty("--nav-width", `${box.width}px`);
-    nav.style.setProperty("--nav-height", `${box.height}px`);
+    if (measure || !navigatorPositions.has(nav)) {
+      const frame = nav.getBoundingClientRect(), style = getComputedStyle(nav);
+      const left = frame.left + parseFloat(style.borderLeftWidth), top = frame.top + parseFloat(style.borderTopWidth);
+      navigatorPositions.set(nav, new Map([...nav.querySelectorAll(':scope > [role="tab"]')].map((tab) => {
+        const box = tab.getBoundingClientRect();
+        return [tab.id, { x: box.left - left, y: box.top - top, width: box.width, height: box.height }];
+      })));
+    }
+    const box = navigatorPositions.get(nav).get(selected.id);
+    for (const [name, value] of Object.entries(box)) {
+      const property = `--nav-${name}`, next = `${value}px`;
+      if (nav.style.getPropertyValue(property) !== next) nav.style.setProperty(property, next);
+    }
     nav.classList.add("has-nav-indicator");
   }
   function setupNavigator(nav) {
     updateNavigator(nav);
     if (typeof ResizeObserver !== "undefined") {
-      const observer = new ResizeObserver(() => updateNavigator(nav));
+      const observer = new ResizeObserver(() => updateNavigator(nav, true));
       observer.observe(nav);
       navigatorObservers.push(observer);
     }
@@ -278,6 +294,7 @@
     );
   }
   function route() {
+    cancelVisionRender();
     navigatorObservers.splice(0).forEach((observer) => observer.disconnect());
     for (const element of document.querySelectorAll("#workspace-content, #control-room, #vision-mode-content, [data-system-panel]"))
       sectionAnimations.get(element)?.cancel();
@@ -435,11 +452,10 @@
       let visionSelection = null;
       function selectVision(id) {
         if (visionSelection === id && mode.childElementCount) return;
+        cancelVisionRender();
         const previous = visionTabs.findIndex((tab) => tab.id === visionSelection);
         const next = visionTabs.findIndex((tab) => tab.id === id);
         visionSelection = id;
-        window.spyderVisionLab?.unmount();
-        window.spyderWorkflows?.unmount();
         for (const tab of visionTabs) {
           const selected = tab.id === id;
           tab.setAttribute("aria-selected", String(selected));
@@ -447,11 +463,30 @@
           tab.className = "button " + (selected ? "primary" : "secondary");
         }
         mode.setAttribute("aria-labelledby", id);
-        if (id === "vision-workflow-tab") window.spyderWorkflows?.mount(mode);
-        else if (id === "vision-motion-tab") window.spyderVisionLab?.mount(mode);
-        else mode.innerHTML = '<div id="face-gallery-tools"></div>';
         updateNavigator(content.querySelector(".vision-nav"));
-        revealSection(mode, previous < 0 ? 0 : Math.sign(next - previous));
+        const renderSelection = () => {
+          pendingVisionRender = null;
+          if (!mode.isConnected || visionSelection !== id) return;
+          window.spyderVisionLab?.unmount();
+          window.spyderWorkflows?.unmount();
+          try {
+            if (id === "vision-workflow-tab") window.spyderWorkflows?.mount(mode);
+            else if (id === "vision-motion-tab") window.spyderVisionLab?.mount(mode);
+            else mode.innerHTML = '<div id="face-gallery-tools"></div>';
+          } finally {
+            mode.removeAttribute("aria-busy");
+          }
+          revealSection(mode, previous < 0 ? 0 : Math.sign(next - previous));
+        };
+        if (previous < 0 || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) renderSelection();
+        else {
+          mode.setAttribute("aria-busy", "true");
+          // Paint the compositor-backed indicator before mounting a potentially large graph.
+          const task = pendingVisionRender = { frame: 0, timer: 0 };
+          task.frame = requestAnimationFrame(() => {
+            task.timer = setTimeout(renderSelection, 0);
+          });
+        }
       }
       for (const tab of visionTabs) tab.addEventListener("click", () => selectVision(tab.id));
       content.querySelector(".vision-nav").addEventListener("keydown", (event) => {

@@ -257,12 +257,16 @@ try {
   }
   await command("Emulation.setDeviceMetricsOverride", {width:1280,height:800,deviceScaleFactor:1,mobile:false}, sessionId);
   await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"no-preference"}]}, sessionId);
-  assert.equal(await evaluate(`(() => {
+  assert.equal(await evaluate(`(async () => {
+    const settled=async()=>{while(document.querySelector('#vision-mode-content').hasAttribute('aria-busy'))await new Promise(r=>setTimeout(r,5))};
     document.querySelector('#vision-motion-tab').click();
+    await settled();
     document.querySelector('#vision-gallery-tab').click();
+    await settled();
     const panel=document.querySelector('#vision-mode-content');
     const running=panel.getAnimations().length;
     document.querySelector('#vision-motion-tab').click();
+    await settled();
     return running===1 && panel.getAnimations().length===1 && panel.getAnimations()[0].effect.getKeyframes()[0].transform.includes('translateX(-24px)');
   })()`),true,"Rapid section switching replaces the incoming animation");
   await command("Emulation.setEmulatedMedia", {features:[{name:"prefers-reduced-motion",value:"reduce"}]}, sessionId);
