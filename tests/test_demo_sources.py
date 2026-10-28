@@ -62,6 +62,26 @@ def test_demo_capture_loops_and_software_controls_transform_frames(demo_clip):
         capture.close()
 
 
+def test_demo_capture_follows_clip_clock_and_skips_late_frames(demo_clip, monkeypatch):
+    catalog, _ = demo_clip
+    now = [10.0]
+    monkeypatch.setattr("spyder_cctv.demo_sources.time.monotonic", lambda: now[0])
+    capture = DemoClipCapture("demo://test", catalog_path=catalog)
+    try:
+        observed = []
+        for elapsed in (0.0, 0.12, 0.21, 0.41, 0.61):
+            now[0] = 10.0 + elapsed
+            ok, frame = capture.read()
+            assert ok
+            observed.append(float(frame[:, :, 0].mean()))
+        assert observed[0] == pytest.approx(observed[1], abs=3)
+        assert observed[2] > observed[1] + 15
+        assert observed[3] > observed[2] + 15
+        assert observed[4] == pytest.approx(observed[0], abs=3)
+    finally:
+        capture.close()
+
+
 def test_demo_source_label_is_distinct_from_camera_and_network_sources():
     worker = CameraWorker(CameraConfig("demo", "demo://test", pipeline="none"))
     assert worker.status()["source_label"] == "Demo clip"

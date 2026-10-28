@@ -3,6 +3,7 @@
 import json
 import math
 import re
+import time
 from contextlib import ExitStack, contextmanager, nullcontext
 from importlib.resources import as_file, files
 from pathlib import Path
@@ -140,6 +141,26 @@ class DemoClipCapture:
             raise
         self._closed = False
         self._settings = _DEFAULTS.copy()
+        self._playback_started: float | None = None
+        self._next_frame_index = 0
+        self._source_fps, self._frame_count = self._playback_metadata()
+
+    def _playback_metadata(self) -> tuple[float | None, int | None]:
+        try:
+            fps = float(self.capture.get(cv2.CAP_PROP_FPS))
+            count_value = float(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
+            count = int(count_value)
+        except (AttributeError, OverflowError, TypeError, ValueError, cv2.error):
+            return None, None
+        if (
+            not math.isfinite(fps)
+            or fps <= 0
+            or not math.isfinite(count_value)
+            or count <= 0
+            or not math.isfinite(count / fps)
+        ):
+            return None, None
+        return fps, count
 
     def get_controls(self) -> dict[str, Any]:
         return {
@@ -209,12 +230,40 @@ class DemoClipCapture:
     def read(self) -> tuple[bool, Any]:
         if self._closed:
             return False, None
-        ok, frame = self.capture.read()
-        if not ok:
-            # Only capture thread seeks, after observed EOF. No external seek race.
-            if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
-                return False, None
+        if self._source_fps is not None and self._frame_count is not None:
+            now = time.monotonic()
+            if self._playback_started is None:
+                self._playback_started = now
+                target = 0
+            else:
+                duration = self._frame_count / self._source_fps
+                elapsed = max(0.0, now - self._playback_started) % duration
+                target = min(self._frame_count - 1, int(elapsed * self._source_fps))
+            if target < self._next_frame_index:
+                # Camera worker is sole capture owner; seek only when clip clock wraps.
+                if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
+                    return False, None
+                self._next_frame_index = 0
+            frame = None
+            ok = True
+            while self._next_frame_index <= target:
+                ok, frame = self.capture.read()
+                if not ok:
+                    # Metadata can be inaccurate. Keep EOF looping as safe fallback.
+                    if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
+                        return False, None
+                    self._next_frame_index = 0
+                    ok, frame = self.capture.read()
+                    if not ok:
+                        return False, None
+                self._next_frame_index += 1
+        else:
             ok, frame = self.capture.read()
+            if not ok:
+                # Unknown metadata keeps the original EOF loop behavior.
+                if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
+                    return False, None
+                ok, frame = self.capture.read()
         if not ok or frame is None:
             return False, None
         return True, self._transform(frame)
