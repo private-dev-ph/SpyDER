@@ -34,6 +34,7 @@ from spyder_cctv.configuration_backup import ConfigurationBackup
 from spyder_cctv.cv.contracts import VisionUnavailable
 from spyder_cctv.cv.detectors import DetectorCatalog
 from spyder_cctv.cv.diagnostics import engine_info
+from spyder_cctv.demo_sources import demo_catalog_bytes, demo_media_path
 from spyder_cctv.device_services import DeviceServices
 from spyder_cctv.face_gallery import FaceEnrollmentService
 from spyder_cctv.health import summarize_health
@@ -291,6 +292,75 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                     files("spyder_cctv").joinpath("assets/dashboard.css").read_bytes(),
                     "text/css; charset=utf-8",
                 )
+            elif path == "/demo-cameras.json":
+                try:
+                    self.send(200, demo_catalog_bytes(), "application/json; charset=utf-8")
+                except (FileNotFoundError, ValueError):
+                    self.json(503, {"error": "Demo camera catalog is unavailable"})
+            elif path in (
+                "/demo-cameras.js",
+                "/demo-camera-picker.js",
+                "/demo-camera-picker.css",
+                "/browser-demo-workflows.js",
+            ):
+                asset = path.removeprefix("/")
+                content_type = (
+                    "text/css; charset=utf-8"
+                    if asset.endswith(".css")
+                    else "text/javascript; charset=utf-8"
+                )
+                self.send(
+                    200,
+                    files("spyder_cctv").joinpath("assets", asset).read_bytes(),
+                    content_type,
+                )
+            elif path.lower().endswith(".mp4") and path.startswith("/demo-"):
+                filename = path.removeprefix("/")
+                try:
+                    with demo_media_path(filename) as media:
+                        size = media.stat().st_size
+                        start, end, status_code = 0, size - 1, 200
+                        range_header = self.headers.get("Range")
+                        if range_header:
+                            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+                            if not match or not (match.group(1) or match.group(2)):
+                                raise ValueError("Invalid byte range")
+                            if match.group(1):
+                                start = int(match.group(1))
+                                end = int(match.group(2)) if match.group(2) else size - 1
+                            else:
+                                suffix = int(match.group(2))
+                                start, end = max(0, size - suffix), size - 1
+                            if start >= size or end < start:
+                                self.send_response(416)
+                                self.send_header("Content-Range", f"bytes */{size}")
+                                self.send_header("Content-Length", "0")
+                                self.end_headers()
+                                return
+                            end = min(end, size - 1)
+                            status_code = 206
+                        with media.open("rb") as source:
+                            self.send_response(status_code)
+                            self.send_header("Content-Type", "video/mp4")
+                            self.send_header("Content-Length", str(end - start + 1))
+                            self.send_header("Accept-Ranges", "bytes")
+                            if status_code == 206:
+                                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                            self.send_header("Cache-Control", "no-store")
+                            self.send_header("X-Content-Type-Options", "nosniff")
+                            self.end_headers()
+                            source.seek(start)
+                            remaining = end - start + 1
+                            while remaining:
+                                chunk = source.read(min(256 * 1024, remaining))
+                                if not chunk:
+                                    break
+                                self.wfile.write(chunk)
+                                remaining -= len(chunk)
+                except FileNotFoundError:
+                    self.json(404, {"error": "Unknown demo clip"})
+                except (ValueError, OSError):
+                    self.json(416, {"error": "Invalid demo clip range"})
             elif path in ("/settings.js", "/settings.css"):
                 asset = path.removeprefix("/")
                 self.send(
