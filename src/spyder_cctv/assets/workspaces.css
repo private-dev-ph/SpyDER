@@ -515,13 +515,16 @@
   max-height: min(720px, calc(100dvh - 24px - env(safe-area-inset-top)));
   display: none; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; padding: 0;
   border: 1px solid var(--border); border-radius: 22px; background: var(--surface); color: var(--ink);
-  box-shadow: 0 16px 60px #0005; opacity: 0; transform: translateY(24px);
+  box-shadow: 0 16px 60px #0005; opacity: 0; transform: translateY(var(--workspace-sheet-exit, 24px));
   transition: opacity 180ms ease, transform 240ms cubic-bezier(.22,.61,.36,1), display 240ms allow-discrete, overlay 240ms allow-discrete;
 }
 .workspace-switcher[open] { display: grid; opacity: 1; transform: none; }
 .workspace-switcher::backdrop { background: #14131380; opacity: 0; transition: opacity 180ms ease, display 240ms allow-discrete, overlay 240ms allow-discrete; }
-.workspace-switcher[open]::backdrop { opacity: 1; }
-.workspace-switcher-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 26px 18px 16px; border-bottom: 1px solid var(--border); }
+.workspace-switcher[open]::backdrop { opacity: var(--workspace-backdrop-opacity, 1); }
+.workspace-switcher-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 26px 18px 16px; border-bottom: 1px solid var(--border); touch-action: none; user-select: none; cursor: grab; }
+.workspace-switcher.workspace-sheet-dragging { transition: none; will-change: transform; }
+.workspace-switcher.workspace-sheet-dragging::backdrop { transition: none; }
+.workspace-sheet-dragging .workspace-switcher-head { cursor: grabbing; }
 .workspace-switcher-head::before { content: ""; position: absolute; top: 9px; left: calc(50% - 16px); width: 32px; height: 4px; border-radius: 4px; background: var(--control-border); opacity: .5; }
 .workspace-switcher-head h2 { font-size: 20px; line-height: 1.3; margin: 0 0 4px; }
 .workspace-switcher-head p { margin: 0; color: var(--muted); font-size: 13px; }

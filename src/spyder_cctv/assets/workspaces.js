@@ -227,6 +227,54 @@
       else link.removeAttribute("aria-current");
     }
   }
+  function installWorkspaceSheetDrag(dialog, header) {
+    let drag = null;
+    const reset = () => {
+      const previous = drag;
+      drag = null;
+      if (previous && header.hasPointerCapture(previous.id)) header.releasePointerCapture(previous.id);
+      dialog.classList.remove("workspace-sheet-dragging");
+      dialog.style.removeProperty("transform");
+      dialog.style.removeProperty("--workspace-backdrop-opacity");
+    };
+    header.addEventListener("pointerdown", (event) => {
+      if (!dialog.open || drag || !event.isPrimary || event.button !== 0 || event.target.closest("button,a")) return;
+      event.preventDefault();
+      const transform = getComputedStyle(dialog).transform;
+      const offset = transform === "none" ? 0 : new DOMMatrix(transform).m42;
+      drag = { id: event.pointerId, startY: event.clientY, y: event.clientY, time: event.timeStamp, velocity: 0, offset, height: dialog.getBoundingClientRect().height };
+      dialog.classList.add("workspace-sheet-dragging");
+      dialog.style.transform = `translate3d(0,${offset}px,0)`;
+      header.setPointerCapture(event.pointerId);
+    });
+    document.addEventListener("pointermove", (event) => {
+      if (!drag || drag.id !== event.pointerId) return;
+      drag.velocity = (event.clientY - drag.y) / Math.max(1, event.timeStamp - drag.time);
+      drag.y = event.clientY;
+      drag.time = event.timeStamp;
+      const distance = Math.max(0, event.clientY - drag.startY);
+      dialog.style.transform = `translate3d(0,${Math.max(0, drag.offset + distance)}px,0)`;
+      dialog.style.setProperty("--workspace-backdrop-opacity", String(Math.max(.25, 1 - distance / drag.height)));
+    });
+    document.addEventListener("pointerup", (event) => {
+      if (!drag || drag.id !== event.pointerId) return;
+      const distance = Math.max(0, event.clientY - drag.startY);
+      const threshold = Math.min(120, Math.max(64, drag.height * .22));
+      const flick = distance >= 48 && event.timeStamp - drag.time < 80 && drag.velocity > .7;
+      if (distance >= threshold || flick) {
+        dialog.style.setProperty("--workspace-sheet-exit", `${drag.height + 24}px`);
+        // Keep the last dragged position as the start of the native close transition.
+        reset();
+        dialog.close();
+      } else reset();
+    });
+    document.addEventListener("pointercancel", (event) => { if (drag?.id === event.pointerId) reset(); });
+    header.addEventListener("lostpointercapture", (event) => { if (drag?.id === event.pointerId) reset(); });
+    window.addEventListener("resize", () => { if (drag) reset(); });
+    window.addEventListener("blur", () => { if (drag) reset(); });
+    document.addEventListener("visibilitychange", () => { if (document.hidden && drag) reset(); });
+    return reset;
+  }
   function setupWorkspaceLauncher() {
     if (!workspaceTrigger || typeof HTMLDialogElement === "undefined" || !HTMLDialogElement.prototype.showModal) return;
     workspaceDialog = document.createElement("dialog");
@@ -235,6 +283,7 @@
     workspaceDialog.className = "workspace-switcher";
     workspaceDialog.setAttribute("aria-labelledby", "workspace-switcher-title");
     workspaceDialog.innerHTML = '<header class="workspace-switcher-head"><div><h2 id="workspace-switcher-title">Workspaces</h2><p>Choose where to work.</p></div><button type="button" class="icon-button" aria-label="Close workspace switcher"></button></header><nav class="workspace-switcher-grid" aria-label="Choose workspace"></nav>';
+    const resetDrag = installWorkspaceSheetDrag(workspaceDialog, workspaceDialog.querySelector("header"));
     const close = workspaceDialog.querySelector("button");
     close.append(icon("close"));
     close.addEventListener("click", () => workspaceDialog.close());
@@ -284,6 +333,7 @@
       }
     });
     workspaceDialog.addEventListener("close", () => {
+      resetDrag();
       workspaceTrigger.setAttribute("aria-expanded", "false");
       if (restoreFocus && workspaceTrigger.getClientRects().length) workspaceTrigger.focus({ preventScroll: true });
     });
@@ -292,6 +342,8 @@
     chooser.closest("label").hidden = true;
     workspaceTrigger.addEventListener("click", () => {
       restoreFocus = true;
+      resetDrag();
+      workspaceDialog.style.removeProperty("--workspace-sheet-exit");
       syncWorkspaceLauncher();
       workspaceDialog.showModal();
       workspaceTrigger.setAttribute("aria-expanded", "true");

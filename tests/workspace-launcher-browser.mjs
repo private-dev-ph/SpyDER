@@ -174,6 +174,60 @@ try {
     assert.equal(await evaluate("document.activeElement.id"),'workspace-switch-trigger','Escape restores the opener');
     await delay(260);
   }
+  await command('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId);
+  async function openSheet() {
+    await evaluate("document.querySelector('#workspace-switch-trigger').click()");
+    await delay(280);
+    return evaluate(`(()=>{const d=document.querySelector('#workspace-switcher'),h=d.querySelector('header').getBoundingClientRect();return {x:h.left+h.width/2,y:h.top+12,top:d.getBoundingClientRect().top}})()`);
+  }
+  async function startDrag(point, distance) {
+    await command('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:point.x,y:point.y}]},sessionId);
+    await command('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:point.x,y:point.y+distance}]},sessionId);
+    await delay(35);
+  }
+  let dragPoint=await openSheet();
+  const originalSheetTop=dragPoint.top;
+  await startDrag(dragPoint,28);
+  const offset=await evaluate("document.querySelector('#workspace-switcher').getBoundingClientRect().top");
+  assert.ok(Math.abs(offset-dragPoint.top-28)<2,'Sheet follows the finger directly');
+  await command('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId);
+  await delay(280);
+  assert.equal(await evaluate("document.querySelector('#workspace-switcher').open && !document.querySelector('#workspace-switcher').classList.contains('workspace-sheet-dragging')"),true,'Short pull rebounds without dismissal');
+  assert.ok(Math.abs(await evaluate("document.querySelector('#workspace-switcher').getBoundingClientRect().top")-dragPoint.top)<1,'Rebound restores the original sheet position');
+  await startDrag(dragPoint,40);
+  await command('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]},sessionId);
+  await delay(280);
+  assert.equal(await evaluate("document.querySelector('#workspace-switcher').open && !document.querySelector('#workspace-switcher').classList.contains('workspace-sheet-dragging')"),true,'Cancelled pointer gesture settles safely');
+  await startDrag(dragPoint,160);
+  await command('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId);
+  await until("!document.querySelector('#workspace-switcher').open && document.querySelector('#workspace-switch-trigger').getAttribute('aria-expanded')==='false'");
+  assert.equal(await evaluate("document.activeElement.id"),'workspace-switch-trigger','Drag dismissal restores focus to the launcher');
+  assert.equal(await evaluate("location.hash"),'#control-room','Dragging does not navigate');
+  await delay(280);
+  dragPoint=await openSheet();
+  assert.ok(Math.abs(dragPoint.top-originalSheetTop)<1,'Reopening clears dismissal translation');
+  await startDrag(dragPoint,64);
+  await command('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId);
+  await until("!document.querySelector('#workspace-switcher').open");
+  await delay(280);
+  await command('Emulation.setDeviceMetricsOverride',{width:667,height:320,deviceScaleFactor:1,mobile:true},sessionId);
+  await openSheet();
+  const scrollStart=await evaluate(`(()=>{const n=document.querySelector('.workspace-switcher-grid'),r=n.getBoundingClientRect();n.scrollTop=0;return {x:r.left+r.width/2,y:r.bottom-16}})()`);
+  await command('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[scrollStart]},sessionId);
+  await command('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:scrollStart.x,y:scrollStart.y-70}]},sessionId);
+  await command('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId);
+  await delay(150);
+  assert.equal(await evaluate("document.querySelector('.workspace-switcher-grid').scrollTop>0 && document.querySelector('#workspace-switcher').open && !document.querySelector('#workspace-switcher').classList.contains('workspace-sheet-dragging')"),true,'Workspace list still scrolls without starting dismissal');
+  await evaluate("document.querySelector('#workspace-switcher').close()");
+  await delay(280);
+  await command('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId);
+  dragPoint=await openSheet();
+  await command('Input.dispatchMouseEvent',{type:'mouseMoved',x:dragPoint.x,y:dragPoint.y},sessionId);
+  await command('Input.dispatchMouseEvent',{type:'mousePressed',x:dragPoint.x,y:dragPoint.y,button:'left',clickCount:1},sessionId);
+  await command('Input.dispatchMouseEvent',{type:'mouseMoved',x:dragPoint.x,y:dragPoint.y+160,buttons:1},sessionId);
+  await command('Input.dispatchMouseEvent',{type:'mouseReleased',x:dragPoint.x,y:dragPoint.y+160,button:'left',clickCount:1},sessionId);
+  await until("!document.querySelector('#workspace-switcher').open");
+  await delay(280);
   for(const [width,height] of [[320,568],[390,700],[667,320],[768,1024]]){
     await command('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true},sessionId);
     await evaluate("document.querySelector('#workspace-switch-trigger').click()");
@@ -208,8 +262,14 @@ try {
   await command('Emulation.setDeviceMetricsOverride',{width:375,height:800,deviceScaleFactor:1,mobile:true},sessionId);
   await command('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]},sessionId);
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#workspace-switcher')).transitionDuration"),'0s','Reduced motion disables sheet animation');
+  await command('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId);
+  dragPoint=await openSheet();
+  await startDrag(dragPoint,24);
+  await command('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId);
+  assert.equal(await evaluate("document.querySelector('#workspace-switcher').open && getComputedStyle(document.querySelector('#workspace-switcher')).transform==='none'"),true,'Reduced motion rebounds immediately while preserving drag control');
+  await evaluate("document.querySelector('#workspace-switcher').close()");
   assert.equal(networkPaths.some(url=>url.startsWith('/api/')),false,'Static workspace navigation makes no native API calls');
-  console.log('PASS: themed mobile workspace launcher, all routes, keyboard focus, Escape, small/short screens, desktop resize, and showcase isolation');
+  console.log('PASS: workspace launcher, touch/mouse drag dismissal, rebound, cancellation, flick, independent scrolling, focus, all routes, themes, reduced motion and showcase isolation');
 } finally {
   socket?.close();
   chrome.kill();
