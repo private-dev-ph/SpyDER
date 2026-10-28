@@ -2,6 +2,7 @@
 (() => {
   const TYPES = {
     camera: { label: "Camera", params: { camera_id: "" } },
+    browser_motion: { label: "Browser motion", params: { threshold: 0.1 } },
     model: { label: "Model", params: { model_id: "builtin-scrfd-500mf" } },
     classifier: {
       label: "Classifier",
@@ -62,7 +63,7 @@
     subflow_output: { label: "Workflow output", params: {} },
   };
   const NODE_GROUPS = [
-    { label: "Inputs & models", types: ["camera", "model", "classifier"] },
+    { label: "Inputs & models", types: ["camera", "browser_motion", "model", "classifier"] },
     {
       label: "Vision & conditions",
       types: ["detections", "filter", "zone", "count"],
@@ -385,6 +386,8 @@
   const outputType = (n) =>
     n?.type === "camera"
       ? "camera"
+      : n?.type === "browser_motion"
+        ? "detections"
       : n?.type === "model"
         ? "model"
         : n?.type === "classifier"
@@ -425,7 +428,9 @@
       return false;
     return (
       input === outputType(source) &&
-      (target.type === "detections"
+      (target.type === "browser_motion"
+        ? input === "camera"
+        : target.type === "detections"
         ? ["camera", "model", "classifier", "detections"].includes(input) &&
           (input !== "classifier" || target.params?.engine === "insightface")
         : target.type === "preview"
@@ -616,6 +621,8 @@
       errors.push("Workflow can contain at most 128 connections.");
     for (const n of nodes) {
       if (!TYPES[n.type]) errors.push(`Unknown node type: ${n.type}`);
+      if (n.type === "browser_motion" && (!Number.isFinite(+n.params?.threshold) || +n.params.threshold < 0 || +n.params.threshold > 1))
+        errors.push(`Browser motion ${n.id} threshold must be between 0 and 1.`);
       if (
         n.type === "subflow_input" &&
         n.params &&
@@ -797,6 +804,34 @@
       edges: nodes.slice(1).map((n, i) => ({ from: nodes[i].id, to: n.id })),
     };
   }
+  function browserMotionTemplate({ cameraId = "" } = {}) {
+    const nodes = [
+      node("camera", 40, 90),
+      node("browser_motion", 280, 90),
+      node("cooldown", 520, 90),
+      node("event", 760, 90),
+    ];
+    nodes[0].params.camera_id = cameraId;
+    nodes[1].params.threshold = 0.1;
+    nodes[2].params.seconds = 10;
+    Object.assign(nodes[3].params, {
+      message: "Motion detected in browser clip",
+      name_pattern: "Motion · {camera} · {date} {time}",
+      attachment: "capture",
+    });
+    return {
+      id: `workflow-${Math.random().toString(36).slice(2, 14)}`,
+      name: "Browser clip motion event",
+      enabled: false,
+      camera_ids: cameraId ? [cameraId] : [],
+      nodes,
+      edges: nodes.slice(1).map((next, index) => ({
+        from: nodes[index].id,
+        to: next.id,
+        ...(nodes[index].type === "camera" ? { input: "camera" } : {}),
+      })),
+    };
+  }
   function insightfaceTemplate({
     cameraId = "",
     modelId = "",
@@ -961,14 +996,28 @@
       setup:
         "Select target cameras after loading. This template observes their existing InsightFace pipeline; it does not install or select a detector model.",
     },
+    {
+      id: "browser-clip-motion",
+      name: "Browser clip motion event",
+      category: "Browser showcase",
+      engine: "Browser motion fraction",
+      description:
+        "Create a local event and frame capture when visible motion crosses a threshold in an imported browser clip.",
+      purpose: "Review motion from a local clip without a vision model",
+      details: "10s cooldown · frame capture attached",
+      requirements: ["Browser showcase", "Imported local clip", "Camera running"],
+      setup:
+        "Choose the imported clip in Camera. Start that camera before enabling. This uses the showcase motion fraction and canvas frame only; it does not identify faces or objects.",
+      showcaseOnly: true,
+    },
   ];
-  function templateEntries(query = "") {
+  function templateEntries(query = "", demo = false) {
     const words = String(query)
       .trim()
       .toLowerCase()
       .split(/\s+/)
       .filter(Boolean);
-    return TEMPLATE_CATALOG.filter((entry) =>
+    return TEMPLATE_CATALOG.filter((entry) => (demo || !entry.showcaseOnly) &&
       words.every((word) =>
         [
           entry.name,
@@ -986,6 +1035,7 @@
     );
   }
   function createWorkflowTemplate(id, context = {}) {
+    if (id === "browser-clip-motion") return browserMotionTemplate(context);
     if (id === "pre-event-person") return preEventTemplate(context);
     if (id === "insightface-alert")
       return insightfaceTemplate({ classifierId: "", ...context });
@@ -1127,7 +1177,15 @@
           .replace(/^\s*<p[^>]*>/, "")
           .replace(/<\/p>$/, "");
         const help =
-          (Object.hasOwn(FIELD_HELP, key) ? FIELD_HELP[key] : "") ||
+          (node?.type === "browser_motion" && key === "threshold"
+            ? "Minimum real motion fraction from the current browser camera source. Accepts 0 to 1. This source does not detect or identify faces or objects."
+            : node?.type === "cooldown" && key === "seconds"
+              ? `${FIELD_HELP.seconds} Browser showcase also limits each workflow and camera to one action batch per second.`
+              : node?.type === "record" && key === "action"
+                ? `${FIELD_HELP.action} In browser showcase, recording uses nearest connected Event duration, or 10 seconds by default, and stops only the workflow-owned session.`
+            : Object.hasOwn(FIELD_HELP, key)
+              ? FIELD_HELP[key]
+              : "") ||
           `Set ${caption}. ${control[1] === "select" ? "Choose an available option." : "Enter a value matching this field."}`;
         return decorate(
           `<div class="we-help-field"><label${attributes}>${guided}</label><button type="button" class="we-help-button" data-field-help="${id}" aria-label="Help for ${escape(caption)}" aria-expanded="false" aria-controls="${id}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".8" fill="currentColor" stroke="none"/></svg></button><div class="we-field-tooltip" id="${id}" role="tooltip" hidden><strong>${escape(caption)}</strong><span>${escape(help)}</span>${details ? `<span>${details}</span>` : ""}${example}</div></div>`,
@@ -1681,14 +1739,32 @@
             return true;
           },
           onToggle: async (id, enabled, confirm) => {
-            if (demo)
-              throw Error("Workflow execution is disabled in showcase mode.");
+            if (demo) {
+              const saved = await storedWorkflow(id);
+              if (!current()) return false;
+              if (enabled) {
+                const errors = validate(saved),
+                  capability = window.spyderDemoWorkflowRuntime?.inspect?.(saved);
+                if (errors.length || !capability?.supported)
+                  throw Error([...errors, ...(capability?.errors || ["Browser workflow runtime is unavailable."])].join(" "));
+                await window.spyderDemoWorkflowRuntime.enable(saved);
+              } else await window.spyderDemoWorkflowRuntime.disable(id);
+              if (!current()) return false;
+              const page = await window.spyderWorkflowStore.page({ size: 1 });
+              workflowCounts = page.counts || workflowCounts;
+              if (id === graph.id) graph.enabled = enabled;
+              workflows = [...workflows.filter((item) => item.id !== id), { ...saved, enabled }];
+              render(true);
+              return true;
+            }
             if (!current() || busy || activationBusy || activationReview)
               return false;
             activationBusy = true;
             try {
               const saved = await storedWorkflow(id);
               if (!current()) return false;
+              if (saved.nodes.some((node) => node.type === "browser_motion"))
+                throw Error("Browser motion nodes run only in the browser showcase. Replace this node before enabling in the installed app.");
               const workflow = { ...clone(saved), enabled };
               let disableMotion = false;
               if (enabled) {
@@ -2106,10 +2182,11 @@
               ...group,
               types: group.types.filter(
                 (type) =>
-                  subflowEditing ||
-                  workflowExecution(graph).allow_calls ||
-                  graph.nodes.some((item) => item.type === "subflow_input") ||
-                  !["subflow_input", "subflow_output"].includes(type),
+                  (demo || type !== "browser_motion") &&
+                  (subflowEditing ||
+                    workflowExecution(graph).allow_calls ||
+                    graph.nodes.some((item) => item.type === "subflow_input") ||
+                    !["subflow_input", "subflow_output"].includes(type)),
               ),
             }))
             .filter((group) => group.types.length)
@@ -2609,6 +2686,8 @@
         changed();
       }
       function nodeSummary(n) {
+        if (n.type === "browser_motion")
+          return `Motion fraction ≥ ${Number(n.params?.threshold ?? 0.1).toFixed(2)}`;
         if (
           n.type === "filter" &&
           n.params.rules?.some((r) => r.operator === "is_unknown")
@@ -2671,7 +2750,7 @@
         return `<svg class="we-template-thumbnail" viewBox="0 0 ${width} ${height}" aria-hidden="true" focusable="false"><g class="we-template-wires">${wires}</g>${sample.nodes.map((n) => `<g class="we-template-mini ${n.type === "event" || n.type === "notification" ? "is-action" : ""}"><rect x="${n.x}" y="${n.y}" width="160" height="64" rx="12"/><circle cx="${n.x}" cy="${n.y + 32}" r="5"/><circle cx="${n.x + 160}" cy="${n.y + 32}" r="5"/><text x="${n.x + 80}" y="${n.y + 38}" text-anchor="middle">${esc(TYPES[n.type].label)}</text></g>`).join("")}</svg>`;
       }
       function templateRows() {
-        const entries = templateEntries(templateQuery);
+        const entries = templateEntries(templateQuery, demo);
         return `<p class="we-template-count" role="status">${entries.length} ${entries.length === 1 ? "template" : "templates"}</p>${entries.map((entry) => `<article class="we-template-row" aria-labelledby="we-template-${entry.id}"><div class="we-template-preview">${templateThumbnail(entry)}<span>${esc(entry.category)}</span></div><div class="we-template-copy"><h4 id="we-template-${entry.id}">${esc(entry.name)}</h4><p>${esc(entry.description)}</p><p class="we-template-purpose"><strong>Best for:</strong> ${esc(entry.purpose)}</p><p class="we-template-timing">${esc(entry.details)} · ${createWorkflowTemplate(entry.id, templateContext()).nodes.length} nodes</p><ul class="we-template-requirements" aria-label="Requirements">${entry.requirements.map((value) => `<li>${esc(value)}</li>`).join("")}</ul><p class="we-template-setup">${esc(entry.setup)}</p></div><button type="button" class="button primary" data-load-template="${entry.id}" aria-label="Load ${esc(entry.name)}">Load template</button></article>`).join("") || '<p class="we-template-empty">No templates match. Try “recording”, “face”, or “InsightFace”.</p>'}`;
       }
       function templatePanel() {
@@ -2793,7 +2872,9 @@
         return (
           identitySourceField +
           (n.type === "notification"
-            ? `<section class="we-notification-delivery"><h4>PC / browser notifications</h4><p data-notification-status role="status">${esc(window.spyderNotifications?.desktopStatus?.() || "Desktop permission is requested when this Notification node is used.")}</p><button class="button secondary" data-notification-permission ${demo ? "disabled" : ""}>${window.spyderNotifications?.desktopEnabled?.() ? "Disable desktop alerts" : "Enable desktop alerts"}</button><button class="button secondary" data-notification-test ${demo ? "disabled" : ""}>Send test notification</button><p>Allow browser notifications to receive operating-system alerts while SpyDER is unfocused. Keep a SpyDER page open and disable pause when unfocused in System settings for continuous monitoring. In-app alerts remain available if permission is blocked.</p></section>`
+            ? demo
+              ? '<section class="we-notification-delivery"><h4>In-app notifications</h4><p role="status">Browser showcase displays alerts inside this page. Desktop notifications are unavailable.</p></section>'
+              : `<section class="we-notification-delivery"><h4>PC / browser notifications</h4><p data-notification-status role="status">${esc(window.spyderNotifications?.desktopStatus?.() || "Desktop permission is requested when this Notification node is used.")}</p><button class="button secondary" data-notification-permission>${window.spyderNotifications?.desktopEnabled?.() ? "Disable desktop alerts" : "Enable desktop alerts"}</button><button class="button secondary" data-notification-test>Send test notification</button><p>Allow browser notifications to receive operating-system alerts while SpyDER is unfocused. Keep a SpyDER page open and disable pause when unfocused in System settings for continuous monitoring. In-app alerts remain available if permission is blocked.</p></section>`
             : "") +
           Object.entries(n.params || {})
             .filter(([k]) => !["rules", "match"].includes(k))
@@ -2859,7 +2940,7 @@
               if (n.type === "event" && k === "name_pattern")
                 return `<label>Event name pattern<input data-param="name_pattern" maxlength="200" value="${esc(v)}"></label><p>Tokens: {workflow}, {camera}, {date}, {time}, {node}, {kind}, {label}. Unknown tokens stay literal.</p>`;
               if (n.type === "event" && k === "attachment")
-                return `<label>Attachment<select data-param="attachment"><option value="none" ${v === "none" ? "selected" : ""}>None</option><option value="capture" ${v === "capture" ? "selected" : ""}>Capture</option><option value="recording" ${v === "recording" ? "selected" : ""}>Recording</option></select></label><p>Clips need an idle recorder. Existing recordings are never interrupted.</p>`;
+                return `<label>Attachment<select data-param="attachment"><option value="none" ${v === "none" ? "selected" : ""}>None</option><option value="capture" ${v === "capture" ? "selected" : ""}>Capture</option><option value="recording" ${demo ? "disabled" : ""} ${v === "recording" ? "selected" : ""}>Recording${demo ? " · installed app only" : ""}</option></select></label><p>${demo ? "Browser showcase attaches real frame captures. For timed video, connect a Record node; workflow never takes over a manual recording." : "Clips need an idle recorder. Existing recordings are never interrupted."}</p>`;
               if (n.type === "event" && k === "duration_seconds")
                 return `<label>After trigger (seconds)<input data-param="duration_seconds" type="number" min="1" max="300" step="1" value="${esc(v)}"></label>`;
               if (n.type === "event" && k === "pre_event_seconds")
@@ -3112,7 +3193,7 @@
                 )}</ul><details class="we-validation-nodes"><summary>Review workflow nodes</summary>${graph.nodes.map((item) => `<button type="button" class="button secondary" data-focus-node="${esc(item.id)}">${esc(TYPES[item.type]?.label || item.type)} · ${esc(item.id)}</button>`).join(" ")}</details>`
             : ""
         }<p class="we-pipeline">Camera to CAM input. Model to MODEL input. Detection data to DATA input. Outputs accept multiple branches. One active model pipeline per camera; conflicting assignments are rejected.</p></div>`;
-        root.innerHTML = `<h1 class="sr-only">Models &amp; workflows</h1><div class="we-studio-toolbar">${menu}<div class="we-studio-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><small data-draft-state>${dirty ? "Unsaved changes" : workflows.some((item) => item.id === graph.id) ? "Saved" : "Draft"}${demo ? " · Browser showcase" : " · Local runtime"}</small></div><div class="we-studio-primary"><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "primary" : "secondary"}" data-activate ${demo || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Independent execution enabled" : "Independent execution disabled"}</strong></div></div></div></div>${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}${demo ? '<p class="we-demo" role="status">Demo editing only. Draft saves stay in this browser. Execution disabled.</p>' : ""}<div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><section class="we-workspace"><div class="we-canvas-tools"><div class="we-studio-tools"><button type="button" class="button primary" data-studio-open="nodes" aria-haspopup="dialog">+ Add node</button><button type="button" class="button secondary" data-studio-open="models" aria-haspopup="dialog">Models</button><button type="button" class="button secondary" data-studio-open="inspector" aria-haspopup="dialog">Inspect node</button></div></div>${
+        root.innerHTML = `<h1 class="sr-only">Models &amp; workflows</h1><div class="we-studio-toolbar">${menu}<div class="we-studio-identity"><label>Workflow<button type="button" class="we-workflow-picker" data-workflow data-open-workflow-manager aria-haspopup="dialog" aria-label="Manage workflows. Current: ${esc(graph.name)}" ${busy || activationBusy || activationReview ? "disabled" : ""}><span data-workflow-label>${esc(graph.name)}</span><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><small data-workflow-count>${workflowCounts.total} saved · ${workflowCounts.enabled} enabled · Manage workflows</small></label><small data-draft-state>${dirty ? "Unsaved changes" : workflows.some((item) => item.id === graph.id) ? "Saved" : "Draft"}${demo ? " · Browser showcase" : " · Local runtime"}</small></div><div class="we-studio-primary"><button class="button primary" data-save ${busy || activationBusy || activationReview ? "disabled" : ""}>${busy ? "Saving…" : "Save workflow"}</button><div class="we-activation-control"><div class="we-activation-main"><button class="button ${graph.enabled ? "primary" : "secondary"}" data-activate ${(demo && !window.spyderDemoWorkflowRuntime) || !workflowExecution(graph).run_independently || busy || activationBusy || activationReview ? "disabled" : ""}>${activationBusy ? (activationStage === "checking" ? "Checking workflow…" : "Enabling workflow…") : graph.enabled ? "Disable workflow" : "Enable workflow"}</button><strong data-workflow-state>${!workflowExecution(graph).run_independently ? "Callable only" : graph.enabled ? "Browser workflow enabled" : "Independent execution disabled"}</strong></div></div></div></div>${subflowEditing ? `<div class="we-subflow-breadcrumb"><span>Editing called workflow: ${esc(graph.name)} · ${subflowEditing.version ? `v${esc(subflowEditing.version)}` : "draft"}</span><button class="button secondary" data-subflow-back>${subflowParents.at(-1)?.editing ? "Return to parent workflow" : "Return to workflow"}</button></div>` : ""}${demo ? '<p class="we-demo" role="status">Browser showcase runs local motion workflows on imported clips. Vision models, code, and subflows are unavailable.</p>' : ""}<div class="we-activation-status ${activationError ? "is-error" : ""}" data-activation-status role="${activationError ? "alert" : "status"}" tabindex="-1" ${activationMessage ? "" : "hidden"}>${esc(activationMessage)}</div><div class="we-main"><section class="we-workspace"><div class="we-canvas-tools"><div class="we-studio-tools"><button type="button" class="button primary" data-studio-open="nodes" aria-haspopup="dialog">+ Add node</button><button type="button" class="button secondary" data-studio-open="models" aria-haspopup="dialog">Models</button><button type="button" class="button secondary" data-studio-open="inspector" aria-haspopup="dialog">Inspect node</button></div></div>${
           reconnectChoice
             ? `<div class="we-reconnect-choice" role="status"><b>Drag the connection to move its IN end:</b>${graph.edges
                 .filter(
@@ -3260,6 +3341,10 @@
         },
         add = (type, x, y) => {
           if (!TYPES[type] || graph.nodes.length >= 64) return;
+          if (type === "browser_motion" && !demo) {
+            issue("Browser motion nodes run only in the browser showcase.");
+            return;
+          }
           if (type === "notification" && !demo)
             window.spyderNotifications?.useNode?.();
           const wrap = root.querySelector(".we-canvas-wrap");
@@ -3358,7 +3443,7 @@
             : "Enable workflow";
           button.className = `button ${graph.enabled ? "primary" : "secondary"}`;
           button.disabled = !!(
-            demo ||
+            (demo && !window.spyderDemoWorkflowRuntime) ||
             !workflowExecution(graph).run_independently ||
             busy ||
             activationBusy ||
@@ -3474,11 +3559,46 @@
       }
       async function activate(candidate = graph) {
         if (demo) {
-          activationStatus("Workflow execution is disabled in showcase mode.");
+          if (busy || activationBusy || activationReview) return;
+          const workflow = clone(candidate),
+            errors = validate(workflow),
+            capability = window.spyderDemoWorkflowRuntime?.inspect?.(workflow);
+          if (errors.length || !capability?.supported) {
+            activationStatus([...errors, ...(capability?.errors || ["Browser workflow runtime is unavailable."])].join(" "), true);
+            render();
+            focusActivationError();
+            return;
+          }
+          activationBusy = true;
+          activationStage = "enabling";
+          activationStatus("Enabling browser workflow…");
+          try {
+            render();
+            workflow.enabled = true;
+            const saved = await window.spyderDemoWorkflowRuntime.enable(workflow);
+            if (!mounted) return;
+            graph = clone(saved);
+            workflows = [...workflows.filter((item) => item.id !== saved.id), saved];
+            workflowCounts = (await window.spyderWorkflowStore.page({ size: 1 })).counts || workflowCounts;
+            dirty = false;
+            activationStatus("Browser workflow enabled. Motion comes from camera clip frame analysis.");
+          } catch (error) {
+            if (mounted) activationStatus(error.message, true);
+          } finally {
+            activationBusy = false;
+            activationStage = "";
+            if (mounted) { render(); focusActivationError(); }
+          }
           return;
         }
         if (busy || activationBusy || activationReview) return;
         const workflow = clone(candidate);
+        if (workflow.nodes.some((item) => item.type === "browser_motion")) {
+          activationStatus("Browser motion nodes run only in the browser showcase. Replace this node before activating in the installed app.", true);
+          render();
+          focusActivationError();
+          return;
+        }
         const errors = validate(workflow);
         if (errors.length) {
           activationStatus(errors.join(" "), true);
@@ -3553,7 +3673,24 @@
         }
       }
       async function deactivate() {
-        if (demo || busy || activationBusy || activationReview) return;
+        if (busy || activationBusy || activationReview) return;
+        if (demo) {
+          if (!window.spyderDemoWorkflowRuntime) return;
+          activationBusy = true;
+          try {
+            const disabled = await window.spyderDemoWorkflowRuntime.disable(graph.id);
+            if (disabled) graph = clone(disabled);
+            workflows = workflows.filter((item) => item.id !== graph.id);
+            workflowCounts = (await window.spyderWorkflowStore.page({ size: 1 })).counts || workflowCounts;
+            activationStatus("Browser workflow disabled.");
+          } catch (error) {
+            activationStatus(error.message, true);
+          } finally {
+            activationBusy = false;
+            if (mounted) render();
+          }
+          return;
+        }
         const workflow = clone(graph),
           revision = graphRevision;
         workflow.enabled = false;
@@ -3581,6 +3718,10 @@
         }
       }
       async function save() {
+        if (!demo && graph.nodes.some((item) => item.type === "browser_motion")) {
+          issue("Browser motion nodes run only in the browser showcase. Remove this node before saving in the installed app.");
+          return;
+        }
         if (
           !graph.execution &&
           graph.nodes.some((item) =>
@@ -3607,7 +3748,7 @@
         if (demo) {
           if (!window.spyderWorkflowStore) {
             mark();
-            issue("Draft saved in this browser. Execution disabled.");
+            issue("Draft saved in this browser. Workflow execution runtime is unavailable.");
             return;
           }
           if (busy) return;
@@ -3639,7 +3780,7 @@
             const choices =
               await window.spyderWorkflowTools?.listSubflows?.(true);
             if (choices) subflowCatalog = choices;
-            issue("Workflow saved in this browser. Execution disabled.");
+            issue("Workflow saved in this browser.");
           } catch (error) {
             if (mounted) issue(error.message);
           } finally {
