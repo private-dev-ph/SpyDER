@@ -188,12 +188,12 @@ try {
   await delay(180);
   const hover=await evaluate("(()=>{const c=document.querySelector('.camera-card');c.scrollIntoView({block:'center'});const r=c.querySelector('.video-stage').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+15}})()");
   await command('Input.dispatchMouseEvent',{type:'mouseMoved',...hover},sessionId);
-  await delay(180);
+  await until("getComputedStyle(document.querySelector('.camera-footer')).opacity==='1'");
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.camera-footer')).opacity"),'1','Desktop hover still reveals the footer');
   assert.equal(await evaluate("document.querySelector('.camera-controls-toggle').checkVisibility()"),false,'Desktop does not add a tap overlay');
   await command('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2},sessionId);
   await evaluate("document.activeElement.blur()");
-  await delay(180);
+  await until("getComputedStyle(document.querySelector('.camera-footer')).opacity==='0'");
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.camera-footer')).opacity"),'0','Desktop pointer leave hides the footer');
   assert.equal(networkPaths.some(url=>url.startsWith('/api/')),false);
   console.log('PASS: touch reveal/hide, one feed at a time, outside dismissal, keyboard, settings focus, reorder handles, route reset, and desktop hover');

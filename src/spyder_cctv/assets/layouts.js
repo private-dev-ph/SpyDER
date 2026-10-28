@@ -356,6 +356,13 @@
         aspects,
       );
     }
+    // Saved layouts must follow the same phone layout as the automatic wall.
+    // Keep the desktop editor preview and fullscreen geometry independent.
+    if (
+      container.id === "cameras" && !fullscreen &&
+      window.matchMedia("(max-width: 800px)").matches
+    )
+      grid = { columns: 1, rows: Math.max(1, count) };
     container.style.setProperty("--columns", grid.columns);
     container.style.setProperty("--rows", grid.rows);
     container.style.setProperty("--layout-gap", config.gap + "px");

@@ -133,10 +133,9 @@ function reflow() {
   }
   wall.style.removeProperty("--rows");
   const minimum = { auto: 330, compact: 260, large: 520 }[$("#density").value];
-  const available = Math.max(
-    1,
-    Math.floor((wall.clientWidth + 20) / (minimum + 20)),
-  );
+  const available = window.matchMedia("(max-width: 800px)").matches
+    ? 1
+    : Math.max(1, Math.floor((wall.clientWidth + 20) / (minimum + 20)));
   const rows = Math.ceil(count / available);
   const columns = Math.max(1, Math.ceil(count / rows));
   wall.style.setProperty("--columns", columns);
