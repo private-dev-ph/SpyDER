@@ -147,6 +147,27 @@ try {
   await command('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]},sessionId);
   await until("!!window.spyderWorkflows && document.querySelector('#vision-mode-content')?.childElementCount>0");
   await delay(300);
+  async function assertThemeContrast(selector) {
+    const colors=await evaluate(`(() => {
+      const root=document.documentElement, previous=root.dataset.theme, nav=document.querySelector(${JSON.stringify(selector)});
+      const results=['light','dark'].map(theme=>{
+        root.dataset.theme=theme;
+        return {theme,outside:getComputedStyle(nav.querySelector('[role=tab]')).color,
+          surface:getComputedStyle(nav).backgroundColor,inside:getComputedStyle(nav.querySelector('.nav-contrast-layer > span')).color,
+          indicator:getComputedStyle(nav,'::before').backgroundColor};
+      });
+      if(previous===undefined)delete root.dataset.theme;else root.dataset.theme=previous;
+      return results;
+    })()`);
+    const luminance=color=>color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+    const ratio=(a,b)=>{const l=[luminance(a),luminance(b)].sort((x,y)=>y-x);return (l[0]+.05)/(l[1]+.05)};
+    for(const color of colors){
+      assert.ok(ratio(color.outside,color.surface)>=4.5,selector+' '+color.theme+' outside text is readable');
+      assert.ok(ratio(color.inside,color.indicator)>=4.5,selector+' '+color.theme+' covered text is readable');
+      assert.ok(luminance(color.inside)-luminance(color.outside)>.3,selector+' '+color.theme+' crossing the indicator visibly brightens the text');
+    }
+  }
+  await assertThemeContrast('.vision-nav');
   const contrast=await evaluate(`(async()=>{
     const nav=document.querySelector('.vision-nav'), layer=nav.querySelector('.nav-contrast-layer');
     if(!layer)return {exists:false};
@@ -238,6 +259,7 @@ try {
   assert.equal(await evaluate('mountCalls'),rapid,'Rapid retargeting cancels obsolete expensive mounts');
   await evaluate("document.querySelector('#vision-workflow-tab').click();location.hash='system'");
   await until("!!document.querySelector('.system-nav')");
+  await assertThemeContrast('.system-nav');
   for(const width of [1280,390]){
     await command('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false},sessionId);
     await delay(400);

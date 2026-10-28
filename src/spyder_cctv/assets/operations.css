@@ -428,7 +428,12 @@
 main:has(.vision-nav) { padding: 8px 12px; }
 #workspace-page:has(.vision-nav) > .page-heading { display: none; }
 #workspace-content:has(.vision-nav), .system-workspace { overflow-x: clip; }
-:is(.system-nav, .vision-nav) { position: relative; isolation: isolate; }
+:is(.system-nav, .vision-nav) {
+  position: relative; isolation: isolate;
+  --nav-label-color: var(--ink);
+  --nav-highlight-label-color: #fff;
+}
+:root[data-theme="dark"] :is(.system-nav, .vision-nav) { --nav-label-color: var(--muted); }
 :is(.system-nav, .vision-nav).has-nav-indicator::before {
   content: ""; position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
   width: var(--nav-width); height: var(--nav-height); border-radius: 7px;
@@ -440,7 +445,7 @@ main:has(.vision-nav) { padding: 8px 12px; }
 /* The moving indicator owns the fill; buttons must not flash a second hover/tap layer. */
 :is(.system-nav, .vision-nav).has-nav-indicator > button[aria-selected] {
   background: transparent; border-color: transparent; box-shadow: none; transform: none;
-  color: var(--ink); transition: none;
+  color: var(--nav-label-color); transition: none;
   -webkit-tap-highlight-color: transparent;
 }
 .nav-contrast-layer {
@@ -451,7 +456,7 @@ main:has(.vision-nav) { padding: 8px 12px; }
 }
 .nav-contrast-layer > span {
   position: absolute; display: flex; align-items: center; justify-content: center;
-  box-sizing: border-box; border: 1px solid transparent; color: #fff; text-align: center;
+  box-sizing: border-box; border: 1px solid transparent; color: var(--nav-highlight-label-color); text-align: center;
 }
 @media (prefers-reduced-motion: reduce) {
   :is(.system-nav, .vision-nav).has-nav-indicator::before { transition: none; }
