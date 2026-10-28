@@ -44,7 +44,8 @@
     ? "Looping clip, software camera tuning, browser motion, captures and recording. Browser-compatible workflows run in this tab. Native InsightFace/YOLO, Python code and face enrollment need the installed app; this demo does not simulate model results."
     : "A looping camera source for camera tuning, motion, workflows, automations, captures, recording and face enrollment with your locally installed models. Pan/tilt/zoom and image controls are software effects, not physical hardware.";
   section.append(label, select, video, note, credit, link, abilities);
-  input.after(section);
+  const sourceField = input.closest("label");
+  sourceField.after(section);
   let previousName = "";
   function update() {
     const clip =
@@ -63,6 +64,7 @@
   window.spyderDemoCameraPicker = {
     source: () => "demo://" + select.value,
     configure() {
+      sourceField.hidden = true;
       input.required = false;
       input.hidden = true;
       section.hidden = false;
@@ -74,6 +76,7 @@
     },
     hide() {
       section.hidden = true;
+      sourceField.hidden = false;
       video.pause();
       video.removeAttribute("src");
       video.load();

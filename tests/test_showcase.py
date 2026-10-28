@@ -26,6 +26,7 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "settings.js",
         "settings.css",
         "showcase.js",
+        "browser-demo-workflows.js",
         "demo-cameras.js",
         "demo-cameras.json",
         "demo-camera-picker.js",
@@ -110,6 +111,7 @@ def test_exported_html_references_only_bundled_assets(tmp_path):
 
     Assets().feed((output / "index.html").read_text(encoding="utf-8"))
     assert references
+    assert len(references) == len(set(references)), "Assets must load once"
     for path in references:
         assert path.startswith("/") and not path.startswith("//")
         assert (output / path.lstrip("/")).is_file(), path

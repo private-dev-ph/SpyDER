@@ -519,10 +519,10 @@
           });
           video.addEventListener("error", () => {
             if (camera.epoch === epoch) {
+              const mediaError = video.error;
               stop(camera);
               camera.state = "error";
-              camera.error =
-                "Demo clip could not load. Retry or choose another scene.";
+              camera.error = `Demo clip could not load${mediaError ? ` (${mediaError.code}: ${mediaError.message})` : ""}. Retry or choose another scene.`;
             }
           });
         } else {
@@ -723,8 +723,12 @@
       camera.sourceTime = camera.video.currentTime;
       const w = camera.video.videoWidth,
         h = camera.video.videoHeight;
-      if (w && h && canvas.height !== Math.round((640 * h) / w))
-        canvas.height = Math.round((640 * h) / w);
+      const outputWidth = camera.kind === "sample" ? Math.min(640, w) : 640;
+      if (w && h) {
+        if (canvas.width !== outputWidth) canvas.width = outputWidth;
+        const outputHeight = Math.round((outputWidth * h) / w);
+        if (canvas.height !== outputHeight) canvas.height = outputHeight;
+      }
       if (camera.kind === "sample") {
         const tune = catalog.tuning(desired(camera)),
           cw = w / tune.zoom,
@@ -1100,16 +1104,14 @@
       }
       const seeds =
         saved ??
-        catalog.cameras
-          .slice(0, 2)
-          .map((clip, i) => ({
-            id: i ? "cam-demo-south" : "cam-demo-north",
-            name: clip.name,
-            source: "demo://" + clip.id,
-            fps: 10,
-            pipeline: "motion",
-            autostart: true,
-          }));
+        catalog.cameras.slice(0, 2).map((clip, i) => ({
+          id: i ? "cam-demo-south" : "cam-demo-north",
+          name: clip.name,
+          source: "demo://" + clip.id,
+          fps: 10,
+          pipeline: "motion",
+          autostart: true,
+        }));
       for (const seed of seeds) {
         try {
           if (!catalog.find(seed.source) || !/^cam-[\w-]{1,80}$/.test(seed.id))

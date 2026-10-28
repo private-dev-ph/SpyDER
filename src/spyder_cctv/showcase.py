@@ -39,10 +39,7 @@ def export_showcase(output: Path) -> None:
         "settings.js",
         "settings.css",
         "showcase.js",
-        "demo-cameras.js",
-        "demo-cameras.json",
-        "demo-camera-picker.js",
-        "demo-camera-picker.css",
+        "browser-demo-workflows.js",
         "demo-cameras.js",
         "demo-cameras.json",
         "demo-camera-picker.js",
@@ -85,9 +82,6 @@ def export_showcase(output: Path) -> None:
         "form-controls.css",
     ):
         (output / name).write_bytes(assets.joinpath(name).read_bytes())
-    for asset in assets.iterdir():
-        if asset.name.startswith("demo-") and asset.name.endswith(".mp4"):
-            (output / asset.name).write_bytes(asset.read_bytes())
     for asset in assets.iterdir():
         if asset.name.startswith("demo-") and asset.name.endswith(".mp4"):
             (output / asset.name).write_bytes(asset.read_bytes())

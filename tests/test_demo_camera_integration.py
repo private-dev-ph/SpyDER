@@ -12,9 +12,14 @@ from spyder_cctv.config import CameraConfig, load_app_config
 
 
 def test_eight_packaged_demo_cameras_expose_jpeg_raw_frames_and_persistent_tuning(tmp_path):
-    clips = json.loads(files("spyder_cctv").joinpath("assets", "demo-cameras.json").read_text(encoding="utf-8"))["cameras"]
+    clips = json.loads(
+        files("spyder_cctv").joinpath("assets", "demo-cameras.json").read_text(encoding="utf-8")
+    )["cameras"]
     manager = CameraManager(
-        [CameraConfig(f"demo-{i}", "demo://" + c["id"], fps=5, pipeline="motion") for i, c in enumerate(clips)],
+        [
+            CameraConfig(f"demo-{i}", "demo://" + c["id"], fps=5, pipeline="motion")
+            for i, c in enumerate(clips)
+        ],
         config_path=tmp_path / "config.json",
     )
     try:
@@ -22,7 +27,7 @@ def test_eight_packaged_demo_cameras_expose_jpeg_raw_frames_and_persistent_tunin
             worker.start()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not all(w.jpeg() for w in manager.workers.values()):
-            time.sleep(.02)
+            time.sleep(0.02)
         assert all(w.jpeg() for w in manager.workers.values()), manager.statuses()
         for worker in manager.workers.values():
             frame = cv2.imdecode(np.frombuffer(worker.jpeg(), np.uint8), cv2.IMREAD_COLOR)
@@ -32,8 +37,11 @@ def test_eight_packaged_demo_cameras_expose_jpeg_raw_frames_and_persistent_tunin
             assert worker.status()["state"] == "running"
         manager.set_settings("demo-0", {"brightness": 80, "zoom": 20})
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and manager.get_worker("demo-0").settings_snapshot()["settings_state"] != "applied":
-            time.sleep(.02)
+        while (
+            time.monotonic() < deadline
+            and manager.get_worker("demo-0").settings_snapshot()["settings_state"] != "applied"
+        ):
+            time.sleep(0.02)
         snapshot = manager.get_worker("demo-0").settings_snapshot()
         assert snapshot["capabilities"]["zoom"]["implementation"] == "software"
         assert snapshot["settings_state"] == "applied"

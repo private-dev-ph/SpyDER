@@ -1,4 +1,4 @@
-// Mobile camera layout regression. Run: node tests/mobile-camera-layout-browser.mjs <showcase-dir>
+// Bundled demo camera and tiled media regression. Run: node tests/demo-camera-browser.mjs <showcase-dir>
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -39,7 +39,27 @@ const server = http.createServer(async (req, res) => {
       "Content-Type",
       mime[path.extname(name)] || "application/octet-stream",
     );
-    res.end(body);
+    res.setHeader("Accept-Ranges", "bytes");
+    const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || "");
+    if (range) {
+      const start = Number(range[1]),
+        end = range[2]
+          ? Math.min(body.length - 1, Number(range[2]))
+          : body.length - 1;
+      if (start >= body.length) {
+        res.writeHead(416, { "Content-Range": `bytes */${body.length}` });
+        res.end();
+        return;
+      }
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${body.length}`,
+        "Content-Length": end - start + 1,
+      });
+      res.end(body.subarray(start, end + 1));
+    } else {
+      res.setHeader("Content-Length", body.length);
+      res.end(body);
+    }
   } catch {
     res.writeHead(404).end();
   }
@@ -108,7 +128,7 @@ try {
     });
   }
   const { targetId } = await command("Target.createTarget", {
-    url: `http://127.0.0.1:${server.address().port}/#control-room`,
+    url: "about:blank",
   });
   const { sessionId } = await command("Target.attachToTarget", {
     targetId,
@@ -131,7 +151,7 @@ try {
       await delay(100);
     }
     const state = await evaluate(
-      "({ready:document.readyState,workflow:!!window.spyderWorkflows,app:!!window.spyder,cameras:window.spyder?.cameras?.().length,text:document.body.innerText.slice(0,500)})",
+      "(async()=>({ready:document.readyState,workflow:!!window.spyderWorkflows,app:!!window.spyder,cameras:await window.spyderShowcase?.fetch('/api/cameras').then(r=>r.json()),formError:document.querySelector('#form-error')?.textContent,text:document.body.innerText.slice(0,500)}))()",
     );
     throw new Error(
       "Timed out: " +
@@ -143,7 +163,18 @@ try {
     );
   }
 
+  await command("Page.enable", {}, sessionId);
+  await command(
+    "Emulation.setFocusEmulationEnabled",
+    { enabled: true },
+    sessionId,
+  );
   await command("Page.bringToFront", {}, sessionId);
+  await command(
+    "Page.navigate",
+    { url: `http://127.0.0.1:${server.address().port}/#control-room` },
+    sessionId,
+  );
   await until(
     "window.spyder && spyder.cameras().length===2 && spyder.cameras().every(c=>c.state==='running')",
   );
@@ -197,6 +228,17 @@ try {
     media.items.some((i) => i.kind === "recording" && i.size_bytes > 0),
     JSON.stringify(media),
   );
+  const playback = await evaluate(`new Promise((resolve,reject)=>{
+    const video=document.createElement('video');video.muted=true;video.playsInline=true;
+    const timeout=setTimeout(()=>finish(new Error('Recorded tile video did not decode')),8000);
+    function finish(error){clearTimeout(timeout);const result={width:video.videoWidth,height:video.videoHeight};video.pause();video.removeAttribute('src');video.load();error?reject(error):resolve(result);}
+    video.onloadeddata=()=>finish();video.onerror=()=>finish(new Error('Recorded tile video is invalid'));
+    video.src=${JSON.stringify(media.items.find((i) => i.kind === "recording").url)};video.load();
+  })`);
+  assert.ok(
+    playback.width > 0 && playback.height > 0,
+    "Recorded tiled video decodes",
+  );
   await delay(8500);
   assert.ok(
     (await list()).every((c) => c.state === "running" && c.frames > 20),
@@ -218,7 +260,16 @@ try {
     await evaluate("document.documentElement.scrollWidth<=innerWidth"),
     true,
   );
-  await evaluate("document.querySelector('#add-dialog').close()");
+  const last = (await list()).at(-1).id;
+  await evaluate(`spyderShowcase.request('/api/cameras/${last}/remove')`);
+  await evaluate(
+    "document.querySelector('#demo-clip-source').value='front-yard-walk';document.querySelector('#demo-clip-source').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#camera-name').value='UI demo camera';document.querySelector('#camera-autostart').checked=true;document.querySelector('#connect-camera').click()",
+  );
+  await until(
+    "document.querySelector('#add-dialog').open===false && spyderShowcase.fetch('/api/cameras').then(r=>r.json()).then(cs=>cs.length===8&&cs.every(c=>c.state==='running'))",
+  );
+  ids.splice(0, ids.length, ...(await list()).map((c) => c.id));
+
   await evaluate("location.reload()");
   await until(
     "window.spyderShowcase && spyderShowcase.fetch('/api/cameras').then(r=>r.json()).then(cs=>cs.length===8&&cs.every(c=>c.state==='running'))",
@@ -237,11 +288,27 @@ try {
     "PASS: eight real demo cameras loop, tune, capture, record, persist, fit mobile and use no server APIs.",
   );
 } finally {
+  assert.ok(
+    path
+      .resolve(profile)
+      .startsWith(path.join(os.tmpdir(), "spyder-demo-cameras-")),
+    "Only close this test browser profile",
+  );
   socket?.close();
-  chrome.kill();
+  if (process.platform === "win32" && chrome.exitCode === null) {
+    await new Promise((resolve) => {
+      const killer = spawn(
+        "taskkill",
+        ["/PID", String(chrome.pid), "/T", "/F"],
+        { windowsHide: true, stdio: "ignore" },
+      );
+      killer.once("exit", resolve);
+      killer.once("error", resolve);
+    });
+  } else chrome.kill();
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
-  await delay(200);
+  await delay(300);
   await rm(profile, {
     recursive: true,
     force: true,

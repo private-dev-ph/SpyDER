@@ -16,6 +16,12 @@ Two sample cameras start on a fresh demo. Add the other scenes through Add camer
 
 The browser uses frame-difference motion analysis, not native MOG2. Browser-compatible workflow nodes can act on these frames; unsupported model/Python/native-only nodes must be rejected when enabling, with an explanation. Native InsightFace/YOLO execution, face-gallery enrollment, ONVIF and physical PTZ require the installed application. Adding a sample source does not install a browser ONNX/InsightFace engine or invent face identities. This source foundation keeps that future adapter work separate from camera playback.
 
+## Try a browser workflow
+
+In Vision Lab, open the template picker and load **Browser clip motion event**. Choose a running sample camera, adjust the Browser motion threshold, then enable the workflow. A Camera → Browser motion → Cooldown → Event chain creates entries in Events. An Event can attach a current-frame capture; Capture and Record nodes can create local media. Notifications appear inside the application. Multiple supported workflows can share one camera's decoded frames.
+
+The browser runtime accepts Camera, Browser motion, Cooldown, Event, Notification, Capture and Record nodes. It validates the graph before enabling it and explains unsupported nodes. Browser motion is a showcase-only source; installed workflows retain the native detection engines. Workflow edits disable the running saved graph until it is enabled again. Event metadata persists in this browser, but attached Blob images and recordings last only for the current tab session. Download media before reloading.
+
 ## Source characteristics
 
 Clips are eight seconds, silent, 15fps, 360px high and aspect-ratio preserving. Original camera watermarks and timestamps remain; timestamps are archival, not current. Loops restart at the cut without reversed action or blended ghost frames. That cut can trigger motion detection and should be considered when testing thresholds. Some cameras share a source recording and show different views of the same property. They are not eight separate homes.
