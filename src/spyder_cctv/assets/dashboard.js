@@ -26,6 +26,7 @@ const removeDialog = $("#remove-dialog");
 function makeIcon(name) {
   const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   icon.classList.add("icon");
+  icon.setAttribute("viewBox", "0 0 24 24");
   icon.setAttribute("aria-hidden", "true");
   icon.setAttribute("focusable", "false");
   const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
@@ -59,13 +60,56 @@ function setTheme(theme) {
     theme === "dark" ? "#141313" : "#f7f5ef",
   );
 }
-setTheme(readPreference("spyder-theme", "light") === "dark" ? "dark" : "light");
-$("#theme").addEventListener("click", () => {
-  const theme =
-    document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  setTheme(theme);
+let requestedTheme = readPreference("spyder-theme", "light") === "dark" ? "dark" : "light";
+let themeTransition = null, themeFallbackTimer = null, themeVersion = 0;
+const themeMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+setTheme(requestedTheme);
+function changeTheme(theme) {
+  requestedTheme = theme;
   savePreference("spyder-theme", theme);
-});
+  const root = document.documentElement, version = ++themeVersion;
+  themeTransition?.skipTransition();
+  themeTransition = null;
+  clearTimeout(themeFallbackTimer);
+  if (themeMotion?.matches || document.hidden) {
+    root.classList.remove("theme-transition", "theme-color-transition");
+    setTheme(theme);
+    return;
+  }
+  if (typeof document.startViewTransition === "function") {
+    root.classList.remove("theme-color-transition");
+    root.classList.add("theme-transition");
+    try {
+      const transition = document.startViewTransition(() => { if (version === themeVersion) setTheme(theme); });
+      themeTransition = transition;
+      transition.ready.catch(() => {}); // Rapid toggles intentionally skip obsolete snapshots.
+      transition.updateCallbackDone.catch(() => { if (version === themeVersion) setTheme(theme); });
+      transition.finished.catch(() => {}).finally(() => {
+        if (themeTransition === transition) {
+          themeTransition = null;
+          root.classList.remove("theme-transition");
+        }
+      });
+      return;
+    } catch { root.classList.remove("theme-transition"); }
+  }
+  root.classList.add("theme-color-transition");
+  getComputedStyle(root).getPropertyValue("--canvas"); // Establish the current colors before changing them.
+  setTheme(theme);
+  themeFallbackTimer = setTimeout(() => root.classList.remove("theme-color-transition"), 320);
+}
+$("#theme").addEventListener("click", () => changeTheme(requestedTheme === "light" ? "dark" : "light"));
+function settleThemeMotion() {
+  if (!themeMotion?.matches && !document.hidden) return;
+  ++themeVersion;
+  themeTransition?.skipTransition();
+  themeTransition = null;
+  clearTimeout(themeFallbackTimer);
+  document.documentElement.classList.remove("theme-transition", "theme-color-transition");
+  setTheme(requestedTheme);
+}
+themeMotion?.addEventListener?.("change", settleThemeMotion);
+document.addEventListener("visibilitychange", settleThemeMotion);
 $("#density").value = readPreference("spyder-density", "auto");
 if (!$("#density").value) $("#density").value = "auto";
 function reflow() {

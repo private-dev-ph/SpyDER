@@ -1721,3 +1721,31 @@ input[type="search"]::-webkit-search-cancel-button {
   /* Focused fields must never be hidden behind a partially expanded panel. */
   details:focus-within:not(:has(> summary:focus))::details-content { transition: none; }
 }
+/* Theme changes use one compositor crossfade, rather than independently repainting controls. */
+:root.theme-transition::view-transition { pointer-events: none; }
+:root.theme-transition::view-transition-old(root) { animation: none; mix-blend-mode: normal; }
+:root.theme-transition::view-transition-new(root) { animation: theme-reveal 280ms cubic-bezier(.22,.61,.36,1) both; mix-blend-mode: normal; }
+@keyframes theme-reveal { from { opacity: 0; } to { opacity: 1; } }
+/* Typed palette colors provide a synchronized fallback without overriding component motion. */
+@property --canvas { syntax: "<color>"; inherits: true; initial-value: #f7f5ef; }
+@property --surface { syntax: "<color>"; inherits: true; initial-value: #fffefa; }
+@property --rail { syntax: "<color>"; inherits: true; initial-value: #f0ede4; }
+@property --ink { syntax: "<color>"; inherits: true; initial-value: #201d1a; }
+@property --muted { syntax: "<color>"; inherits: true; initial-value: #726d64; }
+@property --border { syntax: "<color>"; inherits: true; initial-value: #e4dfd4; }
+@property --focus { syntax: "<color>"; inherits: true; initial-value: #830000; }
+@property --accent-hover { syntax: "<color>"; inherits: true; initial-value: #830000; }
+@property --gold-soft { syntax: "<color>"; inherits: true; initial-value: #f8ebab; }
+@property --danger { syntax: "<color>"; inherits: true; initial-value: #bc0202; }
+@property --live { syntax: "<color>"; inherits: true; initial-value: #47704a; }
+@property --live-soft { syntax: "<color>"; inherits: true; initial-value: #edf3e9; }
+:root.theme-color-transition {
+  transition: --canvas 280ms ease, --surface 280ms ease, --rail 280ms ease,
+    --ink 280ms ease, --muted 280ms ease, --border 280ms ease, --focus 280ms ease,
+    --accent-hover 280ms ease, --gold-soft 280ms ease, --danger 280ms ease,
+    --live 280ms ease, --live-soft 280ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root.theme-color-transition { transition: none; }
+  :root.theme-transition::view-transition-new(root) { animation: none; }
+}
