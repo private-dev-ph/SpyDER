@@ -1,0 +1,243 @@
+/* Approved, bundled footage. No runtime network catalog or remote streams. */
+(() => {
+  "use strict";
+  const catalog = {
+    version: 1,
+    cameras: [
+      {
+        id: "driveway-arrival",
+        name: "Driveway: vehicle arriving",
+        filename: "demo-01-driveway-arrival.mp4",
+        width: 640,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 52163,
+        sha256:
+          "bbe78a5c50dc060f34b4f58850e98de0dfaf110b5ef8057f3c9be9f38ae57905",
+        author: "Brandon Ennis",
+        original_title: "Mail Theft Caught on Camera - Las Vegas.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Mail_Theft_Caught_on_Camera_-_Las_Vegas.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Original source documents reported mail/property theft; this excerpt shows the vehicle arriving.",
+        notes:
+          "Fixed wide-angle home camera facing a suburban street. Real vehicle movement; good multi-camera wall tile.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 10,
+      },
+      {
+        id: "porch-parcel",
+        name: "Front porch: person and parcel",
+        filename: "demo-02-porch-parcel.mp4",
+        width: 480,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 87223,
+        sha256:
+          "b6d9043e0fd755de4cf7f6a59213cfb1a1fab7dd63c7771b3c81c26b8be779e2",
+        author: "Trevor Fiatal",
+        original_title: "Front Porch Theft 2012 11 17 101117.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Front_Porch_Theft_2012_11_17_101117.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Original source documents reported package theft; this excerpt includes the parcel pickup.",
+        notes:
+          "High mounted porch camera, person walking up and picking up a parcel. Visible body and face at an angle.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 1,
+      },
+      {
+        id: "front-walk-approach",
+        name: "Driveway: person approaching",
+        filename: "demo-03-front-walk-approach.mp4",
+        width: 640,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 64608,
+        sha256:
+          "11a9c3a92a6a5b0399fb0a7654ae9b29d2a514504473efb97414f57948cccfd3",
+        author: "DonGar37",
+        original_title: "Package Theft from home.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Package_Theft_from_home.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Original source documents reported package theft and cuts between several home cameras.",
+        notes:
+          "Residential driveway camera with a person approaching from the street. Good person and motion detection candidate.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 47,
+      },
+      {
+        id: "front-door-close",
+        name: "Front door: close approach",
+        filename: "demo-04-front-door-close.mp4",
+        width: 640,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 166605,
+        sha256:
+          "b4d062dd97c2aa30677d0935f27aee47d85c1b6090895f4c20e71562b0b682fc",
+        author: "DonGar37",
+        original_title: "Package Theft from home.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Package_Theft_from_home.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Original source documents reported package theft and cuts between several home cameras.",
+        notes:
+          "Real front-door camera showing a person close to the camera and a parcel. Best close-face candidate here; face quality still needs model testing.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 91,
+      },
+      {
+        id: "covered-porch",
+        name: "Covered porch: person at the door",
+        filename: "demo-05-covered-porch.mp4",
+        width: 640,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 183227,
+        sha256:
+          "69e3ad0aade13f58623f1ea5ea65327618eb20128de738939c2ee902b92dad64",
+        author: "Vancouver Police Department / vpdonline",
+        original_title: "Don't Tempt a Thief with Unattended Parcels.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Don%27t_Tempt_a_Thief_with_Unattended_Parcels.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Police-released parcel-theft footage. Do not describe the subject as a model or consenting visitor.",
+        notes:
+          "Fixed camera under a covered stone porch; person near the entrance. Strong home-security framing.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 2,
+      },
+      {
+        id: "quiet-patio",
+        name: "Quiet front patio",
+        filename: "demo-06-quiet-patio.mp4",
+        width: 640,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 142616,
+        sha256:
+          "a8fbb3677512bb9bc5049999bebaffa44538e1a0be4cadbbf167060678e88123",
+        author: "DonGar37",
+        original_title: "Package Theft from home.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Package_Theft_from_home.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Original source documents reported package theft and cuts between several home cameras.",
+        notes:
+          "Fixed outdoor home camera looking over paving, plants and an entrance gate; no person during this excerpt.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 0,
+      },
+      {
+        id: "ring-doorbell-idle",
+        name: "Ring doorbell: quiet entrance",
+        filename: "demo-07-ring-doorbell-idle.mp4",
+        width: 640,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 78588,
+        sha256:
+          "5b96b82cc735ccbb7f460a0bb3e4677611385247e6f811cb9221812795303c2c",
+        author: "Shikha Bhargava",
+        original_title: "Theft@McKean.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Theft%40McKean.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Original source documents reported package theft and includes actual Ring-branded doorbell footage. Despite temporary source slug, this is daytime, not night footage.",
+        notes:
+          "Real fisheye doorbell view under a porch, facing the front path and street. Original Ring watermark retained; no person during this excerpt.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 56,
+      },
+      {
+        id: "front-yard-walk",
+        name: "Front yard: person approaching porch",
+        filename: "demo-08-front-yard-walk.mp4",
+        width: 640,
+        height: 360,
+        fps: 15.0,
+        duration_seconds: 8.0,
+        bytes: 111050,
+        sha256:
+          "854452e127c8384f61096cf5326a1e59a68a9c71f6440e057d40e94957c3272d",
+        author: "Shikha Bhargava",
+        original_title: "Theft@McKean.ogv",
+        source_url:
+          "https://commons.wikimedia.org/wiki/File:Theft%40McKean.ogv",
+        license: "CC BY 3.0",
+        license_url: "https://creativecommons.org/licenses/by/3.0/",
+        context:
+          "Original source documents reported package theft and includes actual Ring-branded doorbell footage. Despite temporary source slug, this is daytime, not night footage.",
+        notes:
+          "Fixed residential front-yard camera showing someone walking toward the house; useful outdoor activity tile.",
+        changes:
+          "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
+        source_start_seconds: 42,
+      },
+    ],
+  };
+  const defaults = Object.freeze({
+    zoom: 0,
+    fov: 100,
+    pan: 50,
+    tilt: 50,
+    brightness: 50,
+    contrast: 50,
+    saturation: 50,
+  });
+  const api = {
+    cameras: Object.freeze(catalog.cameras.map(Object.freeze)),
+    defaults,
+    find(source) {
+      return typeof source === "string" && source.startsWith("demo://")
+        ? catalog.cameras.find((c) => "demo://" + c.id === source)
+        : undefined;
+    },
+    tuning(settings = {}) {
+      const p = { ...defaults, ...settings },
+        clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+      return {
+        zoom: clamp(
+          (1 + (3 * p.zoom) / 100) * (1 + (3 * (100 - p.fov)) / 100),
+          1,
+          4,
+        ),
+        pan: p.pan / 100,
+        tilt: p.tilt / 100,
+        filter: `brightness(${2 ** ((p.brightness - 50) / 50)}) contrast(${2 ** ((p.contrast - 50) / 50)}) saturate(${p.saturation / 50})`,
+      };
+    },
+  };
+  if (typeof module === "object" && module.exports) module.exports = api;
+  if (typeof window !== "undefined") window.spyderDemoCameraCatalog = api;
+})();

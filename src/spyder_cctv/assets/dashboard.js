@@ -300,7 +300,10 @@ $("#confirm-remove").addEventListener("click", async () => {
 function sourceTypeChanged() {
   if (window.spyderShowcase) return window.spyderShowcase.configureSource();
   const type = $("#source-type").value;
+  if (type === "sample") return window.spyderDemoCameraPicker.configure();
+  window.spyderDemoCameraPicker?.hide();
   const input = $("#camera-source");
+  input.hidden=false;input.required=true;
   input.value = type === "webcam" ? "0" : "";
   input.type =
     type === "webcam" ? "number" : type === "network" ? "url" : "text";
@@ -363,7 +366,9 @@ $("#add-form").addEventListener("submit", async (event) => {
       name,
       source: window.spyderShowcase
         ? window.spyderShowcase.readSource()
-        : type === "webcam"
+        : type === "sample"
+          ? window.spyderDemoCameraPicker.source()
+          : type === "webcam"
           ? Number(value)
           : value,
       fps: Number($("#camera-fps").value),

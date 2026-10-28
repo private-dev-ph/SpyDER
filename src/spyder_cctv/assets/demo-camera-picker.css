@@ -1,0 +1,38 @@
+.demo-camera-picker {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--border, #806b53);
+  border-radius: 12px;
+  min-width: 0;
+}
+.demo-camera-picker[hidden] {
+  display: none;
+}
+.demo-camera-picker video {
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  background: #000;
+  border-radius: 8px;
+}
+.demo-camera-picker select {
+  min-height: 44px;
+  width: 100%;
+}
+.demo-camera-picker p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.demo-camera-picker a {
+  color: var(--text, #be1a1a);
+  text-decoration: underline;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.demo-camera-picker a:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}

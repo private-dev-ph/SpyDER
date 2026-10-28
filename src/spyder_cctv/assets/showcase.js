@@ -2,6 +2,35 @@
 (() => {
   "use strict";
   const cameras = new Map();
+  const catalog = window.spyderDemoCameraCatalog;
+  const listeners = new Set();
+  const sampleStorageKey = "spyder-demo-camera-feeds-v1";
+  let restoring = true;
+  function persistSamples() {
+    if (restoring || !catalog) return;
+    try {
+      localStorage.setItem(
+        sampleStorageKey,
+        JSON.stringify(
+          [...cameras.values()]
+            .filter((c) => c.kind === "sample")
+            .map((c) => ({
+              id: c.id,
+              name: c.name,
+              source: "demo://" + c.clip.id,
+              fps: c.fps,
+              pipeline: c.pipeline,
+              autostart: !!c.wantsRunning,
+              settings: c.settings,
+              profile_id: c.profile_id,
+            })),
+        ),
+      );
+    } catch {
+      /* Playback works even when browser persistence is unavailable. */
+    }
+  }
+
   const sleeping = new Set();
   const recording = new Set();
   let away = false;
@@ -118,6 +147,23 @@
     );
   }
   function capabilities(camera) {
+    if (camera.kind === "sample")
+      return Object.fromEntries(
+        Object.entries(labels).map(([key, label]) => [
+          key,
+          {
+            label,
+            supported: true,
+            minimum: 0,
+            maximum: 100,
+            step: 1,
+            value: desired(camera)[key] ?? catalog.defaults[key],
+            native_value: desired(camera)[key] ?? catalog.defaults[key],
+            mode: "Software · demo clip",
+            default_percent: catalog.defaults[key],
+          },
+        ]),
+      );
     const ranges = camera.track?.getCapabilities?.() || {};
     const actual = camera.track?.getSettings?.() || {};
     return Object.fromEntries(
@@ -176,6 +222,17 @@
       id: camera.id,
       name: camera.name,
       source_label: camera.source_label,
+      source_kind: camera.kind,
+      demo_clip_id: camera.clip?.id || null,
+      footage_credit: camera.clip
+        ? {
+            author: camera.clip.author,
+            title: camera.clip.original_title,
+            source_url: camera.clip.source_url,
+            license: camera.clip.license,
+            license_url: camera.clip.license_url,
+          }
+        : null,
       fps: camera.fps,
       pipeline: camera.pipeline,
       state: camera.state,
@@ -204,6 +261,21 @@
   async function apply(camera) {
     if (camera.state !== "running") {
       camera.settings_state = "scheduled";
+      return;
+    }
+    if (camera.kind === "sample") {
+      camera.results = Object.fromEntries(
+        Object.keys(desired(camera)).map((key) => [
+          key,
+          {
+            status: "applied",
+            message: "Software tuning on the demo camera frame",
+          },
+        ]),
+      );
+      camera.settings_state = "applied";
+      camera.blob = null;
+      camera.previous = null;
       return;
     }
     const track = camera.track;
@@ -381,7 +453,7 @@
         const video = document.createElement("video");
         video.muted = true;
         video.playsInline = true;
-        video.loop = false;
+        video.loop = camera.kind === "sample";
         if (camera.kind === "webcam") {
           if (!navigator.mediaDevices?.getUserMedia)
             throw new Error(
@@ -437,17 +509,33 @@
           camera.track.addEventListener("ended", () => {
             cameraEnded(camera, epoch);
           });
+        } else if (camera.kind === "sample") {
+          video.preload = "auto";
+          video.src = "/" + camera.clip.filename;
+          video.addEventListener("seeking", () => {
+            camera.previous = null;
+            camera.motion = 0;
+            camera.blob = null;
+          });
+          video.addEventListener("error", () => {
+            if (camera.epoch === epoch) {
+              stop(camera);
+              camera.state = "error";
+              camera.error =
+                "Demo clip could not load. Retry or choose another scene.";
+            }
+          });
         } else {
           camera.fileUrl = URL.createObjectURL(camera.file);
           video.src = camera.fileUrl;
         }
         camera.video = video;
         video.addEventListener("ended", () => {
-          if (camera.epoch === epoch) stop(camera);
+          if (camera.epoch === epoch && camera.kind !== "sample") stop(camera);
         });
         await video.play();
         if (
-          camera.kind === "file" &&
+          ["file", "sample"].includes(camera.kind) &&
           camera.resumeTime &&
           camera.resumeTime < video.duration
         )
@@ -485,8 +573,20 @@
   }
   async function add(data, fixedId = null) {
     const source = data.source;
-    const kind =
-      source instanceof File ? "file" : source === "demo" ? "demo" : "webcam";
+    const clip = catalog?.find(source);
+    if (typeof source === "string" && source.startsWith("demo://") && !clip)
+      throw new Error("Unknown bundled demo camera scene.");
+    const kind = clip
+      ? "sample"
+      : source instanceof File
+        ? "file"
+        : source === "demo"
+          ? "demo"
+          : "webcam";
+    if (cameras.size >= 24)
+      throw new Error(
+        "Use up to 24 browser cameras; pause unused feeds to reduce load.",
+      );
     if (
       kind === "webcam" &&
       (typeof source !== "string" || !source.startsWith("device:"))
@@ -520,18 +620,22 @@
       id: fixedId || "cam-" + crypto.randomUUID(),
       name: data.name.trim(),
       kind,
+      clip,
+      wantsRunning: !!data.autostart,
       deviceId,
       file: kind === "file" ? source : null,
       source_label:
-        kind === "demo"
-          ? "Generated demo · browser only"
-          : kind === "file"
-            ? "Local file · " + source.name
-            : "Browser webcam",
+        kind === "sample"
+          ? "Demo clip · " + clip.name
+          : kind === "demo"
+            ? "Generated demo · browser only"
+            : kind === "file"
+              ? "Local file · " + source.name
+              : "Browser webcam",
       fps: data.fps,
       pipeline: data.pipeline,
       state: "stopped",
-      settings: {},
+      settings: kind === "sample" ? { ...catalog.defaults } : {},
       profile_id: null,
       settings_state: "applied",
       results: {},
@@ -558,6 +662,7 @@
       if (away) sleeping.add(camera.id);
       else await start(camera);
     }
+    persistSamples();
     return status(camera);
   }
   async function frame(camera) {
@@ -608,11 +713,36 @@
     } else {
       if (!camera.video || camera.video.readyState < 2)
         throw new Error("Video warming up.");
+      if (
+        camera.kind === "sample" &&
+        camera.video.currentTime < (camera.sourceTime || 0)
+      ) {
+        camera.previous = null;
+        camera.motion = 0;
+      }
+      camera.sourceTime = camera.video.currentTime;
       const w = camera.video.videoWidth,
         h = camera.video.videoHeight;
       if (w && h && canvas.height !== Math.round((640 * h) / w))
         canvas.height = Math.round((640 * h) / w);
-      ctx.drawImage(camera.video, 0, 0, canvas.width, canvas.height);
+      if (camera.kind === "sample") {
+        const tune = catalog.tuning(desired(camera)),
+          cw = w / tune.zoom,
+          ch = h / tune.zoom;
+        ctx.filter = tune.filter;
+        ctx.drawImage(
+          camera.video,
+          (w - cw) * tune.pan,
+          (h - ch) * tune.tilt,
+          cw,
+          ch,
+          0,
+          0,
+          canvas.width,
+          canvas.height,
+        );
+        ctx.filter = "none";
+      } else ctx.drawImage(camera.video, 0, 0, canvas.width, canvas.height);
     }
     if (camera.pipeline === "motion") {
       const sample = camera.sample.getContext("2d", {
@@ -646,6 +776,21 @@
       throw new Error("Camera stopped while encoding.");
     camera.blob = blob;
     camera.frameTime = performance.now();
+    for (const listener of listeners) {
+      try {
+        Promise.resolve(
+          listener({
+            camera: status(camera),
+            canvas,
+            motion_fraction: camera.motion || 0,
+            frameId: camera.frames,
+            timestamp: camera.frameTime,
+          }),
+        ).catch(() => {});
+      } catch {
+        /* One consumer cannot interrupt the camera. */
+      }
+    }
     if (
       camera.reconnectStableSince &&
       camera.frameTime - camera.reconnectStableSince >= 30000
@@ -656,6 +801,19 @@
     return blob;
   }
   async function request(path, data = {}) {
+    if (
+      [
+        "/api/captures",
+        "/api/recordings/start",
+        "/api/recordings/stop",
+        "/api/recordings/cameras",
+        "/api/recordings/settings",
+      ].includes(path) &&
+      window.spyderBrowserMedia
+    )
+      return window.spyderBrowserMedia.request(path, data);
+    const owned = await window.spyderDemoWorkflowRuntime?.request?.(path, data);
+    if (owned !== undefined) return owned;
     if (path === "/api/presence") {
       await presence(data);
       return { accepted: true };
@@ -685,11 +843,13 @@
       if (parts[3] === "stop" && recording.has(camera.id))
         throw new Error("Remove this camera from recording before pausing it.");
       sleeping.delete(camera.id);
+      camera.wantsRunning = false;
       stop(camera);
       if (parts[3] === "remove") {
         cameras.delete(camera.id);
         recording.delete(camera.id);
       }
+      persistSamples();
       return status(camera);
     }
     const queuedEpoch = camera.epoch;
@@ -698,6 +858,7 @@
       if (camera.epoch !== queuedEpoch)
         throw new Error("Camera state changed. Retry this action.");
       if (parts[3] === "start") {
+        camera.wantsRunning = true;
         if (away && !recording.has(camera.id)) sleeping.add(camera.id);
         else {
           sleeping.delete(camera.id);
@@ -717,6 +878,7 @@
         camera.profile_id = data.profile_id;
         await apply(camera);
       } else throw new Error("Unknown action.");
+      persistSamples();
       return snapshot(camera);
     };
     const result = (camera.mutation || Promise.resolve()).then(operation);
@@ -726,6 +888,13 @@
   async function localFetch(path, options = {}) {
     if (options.signal?.aborted)
       throw new DOMException("Aborted", "AbortError");
+    if (path === "/api/recordings" && window.spyderBrowserMedia)
+      return Response.json(await window.spyderBrowserMedia.status());
+    const owned = await window.spyderDemoWorkflowRuntime?.fetch?.(
+      path,
+      options,
+    );
+    if (owned !== undefined) return owned;
     let data;
     if (path === "/api/cameras") data = [...cameras.values()].map(status);
     else if (path === "/api/profiles")
@@ -791,6 +960,12 @@
   }
   function configureSource() {
     const kind = sourceType.value;
+    if (kind === "sample") {
+      deviceSelect.hidden = true;
+      ptzLabel.hidden = true;
+      return window.spyderDemoCameraPicker.configure();
+    }
+    window.spyderDemoCameraPicker?.hide();
     const input = document.querySelector("#camera-source");
     input.value = "";
     input.type = kind === "file" ? "file" : "text";
@@ -819,6 +994,18 @@
     enumerate().catch(() => {}),
   );
   window.spyderShowcase = {
+    subscribeFrames(listener) {
+      if (typeof listener !== "function")
+        throw new Error("Frame listener must be a function");
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    capabilities: {
+      camera_tuning: "software",
+      motion: "browser-frame-difference",
+      face_enrollment: false,
+      native_inference: false,
+    },
     getFrameSource: async (id) => {
       const camera = get(id);
       if (camera.state !== "running") throw new Error("Camera is offline.");
@@ -855,11 +1042,13 @@
     fetch: localFetch,
     configureSource,
     readSource: () =>
-      sourceType.value === "file"
-        ? document.querySelector("#camera-source").files[0]
-        : sourceType.value === "demo"
-          ? "demo"
-          : "device:" + deviceSelect.value,
+      sourceType.value === "sample"
+        ? window.spyderDemoCameraPicker.source()
+        : sourceType.value === "file"
+          ? document.querySelector("#camera-source").files[0]
+          : sourceType.value === "demo"
+            ? "demo"
+            : "device:" + deviceSelect.value,
   };
   document.querySelector(".rail-footer small").textContent =
     "No video uploads · no cloud processing";
@@ -875,24 +1064,93 @@
       stop(c);
     }
   });
-  add(
-    {
-      name: "Demo / North",
-      source: "demo",
-      fps: 10,
-      pipeline: "motion",
-      autostart: true,
-    },
-    "cam-demo-north",
-  );
-  add(
-    {
-      name: "Demo / South",
-      source: "demo",
-      fps: 10,
-      pipeline: "motion",
-      autostart: true,
-    },
-    "cam-demo-south",
-  );
+  let pump = null;
+  function startPump() {
+    if (catalog && pump === null)
+      pump = setInterval(() => {
+        for (const camera of cameras.values())
+          if (camera.state === "running" && (!away || recording.has(camera.id)))
+            frame(camera).catch(() => {});
+      }, 100);
+  }
+  startPump();
+  window.addEventListener("pagehide", () => {
+    if (pump !== null) clearInterval(pump);
+    pump = null;
+  });
+  window.addEventListener("pageshow", (event) => {
+    startPump();
+    if (event.persisted) {
+      away = false;
+      reconcileActivity().catch(() => {});
+    }
+  });
+  if (catalog) {
+    (async () => {
+      let saved = null;
+      try {
+        const value = localStorage.getItem(sampleStorageKey);
+        if (value !== null) {
+          saved = JSON.parse(value);
+          if (!Array.isArray(saved) || saved.length > 24)
+            throw Error("Invalid sample list");
+        }
+      } catch {
+        saved = null;
+      }
+      const seeds =
+        saved ??
+        catalog.cameras
+          .slice(0, 2)
+          .map((clip, i) => ({
+            id: i ? "cam-demo-south" : "cam-demo-north",
+            name: clip.name,
+            source: "demo://" + clip.id,
+            fps: 10,
+            pipeline: "motion",
+            autostart: true,
+          }));
+      for (const seed of seeds) {
+        try {
+          if (!catalog.find(seed.source) || !/^cam-[\w-]{1,80}$/.test(seed.id))
+            continue;
+          const safeSettings = validate(seed.settings || {});
+          await add({ ...seed, autostart: false }, seed.id);
+          const camera = get(seed.id);
+          camera.settings = { ...catalog.defaults, ...safeSettings };
+          camera.profile_id = profiles.some((p) => p.id === seed.profile_id)
+            ? seed.profile_id
+            : null;
+          camera.wantsRunning = seed.autostart === true;
+          if (camera.wantsRunning) await start(camera);
+        } catch {
+          /* Skip corrupt saved sample entries without touching other data. */
+        }
+      }
+      restoring = false;
+      persistSamples();
+    })();
+  } else {
+    add(
+      {
+        name: "Demo / North",
+        source: "demo",
+        fps: 10,
+        pipeline: "motion",
+        autostart: true,
+      },
+      "cam-demo-north",
+    );
+    add(
+      {
+        name: "Demo / South",
+        source: "demo",
+        fps: 10,
+        pipeline: "motion",
+        autostart: true,
+      },
+      "cam-demo-south",
+    );
+    restoring = false;
+  }
 })();

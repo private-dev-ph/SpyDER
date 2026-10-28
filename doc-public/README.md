@@ -6,6 +6,8 @@ Start with [Getting started](getting-started.md) for a working local installatio
 
 ## User guides
 
+- [Demo camera feeds](user-guide/demo-camera-feeds.md): bundled residential footage, software camera controls, browser automations, licensing and capability boundaries.
+
 - [Face galleries and ONVIF cameras](user-guide/face-galleries-and-onvif.md): local
   enrollment, workflow recognition, LAN discovery, and timed PTZ controls.
 

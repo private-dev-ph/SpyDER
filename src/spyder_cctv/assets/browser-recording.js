@@ -67,6 +67,7 @@
   const captureCanvas = document.createElement("canvas");
   const state = {
     state: "idle",
+    session_id: null,
     camera_ids: [],
     elapsed_seconds: 0,
     frames: 0,
@@ -282,6 +283,7 @@
         }
       }
       await drawFrame(currentIds, canvas, { countFrame: true, epoch });
+      stream?.getVideoTracks?.()[0]?.requestFrame?.();
       if (epoch !== generation) return;
       state.elapsed_seconds = Math.max(0, (Date.now() - startedAt) / 1000);
     } catch (error) {
@@ -353,12 +355,16 @@
           poster,
         );
       }
+      if (!chunks.length && !stopReason)
+        stopReason =
+          "Browser produced no video data. Try another browser or recording format.";
       chunks = [];
       chunkBytes = 0;
       recorder = null;
       state.elapsed_seconds = startedAt
         ? Math.max(0, (Date.now() - startedAt) / 1000)
         : 0;
+      state.session_id = null;
       state.state = stopReason ? "error" : "idle";
       state.error = stopReason;
       state.camera_ids = [];
@@ -461,6 +467,8 @@
           stopRecording("Recording stopped unexpectedly.");
       });
       recorder.start(1000);
+      stream.getVideoTracks?.()[0]?.requestFrame?.();
+      state.session_id = crypto.randomUUID();
       state.state = "recording";
       timer = setInterval(tick, 1000 / profile.fps);
       return snapshot();
