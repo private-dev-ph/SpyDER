@@ -1,0 +1,229 @@
+"""Allowlisted, package-shipped demo video sources."""
+
+import json
+import math
+import re
+from contextlib import ExitStack, contextmanager, nullcontext
+from importlib.resources import as_file, files
+from pathlib import Path
+from typing import Any
+
+import cv2
+
+from spyder_cctv.controls import CONTROL_LABELS, validate_settings
+
+DEMO_SCHEME = "demo://"
+_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_DEFAULTS = {
+    "zoom": 0.0,
+    "fov": 100.0,
+    "pan": 50.0,
+    "tilt": 50.0,
+    "brightness": 50.0,
+    "contrast": 50.0,
+    "saturation": 50.0,
+}
+_DEMO_ASSETS = files("spyder_cctv").joinpath("assets")
+
+
+def demo_catalog_bytes() -> bytes:
+    return _DEMO_ASSETS.joinpath("demo-cameras.json").read_bytes()
+
+
+def demo_media_filenames() -> set[str]:
+    data = json.loads(demo_catalog_bytes())
+    if (
+        not isinstance(data, dict)
+        or set(data) != {"version", "cameras"}
+        or type(data["version"]) is not int
+        or data["version"] != 1
+        or not isinstance(data["cameras"], list)
+    ):
+        raise ValueError("Invalid demo camera catalog")
+    filenames = set()
+    for entry in data["cameras"]:
+        if not isinstance(entry, dict):
+            raise ValueError("Invalid demo camera catalog entry")
+        filename = entry.get("filename")
+        if (
+            not isinstance(filename, str)
+            or Path(filename).name != filename
+            or not filename.startswith("demo-")
+            or not filename.lower().endswith(".mp4")
+            or filename in filenames
+        ):
+            raise ValueError("Invalid demo camera media filename")
+        filenames.add(filename)
+    return filenames
+
+
+@contextmanager
+def demo_media_path(filename: str):
+    if filename not in demo_media_filenames():
+        raise FileNotFoundError(filename)
+    with as_file(_DEMO_ASSETS.joinpath(filename)) as path:
+        yield Path(path)
+
+
+def is_demo_source(source: object) -> bool:
+    return isinstance(source, str) and source.casefold().startswith(DEMO_SCHEME)
+
+
+def _catalog_data(catalog_path: Path | None) -> tuple[dict[str, Any], Path | None]:
+    if catalog_path is not None:
+        path = Path(catalog_path)
+        return json.loads(path.read_text(encoding="utf-8")), path.parent
+    resource = files("spyder_cctv").joinpath("assets", "demo-cameras.json")
+    return json.loads(resource.read_text(encoding="utf-8")), None
+
+
+def resolve_demo_source(
+    source: str, *, catalog_path: Path | None = None
+) -> tuple[dict[str, Any], Any]:
+    """Return validated entry and traversable media resource for exact demo URI."""
+    if not is_demo_source(source):
+        raise ValueError("Demo source must use demo://<catalog-id>")
+    camera_id = source.removeprefix(DEMO_SCHEME)
+    if not _SLUG.fullmatch(camera_id):
+        raise ValueError("Invalid demo camera id")
+    try:
+        data, catalog_root = _catalog_data(catalog_path)
+    except (FileNotFoundError, json.JSONDecodeError) as error:
+        raise ValueError("Demo camera catalog is unavailable") from error
+    if (
+        not isinstance(data, dict)
+        or set(data) != {"version", "cameras"}
+        or type(data["version"]) is not int
+        or data["version"] != 1
+        or not isinstance(data["cameras"], list)
+    ):
+        raise ValueError("Invalid demo camera catalog")
+    matches = [
+        entry
+        for entry in data["cameras"]
+        if isinstance(entry, dict) and entry.get("id") == camera_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("Unknown demo camera")
+    entry = matches[0]
+    filename = entry.get("filename")
+    if (
+        not isinstance(filename, str)
+        or Path(filename).name != filename
+        or not filename.lower().endswith(".mp4")
+        or not filename.startswith("demo-")
+    ):
+        raise ValueError("Invalid demo camera media filename")
+    if catalog_root is not None:
+        media = catalog_root / filename
+    else:
+        media = files("spyder_cctv").joinpath("assets", filename)
+    return entry, media
+
+
+class DemoClipCapture:
+    """Loop one allowlisted clip and apply simulated controls to clean frames."""
+
+    def __init__(self, source: str, *, catalog_path: Path | None = None) -> None:
+        entry, media = resolve_demo_source(source, catalog_path=catalog_path)
+        self.entry = entry
+        self._resources = ExitStack()
+        try:
+            path_context = as_file(media) if catalog_path is None else nullcontext(media)
+            self.path = Path(self._resources.enter_context(path_context))
+            self.capture = cv2.VideoCapture(str(self.path), cv2.CAP_ANY)
+            if not self.capture.isOpened():
+                self.capture.release()
+                raise RuntimeError("Cannot open demo clip")
+        except Exception:
+            self._resources.close()
+            raise
+        self._closed = False
+        self._settings = _DEFAULTS.copy()
+
+    def get_controls(self) -> dict[str, Any]:
+        return {
+            name: {
+                "label": label,
+                "supported": True,
+                "value": self._settings[name],
+                "minimum": 0,
+                "maximum": 100,
+                "step": 1,
+                "default": _DEFAULTS[name],
+                "default_percent": _DEFAULTS[name],
+                "mode": "software simulation",
+                "implementation": "software",
+            }
+            for name, label in CONTROL_LABELS.items()
+        }
+
+    def apply_controls(self, settings: dict[str, float]) -> dict[str, Any]:
+        desired = validate_settings(settings)
+        self._settings.update(desired)
+        return {
+            "capabilities": self.get_controls(),
+            "results": {
+                name: {
+                    "status": "applied",
+                    "requested": value,
+                    "value": value,
+                    "implementation": "software",
+                }
+                for name, value in desired.items()
+            },
+        }
+
+    def _transform(self, frame: Any) -> Any:
+        height, width = frame.shape[:2]
+        zoom = self._settings["zoom"]
+        fov = self._settings["fov"]
+        factor = min(4.0, max(1.0, (1 + 3 * zoom / 100) * (1 + 3 * (100 - fov) / 100)))
+        crop_width = max(1, round(width / factor))
+        crop_height = max(1, round(height / factor))
+        left = round((width - crop_width) * self._settings["pan"] / 100)
+        top = round((height - crop_height) * self._settings["tilt"] / 100)
+        if crop_width != width or crop_height != height:
+            frame = cv2.resize(
+                frame[top : top + crop_height, left : left + crop_width],
+                (width, height),
+                interpolation=cv2.INTER_LINEAR,
+            )
+
+        brightness = 2 ** ((self._settings["brightness"] - 50) / 50)
+        contrast = 2 ** ((self._settings["contrast"] - 50) / 50)
+        frame = cv2.addWeighted(
+            frame,
+            contrast * brightness,
+            frame,
+            0,
+            127.5 * (1 - contrast) * brightness,
+        )
+        saturation = self._settings["saturation"] / 50
+        if not math.isclose(saturation, 1.0):
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            hsv[:, :, 1] = cv2.convertScaleAbs(hsv[:, :, 1], alpha=saturation)
+            frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        return frame
+
+    def read(self) -> tuple[bool, Any]:
+        if self._closed:
+            return False, None
+        ok, frame = self.capture.read()
+        if not ok:
+            # Only capture thread seeks, after observed EOF. No external seek race.
+            if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
+                return False, None
+            ok, frame = self.capture.read()
+        if not ok or frame is None:
+            return False, None
+        return True, self._transform(frame)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.capture.release()
+        finally:
+            self._resources.close()

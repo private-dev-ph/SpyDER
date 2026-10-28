@@ -4,6 +4,7 @@ import socket
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -91,6 +92,31 @@ def server(tmp_path):
     manager.close()
     thread.join(2)
     assert not thread.is_alive()
+
+
+def test_demo_assets_use_catalog_allowlist_and_support_video_ranges(server, tmp_path, monkeypatch):
+    url, _ = server
+    media = tmp_path / "demo-test.mp4"
+    media.write_bytes(b"abcdefgh")
+    monkeypatch.setattr(web_module, "demo_catalog_bytes", lambda: b'{"version":1,"cameras":[]}')
+
+    @contextmanager
+    def allowlisted(name):
+        if name != media.name:
+            raise FileNotFoundError(name)
+        yield media
+
+    monkeypatch.setattr(web_module, "demo_media_path", allowlisted)
+    with urlopen(url + "/demo-cameras.json", timeout=4) as response:
+        assert json.load(response) == {"version": 1, "cameras": []}
+    request = Request(url + "/demo-test.mp4", headers={"Range": "bytes=2-5"})
+    with urlopen(request, timeout=4) as response:
+        assert response.status == 206
+        assert response.headers["Content-Range"] == "bytes 2-5/8"
+        assert response.read() == b"cdef"
+    with pytest.raises(HTTPError) as error:
+        urlopen(url + "/demo-unknown.mp4", timeout=4)
+    assert error.value.code == 404
 
 
 def test_live_server_exclusively_owns_its_port(server):
