@@ -68,6 +68,13 @@ def test_demo_capture_follows_clip_clock_and_skips_late_frames(demo_clip, monkey
     monkeypatch.setattr("spyder_cctv.demo_sources.time.monotonic", lambda: now[0])
     capture = DemoClipCapture("demo://test", catalog_path=catalog)
     try:
+        seeks = []
+        seek_to_start = capture._seek_to_start
+        monkeypatch.setattr(
+            capture,
+            "_seek_to_start",
+            lambda: (seeks.append(now[0]) is None) and seek_to_start(),
+        )
         observed = []
         for elapsed in (0.0, 0.12, 0.21, 0.41, 0.61):
             now[0] = 10.0 + elapsed
@@ -78,6 +85,27 @@ def test_demo_capture_follows_clip_clock_and_skips_late_frames(demo_clip, monkey
         assert observed[2] > observed[1] + 15
         assert observed[3] > observed[2] + 15
         assert observed[4] == pytest.approx(observed[0], abs=3)
+        assert seeks == [pytest.approx(10.61)]
+    finally:
+        capture.close()
+
+
+def test_inaccurate_frame_count_falls_back_without_retry_loop(demo_clip, monkeypatch):
+    catalog, _ = demo_clip
+    now = [20.0]
+    monkeypatch.setattr("spyder_cctv.demo_sources.time.monotonic", lambda: now[0])
+    capture = DemoClipCapture("demo://test", catalog_path=catalog)
+    try:
+        capture._frame_count = 5
+        assert capture.read()[0]
+        now[0] = 20.8
+        ok, wrapped = capture.read()
+        assert ok
+        assert capture._source_fps is None
+        now[0] += 0.01
+        ok, following = capture.read()
+        assert ok
+        assert following[:, :, 0].mean() > wrapped[:, :, 0].mean() + 15
     finally:
         capture.close()
 

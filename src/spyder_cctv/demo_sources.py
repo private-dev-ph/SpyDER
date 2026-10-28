@@ -143,6 +143,8 @@ class DemoClipCapture:
         self._settings = _DEFAULTS.copy()
         self._playback_started: float | None = None
         self._next_frame_index = 0
+        self._last_target_index: int | None = None
+        self._cached_frame: Any = None
         self._source_fps, self._frame_count = self._playback_metadata()
 
     def _playback_metadata(self) -> tuple[float | None, int | None]:
@@ -227,43 +229,63 @@ class DemoClipCapture:
             frame = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
         return frame
 
+    def _seek_to_start(self) -> bool:
+        return bool(self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0))
+
+    def _read_timed_frame(self, now: float) -> tuple[bool, Any]:
+        assert self._source_fps is not None and self._frame_count is not None
+        if self._playback_started is None:
+            self._playback_started = now
+            target = 0
+        else:
+            duration = self._frame_count / self._source_fps
+            elapsed = max(0.0, now - self._playback_started) % duration
+            target = min(self._frame_count - 1, int(elapsed * self._source_fps))
+
+        if target == self._last_target_index and self._cached_frame is not None:
+            return True, self._transform(self._cached_frame.copy())
+        if self._last_target_index is not None and target < self._last_target_index:
+            # Clock wrap only. Duplicate target reads reuse cached raw pixels above.
+            if not self._seek_to_start():
+                return False, None
+            self._next_frame_index = 0
+
+        frame = None
+        while self._next_frame_index <= target:
+            ok, frame = self.capture.read()
+            if not ok:
+                # Catalog metadata can overstate clip length. Rewind once, then use
+                # sequential EOF looping instead of chasing an unreachable index.
+                if not self._seek_to_start():
+                    return False, None
+                ok, frame = self.capture.read()
+                if not ok or frame is None:
+                    return False, None
+                self._source_fps = self._frame_count = None
+                self._playback_started = None
+                self._next_frame_index = 1
+                self._last_target_index = None
+                self._cached_frame = None
+                return True, self._transform(frame)
+            self._next_frame_index += 1
+
+        if frame is None:
+            return False, None
+        self._last_target_index = target
+        self._cached_frame = frame.copy()
+        return True, self._transform(frame)
+
     def read(self) -> tuple[bool, Any]:
         if self._closed:
             return False, None
         if self._source_fps is not None and self._frame_count is not None:
-            now = time.monotonic()
-            if self._playback_started is None:
-                self._playback_started = now
-                target = 0
-            else:
-                duration = self._frame_count / self._source_fps
-                elapsed = max(0.0, now - self._playback_started) % duration
-                target = min(self._frame_count - 1, int(elapsed * self._source_fps))
-            if target < self._next_frame_index:
-                # Camera worker is sole capture owner; seek only when clip clock wraps.
-                if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
-                    return False, None
-                self._next_frame_index = 0
-            frame = None
-            ok = True
-            while self._next_frame_index <= target:
-                ok, frame = self.capture.read()
-                if not ok:
-                    # Metadata can be inaccurate. Keep EOF looping as safe fallback.
-                    if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
-                        return False, None
-                    self._next_frame_index = 0
-                    ok, frame = self.capture.read()
-                    if not ok:
-                        return False, None
-                self._next_frame_index += 1
-        else:
+            return self._read_timed_frame(time.monotonic())
+        ok, frame = self.capture.read()
+        if not ok:
+            # Unknown metadata keeps the original EOF loop behavior.
+            if not self._seek_to_start():
+                return False, None
             ok, frame = self.capture.read()
-            if not ok:
-                # Unknown metadata keeps the original EOF loop behavior.
-                if not self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0):
-                    return False, None
-                ok, frame = self.capture.read()
         if not ok or frame is None:
             return False, None
         return True, self._transform(frame)
