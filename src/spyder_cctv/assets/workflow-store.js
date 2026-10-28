@@ -350,9 +350,11 @@
       await ensureUnified();
       return read("graphs", id, signal);
     },
-    async save(value) {
+    async save(value, { preserveEnabled = false } = {}) {
       await ensureUnified();
-      const graph = JSON.parse(JSON.stringify({ ...value, enabled: false }));
+      if (!preserveEnabled)
+        await window.spyderDemoWorkflowRuntime?.savedDisabled?.(value.id);
+      const graph = JSON.parse(JSON.stringify({ ...value, enabled: preserveEnabled && value.enabled === true }));
       if (
         typeof graph.id !== "string" ||
         !/^[A-Za-z0-9_-]{1,64}$/.test(graph.id) ||
@@ -389,6 +391,7 @@
     },
     async remove(id) {
       await ensureUnified();
+      await window.spyderDemoWorkflowRuntime?.removeLocal?.(id);
       if ((await this.referencesSubflow(id)) || publishedReferences(id, id))
         throw Error(
           "This workflow is called by another workflow or published version. Remove those references first.",

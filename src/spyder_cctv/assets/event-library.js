@@ -171,6 +171,7 @@
   }
   let mounted = null;
   function mount(container) {
+    let exportUrl = null;
     unmount();
     let events = [], selection = new Set(), busy = false, timer, controller, disposed = false;
     let options = { page: 1, size: 20 }, signature = "", statusMessage = "", pendingDelete = false, retention = 10000;
@@ -233,8 +234,13 @@
       all.disabled = busy || !page.items.length;
       remove.disabled = clear.disabled = busy || !selection.size;
       download.setAttribute("aria-disabled", String(busy || !selection.size));
-      if (selection.size && !busy) download.href = "/api/events/download?ids=" + encodeURIComponent([...selection].join(","));
-      else download.removeAttribute("href");
+      if(exportUrl){URL.revokeObjectURL(exportUrl);exportUrl=null;}
+      if (selection.size && !busy) {
+        if(window.spyderShowcase) {
+          exportUrl=URL.createObjectURL(new Blob([JSON.stringify({version:1,events:events.filter(e=>selection.has(e.id))},null,2)],{type:"application/json"}));
+          download.href=exportUrl;download.download="spyder-demo-events.json";download.textContent="Download event metadata";
+        } else download.href = "/api/events/download?ids=" + encodeURIComponent([...selection].join(","));
+      } else download.removeAttribute("href");
       confirmation.hidden = !pendingDelete;
       confirmLabel.textContent = "Delete " + selection.size + " event records? Saved media files are kept.";
       confirm.disabled = busy || !selection.size;
@@ -288,10 +294,10 @@
       renderActions();
     }
     async function load() {
-      if (disposed || window.spyderShowcase) return;
+      if (disposed || (window.spyderShowcase && !window.spyderDemoWorkflowRuntime)) return;
       controller = new AbortController();
       try {
-        const response = await fetch("/api/events", { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), cache: "no-store" });
+        const response = await (window.spyderShowcase?.fetch || fetch)("/api/events", { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), cache: "no-store" });
         if (!response.ok) throw new Error("Event library unavailable");
         const data = await response.json(); if (disposed) return;
         retention = data.retention_limit || 10000;
@@ -311,7 +317,7 @@
       } catch (error) { if (!disposed && error.name !== "AbortError") { statusMessage = error.message; renderActions(); } }
     }
     async function poll() { await load(); if (!disposed) timer = setTimeout(poll, document.hidden ? 10000 : 2500); }
-    mounted = () => { disposed = true; clearTimeout(timer); controller?.abort(); panel.remove(); closeMedia(); };
+    mounted = () => { if(exportUrl)URL.revokeObjectURL(exportUrl); disposed = true; clearTimeout(timer); controller?.abort(); panel.remove(); closeMedia(); };
     render(); poll();
   }
   function unmount() { mounted?.(); mounted = null; closeMedia(); }

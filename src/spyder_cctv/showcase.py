@@ -6,7 +6,7 @@ from pathlib import Path
 HEADERS = (
     "/*\n"
     "  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; "
-    "img-src 'self' blob: data:; media-src blob:; connect-src 'none'; worker-src 'none'; "
+    "img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'none'; worker-src 'none'; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'\n"
     """
   Permissions-Policy: camera=(self), microphone=(), geolocation=()
@@ -39,6 +39,11 @@ def export_showcase(output: Path) -> None:
         "settings.js",
         "settings.css",
         "showcase.js",
+        "browser-demo-workflows.js",
+        "demo-cameras.js",
+        "demo-cameras.json",
+        "demo-camera-picker.js",
+        "demo-camera-picker.css",
         "activity.js",
         "icons.svg",
         "spyder-emblem.png",
@@ -77,4 +82,7 @@ def export_showcase(output: Path) -> None:
         "form-controls.css",
     ):
         (output / name).write_bytes(assets.joinpath(name).read_bytes())
+    for asset in assets.iterdir():
+        if asset.name.startswith("demo-") and asset.name.endswith(".mp4"):
+            (output / asset.name).write_bytes(asset.read_bytes())
     (output / "_headers").write_text(HEADERS, encoding="utf-8")

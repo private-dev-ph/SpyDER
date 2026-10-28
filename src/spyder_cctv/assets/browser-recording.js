@@ -65,8 +65,11 @@
   canvas.width = WIDTH;
   canvas.height = HEIGHT;
   const captureCanvas = document.createElement("canvas");
+  const compositor = document.createElement("canvas");
+  let manualFrames = false;
   const state = {
     state: "idle",
+    session_id: null,
     camera_ids: [],
     elapsed_seconds: 0,
     frames: 0,
@@ -230,11 +233,18 @@
         const y = Math.floor(index / cols) * cellH;
         try {
           const source = await showcase.getFrameSource(id);
-          if (target === canvas && epoch !== generation) return;
+          if (
+            (target === canvas || target === compositor) &&
+            epoch !== generation
+          )
+            return;
           if (fresh && source.width === 0 && source.height === 0)
             throw new Error("No fresh camera frame.");
           fit(targetCtx, source, x, y, cellW, cellH);
-          if (target === canvas && epoch === generation)
+          if (
+            (target === canvas || target === compositor) &&
+            epoch === generation
+          )
             recordedCameraIds.add(id);
           if (overlays && ids.length > 1) {
             targetCtx.fillStyle = "rgba(0,0,0,.65)";
@@ -244,7 +254,11 @@
             targetCtx.fillText(safeName(id), x + 18, y + cellH - 18);
           }
         } catch (error) {
-          if (target === canvas && epoch !== generation) return;
+          if (
+            (target === canvas || target === compositor) &&
+            epoch !== generation
+          )
+            return;
           if (fresh) failures.push(error);
           else
             placeholder(
@@ -281,8 +295,9 @@
           return;
         }
       }
-      await drawFrame(currentIds, canvas, { countFrame: true, epoch });
+      await drawFrame(currentIds, compositor, { countFrame: true, epoch });
       if (epoch !== generation) return;
+      publishFrame();
       state.elapsed_seconds = Math.max(0, (Date.now() - startedAt) / 1000);
     } catch (error) {
       if (epoch === generation)
@@ -290,6 +305,13 @@
     } finally {
       pendingFrame = false;
     }
+  }
+  function publishFrame() {
+    stream?.getVideoTracks?.()[0]?.requestFrame?.();
+    const context = canvas.getContext("2d");
+    context.drawImage(compositor, 0, 0);
+    // Flush the completed frame for detached canvas capture, independent of page paint timing.
+    if (manualFrames) context.getImageData(0, 0, 1, 1);
   }
   function mimeType() {
     const Recorder = window.MediaRecorder;
@@ -353,12 +375,16 @@
           poster,
         );
       }
+      if (!chunks.length && !stopReason)
+        stopReason =
+          "Browser produced no video data. Try another browser or recording format.";
       chunks = [];
       chunkBytes = 0;
       recorder = null;
       state.elapsed_seconds = startedAt
         ? Math.max(0, (Date.now() - startedAt) / 1000)
         : 0;
+      state.session_id = null;
       state.state = stopReason ? "error" : "idle";
       state.error = stopReason;
       state.camera_ids = [];
@@ -428,6 +454,8 @@
     const chosenProfile = profiles[settings.profile];
     canvas.width = state.width = chosenProfile.width;
     canvas.height = state.height = chosenProfile.height;
+    compositor.width = canvas.width;
+    compositor.height = canvas.height;
     state.fps = chosenProfile.fps;
     startedAt = Date.now();
     generation++;
@@ -437,11 +465,17 @@
       await retain(selected);
       if (document.hidden)
         throw new Error("Showcase must stay visible while recording.");
-      await drawFrame(selected);
+      await drawFrame(selected, compositor);
       if (document.hidden)
         throw new Error("Showcase must stay visible while recording.");
       const profile = profiles[settings.profile];
       stream = canvas.captureStream(profile.fps);
+      manualFrames =
+        typeof stream.getVideoTracks?.()[0]?.requestFrame === "function";
+      if (manualFrames) {
+        stream.getTracks().forEach((track) => track.stop());
+        stream = canvas.captureStream(0);
+      }
       const type = mimeType();
       const Recorder = window.MediaRecorder;
       recorder = type
@@ -461,6 +495,8 @@
           stopRecording("Recording stopped unexpectedly.");
       });
       recorder.start(1000);
+      publishFrame();
+      state.session_id = crypto.randomUUID();
       state.state = "recording";
       timer = setInterval(tick, 1000 / profile.fps);
       return snapshot();

@@ -22,6 +22,7 @@ from spyder_cctv.capture import CameraIdentityError, Capture, OpenCVCapture, enc
 from spyder_cctv.config import CameraConfig, SettingsProfile, save_config
 from spyder_cctv.controls import unavailable_controls, validate_settings
 from spyder_cctv.cv.contracts import VisionConfig
+from spyder_cctv.demo_sources import DemoClipCapture, is_demo_source, resolve_demo_source
 from spyder_cctv.motion_config import AnalysisConfig
 from spyder_cctv.pre_event import BufferedFrame, PreEventBuffer
 from spyder_cctv.preferences import Preferences
@@ -436,6 +437,8 @@ class CameraWorker:
                 "source_label": (
                     f"Webcam {self.config.source}"
                     if isinstance(self.config.source, int)
+                    else "Demo clip"
+                    if is_demo_source(self.config.source)
                     else "Network stream"
                     if "://" in self.config.source
                     else "Video file"
@@ -534,6 +537,8 @@ class CameraWorker:
 
     def _can_reconnect(self) -> bool:
         source = self.config.source
+        if is_demo_source(source):
+            return False
         return isinstance(source, int) or (
             isinstance(source, str)
             and (
@@ -596,7 +601,9 @@ class CameraWorker:
         try:
             try:
                 self._connection_notice = None
-                if self._capture_factory is OpenCVCapture:
+                if self._capture_factory is OpenCVCapture and is_demo_source(self.config.source):
+                    capture = DemoClipCapture(self.config.source)
+                elif self._capture_factory is OpenCVCapture:
                     source = self.config.source
                     if isinstance(source, int) and self._device_bindings is not None:
                         saved = self._device_bindings.get(self.config.id, source)
@@ -1158,6 +1165,8 @@ class CameraManager:
         with self._mutations:
             if self._closed:
                 raise RuntimeError("Camera manager is closed")
+            if is_demo_source(camera.source):
+                resolve_demo_source(camera.source)
             if camera.vision is not None:
                 camera = replace(
                     camera,

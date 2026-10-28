@@ -549,7 +549,7 @@ test("showcase loads local draft, makes no requests, and unmount clears handlers
   const h = mountHarness({ showcase: true });
   await h.flush();
   assert.equal(h.calls.length, 0);
-  assert.match(h.root.innerHTML, /Demo editing only/);
+  assert.match(h.root.innerHTML, /Browser showcase runs local motion workflows/);
   loadTemplate(h, "face-event");
   h.root.dispatch("click", h.target("button", { save: "" }));
   assert.ok(h.local.has("spyder.workflow-editor.draft"));
@@ -557,6 +557,17 @@ test("showcase loads local draft, makes no requests, and unmount clears handlers
   h.window.spyderWorkflows.unmount();
   assert.equal(h.root.removed, true);
   assert.ok([...h.root.handlers.values()].every((items) => items.length === 0));
+});
+
+test("Browser motion node appears only in showcase palette", async () => {
+  const local = mountHarness();
+  await local.flush();
+  assert.doesNotMatch(local.root.innerHTML, /data-add="browser_motion"/);
+  local.window.spyderWorkflows.unmount();
+  const showcase = mountHarness({ showcase: true });
+  await showcase.flush();
+  assert.match(showcase.root.innerHTML, /data-add="browser_motion"/);
+  showcase.window.spyderWorkflows.unmount();
 });
 
 test("snapshot polling preserves unsaved name edit and unmount aborts requests", async () => {
@@ -3032,7 +3043,7 @@ test("pre-event template connects lightweight InsightFace and unknown identity f
 });
 
 test("template catalog describes requirements and supports purpose search", () => {
-  assert.equal(new Set(TEMPLATE_CATALOG.map((t) => t.id)).size, 3);
+  assert.equal(new Set(TEMPLATE_CATALOG.map((t) => t.id)).size, 4);
   for (const entry of TEMPLATE_CATALOG) {
     assert.ok(
       entry.name &&
@@ -3053,6 +3064,11 @@ test("template catalog describes requirements and supports purpose search", () =
     ["insightface-alert"],
   );
   assert.equal(templateEntries("no-such-template").length, 0);
+  assert.deepEqual(templateEntries("browser clip motion").map((item) => item.id), []);
+  assert.deepEqual(templateEntries("browser clip motion", true).map((item) => item.id), ["browser-clip-motion"]);
+  const browserMotion = createWorkflowTemplate("browser-clip-motion", { cameraId: "clip-1" });
+  assert.equal(browserMotion.nodes.find((item) => item.type === "camera").params.camera_id, "clip-1");
+  assert.deepEqual(validate(browserMotion), []);
   assert.throws(
     () => createWorkflowTemplate("unknown"),
     /Unknown workflow template/,
@@ -3071,8 +3087,9 @@ test("template picker browses without modifying draft or requesting permissions"
   assert.match(h.root.innerHTML, /aria-labelledby="we-template-title"/);
   assert.equal(
     (h.root.innerHTML.match(/class="we-template-thumbnail"/g) || []).length,
-    3,
+    4,
   );
+  assert.match(h.root.innerHTML, /Browser clip motion event/);
   assert.match(h.root.innerHTML, /10s before · 20s after/);
   assert.match(h.root.innerHTML, /Idle recorder/);
   assert.match(
@@ -3521,9 +3538,33 @@ test("library activation waits for motion review and cancellation performs no sa
   h.window.spyderWorkflows.unmount();
 });
 
-test("demo refuses library activation without making requests", async () => {
+test("demo library activates supported workflows through the browser runtime", async () => {
   const h = mountHarness({ showcase: true });
   await h.flush();
+  const workflow = {
+    id: "saved",
+    name: "Saved browser motion",
+    enabled: false,
+    nodes: [
+      { id: "camera", type: "camera", params: { camera_id: "clip-1" } },
+      { id: "motion", type: "browser_motion", params: { threshold: 0.1 } },
+      { id: "notice", type: "notification", params: { title: "Motion", message: "Detected" } },
+    ],
+    edges: [
+      { from: "camera", to: "motion", input: "camera" },
+      { from: "motion", to: "notice" },
+    ],
+  };
+  const calls = [];
+  h.window.spyderWorkflowStore = {
+    get: async (id) => id === workflow.id ? workflow : null,
+    page: async () => ({ counts: { total: 1, enabled: 1, disabled: 0 } }),
+  };
+  h.window.spyderDemoWorkflowRuntime = {
+    inspect: () => ({ supported: true, errors: [] }),
+    enable: async (value) => { calls.push(["enable", value.id]); return { ...value, enabled: true }; },
+    disable: async (id) => { calls.push(["disable", id]); return { ...workflow, enabled: false }; },
+  };
   let options;
   h.window.spyderWorkflowManager = {
     open: (value) => {
@@ -3536,10 +3577,10 @@ test("demo refuses library activation without making requests", async () => {
     },
   };
   h.root.dispatch("click", h.target("button", { openWorkflowManager: "" }));
-  await assert.rejects(
-    options.onToggle("saved", true, async () => true),
-    /showcase/,
-  );
+  assert.equal(await options.onToggle("saved", true, async () => true), true);
+  assert.deepEqual(calls, [["enable", "saved"]]);
+  assert.equal(await options.onToggle("saved", false, async () => true), true);
+  assert.deepEqual(calls, [["enable", "saved"], ["disable", "saved"]]);
   assert.equal(h.calls.length, 0);
   h.window.spyderWorkflows.unmount();
 });

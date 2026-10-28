@@ -1,4 +1,7 @@
+import hashlib
+import json
 from html.parser import HTMLParser
+from importlib.resources import files
 
 from spyder_cctv.cli import main
 from spyder_cctv.showcase import export_showcase
@@ -23,6 +26,19 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "settings.js",
         "settings.css",
         "showcase.js",
+        "browser-demo-workflows.js",
+        "demo-cameras.js",
+        "demo-cameras.json",
+        "demo-camera-picker.js",
+        "demo-camera-picker.css",
+        *[
+            c["filename"]
+            for c in json.loads(
+                files("spyder_cctv")
+                .joinpath("assets", "demo-cameras.json")
+                .read_text(encoding="utf-8")
+            )["cameras"]
+        ],
         "activity.js",
         "icons.svg",
         "spyder-emblem.png",
@@ -95,7 +111,26 @@ def test_exported_html_references_only_bundled_assets(tmp_path):
 
     Assets().feed((output / "index.html").read_text(encoding="utf-8"))
     assert references
+    assert len(references) == len(set(references)), "Assets must load once"
     for path in references:
         assert path.startswith("/") and not path.startswith("//")
         assert (output / path.lstrip("/")).is_file(), path
     assert "/workflow-preview.js" in references
+
+
+def test_demo_clips_export_with_verified_credits_and_browser_only_policy(tmp_path):
+    export_showcase(tmp_path / "site")
+    output = tmp_path / "site"
+    catalog = json.loads((output / "demo-cameras.json").read_text(encoding="utf-8"))
+    assert len(catalog["cameras"]) == 8
+    assert sum(c["bytes"] for c in catalog["cameras"]) < 1_000_000
+    for clip in catalog["cameras"]:
+        data = (output / clip["filename"]).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == clip["sha256"]
+        assert data.index(b"moov") < data.index(b"mdat")
+        assert clip["author"] and clip["source_url"].startswith("https://commons.wikimedia.org/")
+        assert clip["license"] == "CC BY 3.0"
+    policy = (output / "_headers").read_text(encoding="utf-8")
+    assert "media-src 'self' blob:" in policy
+    assert "connect-src 'none'" in policy
+    assert "worker-src 'none'" in policy

@@ -6,7 +6,7 @@
 
 The main application runs on the user's computer. The Cloudflare version is a
 separate **static browser showcase**: HTML, CSS, JavaScript, SVG, and presentation
-images. No Python server, Pages Function, model service, media proxy, or cloud
+images and short bundled demo clips. No Python server, Pages Function, model service, media proxy, or cloud
 storage binding is required. Camera work uses the visitor's hardware and browser.
 Cloudflare handles ordinary asset delivery and web-access metadata.
 
@@ -49,11 +49,12 @@ before configuring DNS. A generated export does not deploy the site or configure
 
 | Feature | Installed app | Static showcase |
 | --- | --- | --- |
-| Sources | OpenCV devices, files, supported streams | Generated feeds, permitted webcams, selected local videos. |
+| Sources | OpenCV devices, files, supported streams, bundled looping demo clips | Bundled home-camera loops, generated feeds, permitted webcams, selected local videos. |
 | Motion | MOG2, regions, tracking | Small browser frame-difference demonstration. |
 | YOLO/InsightFace and native capacity assessment | Local Python engines | Unavailable. |
 | Workflow editing and JSON exchange | Supported | Browser-only drafts/import/export. |
-| Workflow execution, Code nodes, Preview node execution, event actions | Local execution | Disabled. |
+| Workflow execution | Full local graph execution | Supported browser-motion, cooldown, event, notification, capture and time-limited recording nodes; native model/code/subflow nodes are refused. |
+| Native Code nodes, face enrollment and model inference | Local Python engines | Unavailable; no simulated identities or model detections. |
 | Recording and captures | Local filesystem | Canvas/MediaRecorder and local Blob objects. |
 | Pre-event recording | Opt-in local RAM buffer for workflow Event clips | Settings editable; native pre-event capture unavailable. |
 | Retention and crash recovery | Native storage policy and journals | No durable media recovery. |
@@ -66,9 +67,10 @@ controls depend on track capabilities and generally offer less than native drive
 ## Privacy and limits
 
 The export's Content Security Policy includes `connect-src 'none'`, blocks workers,
-and allows only local Blob media. The browser adapter handles its API-shaped operations
+and allows same-origin bundled clips plus local Blob media. The browser adapter handles its API-shaped operations
 in memory; it does not contact the installed Python service. The export contains no
-private camera configuration, user media, or uploaded models.
+private camera configuration, user media, or uploaded models. The eight approved demo clips total
+886,080 bytes, carry source attribution, and are decoded and processed on the visitor's device. See [Demo camera feeds](../user-guide/demo-camera-feeds.md) for licenses and camera setup.
 
 Recordings and their thumbnails share a **128 MiB** tab buffer. Keep the tab visible;
 hiding it stops and finalizes recording. Download media before closing/reloading.
