@@ -424,7 +424,6 @@
 }
 .vision-nav .button { margin: 0; border-color: transparent; background: transparent; color: var(--ink); box-shadow: none; }
 .vision-nav .button[aria-selected=true] { border-color: transparent; background: var(--accent); color: white; }
-.vision-nav .button:not([aria-selected=true]):hover { border-color: transparent; background: var(--canvas); color: var(--ink); }
 /* Keep the Vision Lab frame identical across all three sections. */
 main:has(.vision-nav) { padding: 8px 12px; }
 #workspace-page:has(.vision-nav) > .page-heading { display: none; }
@@ -438,7 +437,12 @@ main:has(.vision-nav) { padding: 8px 12px; }
   transition: transform 340ms cubic-bezier(.22,.61,.36,1);
 }
 :is(.system-nav, .vision-nav) > button { position: relative; z-index: 1; }
-:is(.system-nav, .vision-nav).has-nav-indicator > button[aria-selected=true] { background: transparent; }
+/* The moving indicator owns the fill; buttons must not flash a second hover/tap layer. */
+:is(.system-nav, .vision-nav).has-nav-indicator > button[aria-selected] {
+  background: transparent; border-color: transparent; box-shadow: none; transform: none;
+  transition-property: color;
+  -webkit-tap-highlight-color: transparent;
+}
 @media (prefers-reduced-motion: reduce) {
   :is(.system-nav, .vision-nav).has-nav-indicator::before { transition: none; }
 }

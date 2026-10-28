@@ -147,6 +147,23 @@ try {
   await command('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]},sessionId);
   await until("!!window.spyderWorkflows && document.querySelector('#vision-mode-content')?.childElementCount>0");
   await delay(300);
+  const hoverPoint=await evaluate("(()=>{const r=document.querySelector('#vision-workflow-tab').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()");
+  await command('Input.dispatchMouseEvent',{type:'mouseMoved',...hoverPoint},sessionId);
+  await delay(180);
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#vision-workflow-tab')).backgroundColor"),'rgba(0, 0, 0, 0)','Hover must not paint a second destination highlight over the sliding indicator');
+  await command('Input.dispatchMouseEvent',{type:'mousePressed',...hoverPoint,button:'left',clickCount:1},sessionId);
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#vision-workflow-tab')).transform"),'none','Pressing a tab must not shift it away from the indicator');
+  await command('Input.dispatchMouseEvent',{type:'mouseReleased',...hoverPoint,button:'left',clickCount:1},sessionId);
+  const highlightSamples=await evaluate(`(async()=>{
+    const samples=[];const end=performance.now()+200;
+    while(performance.now()<end){await new Promise(requestAnimationFrame);samples.push(getComputedStyle(document.querySelector('#vision-workflow-tab')).backgroundColor)}
+    return samples;
+  })()`);
+  assert.ok(highlightSamples.every(color=>color==='rgba(0, 0, 0, 0)'),'Destination button remains transparent throughout the glide');
+  await until("!!document.querySelector('.workflow-editor') && !document.querySelector('#vision-mode-content').hasAttribute('aria-busy')");
+  await evaluate("document.querySelector('#vision-motion-tab').click()");
+  await until("!!document.querySelector('.vision-lab') && !document.querySelector('#vision-mode-content').hasAttribute('aria-busy')");
+  await delay(400);
   // Trace the actual section switch before applying a deterministic expensive-mount fixture.
   await command('Tracing.start',{categories:'devtools.timeline,blink.user_timing,disabled-by-default-devtools.timeline.frame',transferMode:'ReportEvents'},sessionId);
   const measurement=await evaluate(`(async()=>{
@@ -191,6 +208,11 @@ try {
   assert.equal(await evaluate('mountCalls'),rapid,'Rapid retargeting cancels obsolete expensive mounts');
   await evaluate("document.querySelector('#vision-workflow-tab').click();location.hash='system'");
   await until("!!document.querySelector('.system-nav')");
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('.system-nav button')).webkitTapHighlightColor"),'rgba(0, 0, 0, 0)','Native tap highlight does not flash over the shared indicator');
+  await evaluate("document.querySelector('[data-system-tab=overview]').focus()");
+  await command('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight'},sessionId);
+  await command('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight'},sessionId);
+  assert.equal(await evaluate("document.activeElement.matches(':focus-visible') && getComputedStyle(document.activeElement).outlineStyle!=='none'"),true,'Keyboard navigation retains its visible focus outline');
   await delay(150);
   assert.equal(await evaluate('mountCalls'),rapid,'Leaving Vision Lab cancels pending section work');
   await command('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]},sessionId);
