@@ -31,6 +31,23 @@
         const box = tab.getBoundingClientRect();
         return [tab.id, { x: box.left - left, y: box.top - top, width: box.width, height: box.height }];
       })));
+      const layer = nav.querySelector(":scope > .nav-contrast-layer");
+      if (layer) {
+        const labels = [...nav.querySelectorAll(':scope > [role="tab"]')].map((tab) => {
+          const box = navigatorPositions.get(nav).get(tab.id), style = getComputedStyle(tab);
+          return { text: tab.textContent, box, font: style.font, spacing: style.letterSpacing, padding: style.padding, whiteSpace: style.whiteSpace };
+        });
+        layer.replaceChildren(...labels.map(({text, box, font, spacing, padding, whiteSpace}) => {
+          const label = document.createElement("span");
+          label.textContent = text;
+          label.style.cssText = `left:${box.x}px;top:${box.y}px;width:${box.width}px;height:${box.height}px`;
+          label.style.font = font;
+          label.style.letterSpacing = spacing;
+          label.style.padding = padding;
+          label.style.whiteSpace = whiteSpace;
+          return label;
+        }));
+      }
     }
     const box = navigatorPositions.get(nav).get(selected.id);
     for (const [name, value] of Object.entries(box)) {
@@ -40,7 +57,11 @@
     nav.classList.add("has-nav-indicator");
   }
   function setupNavigator(nav) {
-    updateNavigator(nav);
+    const layer = document.createElement("span");
+    layer.className = "nav-contrast-layer";
+    layer.setAttribute("aria-hidden", "true");
+    nav.append(layer);
+    updateNavigator(nav, true);
     if (typeof ResizeObserver !== "undefined") {
       const observer = new ResizeObserver(() => updateNavigator(nav, true));
       observer.observe(nav);

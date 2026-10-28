@@ -147,6 +147,36 @@ try {
   await command('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]},sessionId);
   await until("!!window.spyderWorkflows && document.querySelector('#vision-mode-content')?.childElementCount>0");
   await delay(300);
+  const contrast=await evaluate(`(async()=>{
+    const nav=document.querySelector('.vision-nav'), layer=nav.querySelector('.nav-contrast-layer');
+    if(!layer)return {exists:false};
+    const middle=layer.children[1], bounds=middle.getBoundingClientRect(), origin=layer.getBoundingClientRect();
+    const center=bounds.left-origin.left+bounds.width/2;
+    document.querySelector('#vision-gallery-tab').click();
+    let coveredIntermediate=false, synced=true, samples=0;
+    const end=performance.now()+430;
+    while(performance.now()<end){
+      await new Promise(requestAnimationFrame);
+      const matrix=new DOMMatrix(getComputedStyle(nav,'::before').transform);
+      const clip=getComputedStyle(layer).clipPath;
+      const left=clip.match(/ ([\\d.-]+)px round/), top=clip.match(/^inset\\(([\\d.-]+)px/);
+      synced &&= !!left && !!top && Math.abs(Number(left[1])-matrix.m41)<.75 && Math.abs(Number(top[1])-matrix.m42)<.75;
+      const width=parseFloat(nav.style.getPropertyValue('--nav-width'));
+      if(matrix.m41<center && matrix.m41+width>center && document.querySelector('#vision-workflow-tab').getAttribute('aria-selected')==='false')coveredIntermediate=true;
+      samples++;
+    }
+    return {exists:true,hidden:layer.getAttribute('aria-hidden'),white:getComputedStyle(middle).color,pointerEvents:getComputedStyle(layer).pointerEvents,coveredIntermediate,synced,samples,buttons:layer.querySelectorAll('button').length};
+  })()`);
+  assert.equal(contrast.exists,true,'Navigator has a clipped contrast layer');
+  assert.equal(contrast.hidden,'true','Decorative copies are hidden from assistive technology');
+  assert.equal(contrast.white,'rgb(255, 255, 255)','Covered text is white');
+  assert.equal(contrast.pointerEvents,'none','Contrast layer does not intercept tab input');
+  assert.equal(contrast.buttons,0,'Copies do not create duplicate controls');
+  assert.equal(contrast.coveredIntermediate,true,'Passing over an intermediate tab reveals white text without selecting it');
+  assert.equal(contrast.synced,true,'Text clipping tracks the red indicator on every sampled frame');
+  await evaluate("document.querySelector('#vision-motion-tab').click()");
+  await until("!!document.querySelector('.vision-lab') && !document.querySelector('#vision-mode-content').hasAttribute('aria-busy')");
+  await delay(400);
   const hoverPoint=await evaluate("(()=>{const r=document.querySelector('#vision-workflow-tab').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()");
   await command('Input.dispatchMouseEvent',{type:'mouseMoved',...hoverPoint},sessionId);
   await delay(180);
@@ -208,6 +238,18 @@ try {
   assert.equal(await evaluate('mountCalls'),rapid,'Rapid retargeting cancels obsolete expensive mounts');
   await evaluate("document.querySelector('#vision-workflow-tab').click();location.hash='system'");
   await until("!!document.querySelector('.system-nav')");
+  for(const width of [1280,390]){
+    await command('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false},sessionId);
+    await delay(400);
+    const geometry=await evaluate(`(()=>{
+      const nav=document.querySelector('.system-nav'), copies=[...nav.querySelector('.nav-contrast-layer').children];
+      return [...nav.querySelectorAll(':scope > [role=tab]')].every((tab,i)=>{
+        const a=tab.getBoundingClientRect(),b=copies[i].getBoundingClientRect();
+        return Math.abs(a.left-b.left)<1 && Math.abs(a.top-b.top)<1 && Math.abs(a.width-b.width)<1 && Math.abs(a.height-b.height)<1 && getComputedStyle(tab).font===getComputedStyle(copies[i]).font;
+      });
+    })()`);
+    assert.equal(geometry,true,'Contrast labels align exactly at '+width+'px, including wrapped System rows');
+  }
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.system-nav button')).webkitTapHighlightColor"),'rgba(0, 0, 0, 0)','Native tap highlight does not flash over the shared indicator');
   await evaluate("document.querySelector('[data-system-tab=overview]').focus()");
   await command('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight'},sessionId);
@@ -217,6 +259,7 @@ try {
   assert.equal(await evaluate('mountCalls'),rapid,'Leaving Vision Lab cancels pending section work');
   await command('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]},sessionId);
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.system-nav'),'::before').transitionDuration"),'0s','Reduced motion disables the indicator glide');
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('.nav-contrast-layer')).transitionDuration"),'0s','Reduced motion keeps text clipping instant too');
   console.log('PASS: navigation responds before expensive work and completes the latest section switch');
 } finally {
   socket?.close();

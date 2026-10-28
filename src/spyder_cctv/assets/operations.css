@@ -440,9 +440,20 @@ main:has(.vision-nav) { padding: 8px 12px; }
 /* The moving indicator owns the fill; buttons must not flash a second hover/tap layer. */
 :is(.system-nav, .vision-nav).has-nav-indicator > button[aria-selected] {
   background: transparent; border-color: transparent; box-shadow: none; transform: none;
-  transition-property: color;
+  color: var(--ink); transition: none;
   -webkit-tap-highlight-color: transparent;
+}
+.nav-contrast-layer {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none; user-select: none;
+  clip-path: inset(var(--nav-y) calc(100% - var(--nav-x) - var(--nav-width)) calc(100% - var(--nav-y) - var(--nav-height)) var(--nav-x) round 7px);
+  transition: clip-path 340ms cubic-bezier(.22,.61,.36,1);
+  will-change: clip-path;
+}
+.nav-contrast-layer > span {
+  position: absolute; display: flex; align-items: center; justify-content: center;
+  box-sizing: border-box; border: 1px solid transparent; color: #fff; text-align: center;
 }
 @media (prefers-reduced-motion: reduce) {
   :is(.system-nav, .vision-nav).has-nav-indicator::before { transition: none; }
+  .nav-contrast-layer { transition: none; }
 }
