@@ -62,12 +62,19 @@
         /><span>SpyDER<small>AI Empowered Home Security</small></span></a
       >
       <div class="top-actions">
-        <label class="mobile-workspace"
-          >Workspace<select
+        <div class="mobile-workspace">
+          <label>Workspace<select
             id="workspace-select"
             aria-label="Choose workspace"
           ></select
-        ></label>
+          ></label>
+          <button id="workspace-switch-trigger" class="workspace-switch-trigger" type="button" hidden
+            aria-haspopup="dialog" aria-controls="workspace-switcher" aria-expanded="false">
+            <span class="workspace-switch-icon" data-workspace-glyph aria-hidden="true"></span>
+            <span class="workspace-switch-copy"><small>Workspace</small><strong data-workspace-name>Control Room</strong></span>
+            <span class="workspace-switch-action">Switch<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 5 7 7-7 7"/></svg></span>
+          </button>
+        </div>
         <time id="clock"></time
         ><button
           id="theme"

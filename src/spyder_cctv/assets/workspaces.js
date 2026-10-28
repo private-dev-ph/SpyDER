@@ -87,6 +87,8 @@
   };
   const nav = find("#workspace-nav");
   const chooser = find("#workspace-select");
+  const workspaceTrigger = find("#workspace-switch-trigger");
+  let workspaceDialog = null;
   const page = find("#workspace-page");
   find(".skip-link")?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -195,6 +197,7 @@
   function icon(name) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
     svg.setAttribute("aria-hidden", "true");
     const use = document.createElementNS(svg.namespaceURI, "use");
     use.setAttribute("href", "/icons.svg#" + name);
@@ -214,6 +217,97 @@
   chooser.addEventListener("change", () => {
     location.hash = chooser.value;
   });
+  function syncWorkspaceLauncher() {
+    if (!workspaceDialog) return;
+    find("[data-workspace-name]", workspaceTrigger).textContent = pages[current][0];
+    find("[data-workspace-glyph]", workspaceTrigger).replaceChildren(icon(pages[current][1]));
+    workspaceTrigger.setAttribute("aria-label", `Switch workspace. Current: ${pages[current][0]}`);
+    for (const link of workspaceDialog.querySelectorAll("[data-workspace-destination]")) {
+      if (link.dataset.workspaceDestination === current) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    }
+  }
+  function setupWorkspaceLauncher() {
+    if (!workspaceTrigger || typeof HTMLDialogElement === "undefined" || !HTMLDialogElement.prototype.showModal) return;
+    workspaceDialog = document.createElement("dialog");
+    let restoreFocus = true;
+    workspaceDialog.id = "workspace-switcher";
+    workspaceDialog.className = "workspace-switcher";
+    workspaceDialog.setAttribute("aria-labelledby", "workspace-switcher-title");
+    workspaceDialog.innerHTML = '<header class="workspace-switcher-head"><div><h2 id="workspace-switcher-title">Workspaces</h2><p>Choose where to work.</p></div><button type="button" class="icon-button" aria-label="Close workspace switcher"></button></header><nav class="workspace-switcher-grid" aria-label="Choose workspace"></nav>';
+    const close = workspaceDialog.querySelector("button");
+    close.append(icon("close"));
+    close.addEventListener("click", () => workspaceDialog.close());
+    const descriptions = {
+      "control-room": "Live cameras & controls", "vision-lab": "Analysis & workflows",
+      "camera-setup": "Devices & discovery", recordings: "Videos & captures",
+      events: "Activity & detections", layouts: "Camera wall designer", system: "Health, storage & backups",
+    };
+    for (const [key, [label, glyph]] of Object.entries(pages)) {
+      const link = document.createElement("a");
+      link.href = "#" + key;
+      link.dataset.workspaceDestination = key;
+      link.className = "workspace-card";
+      const symbol = document.createElement("span"), copy = document.createElement("span"), marker = document.createElement("span");
+      symbol.className = "workspace-card-icon";
+      symbol.append(icon(glyph));
+      copy.className = "workspace-card-copy";
+      const name = document.createElement("strong"), detail = document.createElement("small");
+      name.textContent = label;
+      detail.textContent = descriptions[key];
+      copy.append(name, detail);
+      marker.className = "workspace-card-marker";
+      marker.setAttribute("aria-hidden", "true");
+      marker.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg>';
+      link.append(symbol, copy, marker);
+      link.addEventListener("click", () => {
+        restoreFocus = false;
+        workspaceDialog.close();
+      });
+      workspaceDialog.querySelector("nav").append(link);
+    }
+    workspaceDialog.addEventListener("click", (event) => {
+      if (event.target !== workspaceDialog) return;
+      const box = workspaceDialog.getBoundingClientRect();
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) workspaceDialog.close();
+    });
+    workspaceDialog.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab") return;
+      const controls = [...workspaceDialog.querySelectorAll("button,a")];
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    workspaceDialog.addEventListener("close", () => {
+      workspaceTrigger.setAttribute("aria-expanded", "false");
+      if (restoreFocus && workspaceTrigger.getClientRects().length) workspaceTrigger.focus({ preventScroll: true });
+    });
+    document.body.append(workspaceDialog);
+    workspaceTrigger.hidden = false;
+    chooser.closest("label").hidden = true;
+    workspaceTrigger.addEventListener("click", () => {
+      restoreFocus = true;
+      syncWorkspaceLauncher();
+      workspaceDialog.showModal();
+      workspaceTrigger.setAttribute("aria-expanded", "true");
+      const selected = workspaceDialog.querySelector('[aria-current="page"]');
+      selected?.focus({ preventScroll: true });
+      selected?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    window.matchMedia("(max-width: 800px)").addEventListener("change", (event) => {
+      if (!event.matches && workspaceDialog.open) {
+        restoreFocus = false;
+        workspaceDialog.close();
+      }
+    });
+    syncWorkspaceLauncher();
+  }
+  setupWorkspaceLauncher();
   function tell(text) {
     message.textContent = text;
     message.hidden = !text;
@@ -332,6 +426,7 @@
     document.title = "SpyDER · " + pages[current][0];
     app.leaveFocus();
     chooser.value = current;
+    syncWorkspaceLauncher();
     for (const a of nav.querySelectorAll("a")) {
       const chosen = a.dataset.workspace === current;
       a.classList.toggle("rail-current", chosen);
