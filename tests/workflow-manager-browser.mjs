@@ -309,10 +309,12 @@ try {
   await wait("document.querySelector('.wm-row')");
   assert.equal(
     await evaluate(
-      "[...document.querySelectorAll('[data-action=toggle]')].every(button=>button.disabled)",
+      "[...document.querySelectorAll('[data-action=toggle]')].every(button=>!button.disabled)",
     ),
     true,
   );
+  await evaluate("document.querySelector('[data-action=toggle]').click()");
+  await wait("window.toggleCalls>=2");
   await evaluate("manager.close();window.demo=false");
   console.log("Workflow manager browser checks passed.");
 } finally {
