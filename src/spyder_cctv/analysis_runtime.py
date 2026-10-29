@@ -53,6 +53,9 @@ class AnalysisRuntime:
             if source_epoch != self._source_epoch:
                 self._source_epoch = source_epoch
                 self._source_revision += 1
+                # The new background has no MIL tracks yet. Do not throttle its
+                # warm-up using the retired tracker set's processing cost.
+                self._average_ms = 0.0
                 self._pending = None
                 self._next = 0.0
                 self._result = {"state": "loading", "regions": [], "tracks": []}

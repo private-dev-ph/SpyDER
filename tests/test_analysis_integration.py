@@ -181,8 +181,11 @@ def test_source_epoch_discards_inflight_results_and_rebuilds_on_analysis_owner()
     try:
         runtime.process(np.full((30, 40, 3), 1, np.uint8), source_epoch=("camera", 0))
         assert entered.wait(2)
+        with runtime._condition:
+            runtime._average_ms = 1000  # Previous loop had expensive MIL tracks.
         result = runtime.process(np.full((30, 40, 3), 2, np.uint8), source_epoch=("camera", 1))
         assert result["state"] == "loading" and result["regions"] == []
+        assert result["effective_fps"] == config.inference_fps
         assert runtime.mask() is None
         release.set()
         wait_for(lambda: runtime._result.get("value") == 2)
