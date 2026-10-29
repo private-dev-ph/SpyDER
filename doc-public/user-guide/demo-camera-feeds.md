@@ -24,7 +24,7 @@ The browser runtime accepts Camera, Browser motion, Cooldown, Event, Notificatio
 
 ## Source characteristics
 
-Clips are eight seconds, silent, 15fps, 360px high and aspect-ratio preserving. Original camera watermarks and timestamps remain; timestamps are archival, not current. Loops restart at the cut without reversed action or blended ghost frames. That cut can trigger motion detection and should be considered when testing thresholds. Some cameras share a source recording and show different views of the same property. They are not eight separate homes.
+Clips are eight seconds, silent, 15fps, 360px high and aspect-ratio preserving. Original camera watermarks and timestamps remain; timestamps are archival, not current. Loops restart at the cut without reversed action or blended ghost frames. On each native loop, motion analysis resets its learned background and tracks in both Control Room and Vision Lab, then observes the configured warm-up period again. This prevents repeated activity from being learned away as permanent background. The browser resets its previous-frame motion reference at the cut. A loop is not a camera disconnection and does not stop an ongoing recording. Some cameras share a source recording and show different views of the same property. They are not eight separate homes.
 
 The source videos document reported parcel/property theft. Preserve that context and do not imply the depicted people are consenting models or ordinary visitors. No identities or face vectors are shipped. A copyright license does not verify public biometric-enrollment consent; use consented volunteers for a public identification demonstration.
 

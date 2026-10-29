@@ -7,8 +7,10 @@ from importlib.resources import files
 import cv2
 import numpy as np
 
+from spyder_cctv.analysis_preview import AnalysisPreviews
 from spyder_cctv.cameras import CameraManager
 from spyder_cctv.config import CameraConfig, load_app_config
+from spyder_cctv.demo_sources import DemoClipCapture
 
 
 def test_eight_packaged_demo_cameras_expose_jpeg_raw_frames_and_persistent_tuning(tmp_path):
@@ -51,3 +53,63 @@ def test_eight_packaged_demo_cameras_expose_jpeg_raw_frames_and_persistent_tunin
     finally:
         manager.close()
     assert all(s["state"] == "stopped" for s in manager.statuses())
+
+
+def test_live_and_draft_analysis_follow_same_loop_without_reopening_or_stopping_recording(tmp_path):
+    clock, captures = [100.0], []
+
+    class ControlledDemo(DemoClipCapture):
+        def read(self):
+            return self._read_timed_frame(clock[0])
+
+    def open_demo(source):
+        capture = ControlledDemo(source)
+        captures.append(capture)
+        return capture
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.01)
+        raise AssertionError("Loop epoch did not reach motion analysis")
+
+    settings = {"enabled": True, "warmup_frames": 0, "roi": [0.1, 0.1, 0.8, 0.8]}
+    manager = CameraManager(
+        [CameraConfig("sample", "demo://porch-parcel", fps=30, pipeline="none", analysis=settings)],
+        config_path=tmp_path / "config.json",
+        capture_factory=open_demo,
+    )
+    previews = AnalysisPreviews(manager)
+    try:
+        manager.set_recording("sample", True)
+        worker = manager.get_worker("sample")
+        wait_for(lambda: worker.jpeg() is not None)
+        session = worker.status()["capture_session"]
+        previews.configure("loop-preview", "sample", settings)
+        draft = previews._sessions["loop-preview"].runtime
+
+        def both_observed(epoch):
+            previews.snapshot("loop-preview")
+            return (
+                worker._analysis_runtime._source_epoch == (session, epoch)
+                and draft._source_epoch == (session, epoch)
+                and worker.analysis_snapshot()["runtime"]["state"] == "ready"
+            )
+
+        wait_for(lambda: both_observed(0))
+        clock[0] += 8.1
+        wait_for(lambda: both_observed(1))
+        clock[0] += 16  # Skip complete loops; the next frame index can be unchanged.
+        wait_for(lambda: both_observed(2))
+        raw, epoch = worker.raw_frame_sample()
+        assert raw is not None and epoch == (session, 2)
+        assert len(captures) == 1
+        assert worker.status()["capture_session"] == session
+        assert worker.status()["state"] == "running"
+        assert manager.statuses()[0]["recording"] is True
+        assert worker.config.analysis.roi == (0.1, 0.1, 0.8, 0.8)
+    finally:
+        previews.close()
+        manager.close()

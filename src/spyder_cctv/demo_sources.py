@@ -141,6 +141,8 @@ class DemoClipCapture:
             raise
         self._closed = False
         self._settings = _DEFAULTS.copy()
+        self.playback_epoch = 0
+        self._playback_cycle = 0
         self._playback_started: float | None = None
         self._next_frame_index = 0
         self._last_target_index: int | None = None
@@ -230,7 +232,10 @@ class DemoClipCapture:
         return frame
 
     def _seek_to_start(self) -> bool:
-        return bool(self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0))
+        rewound = bool(self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0))
+        if rewound:
+            self.playback_epoch += 1
+        return rewound
 
     def _read_timed_frame(self, now: float) -> tuple[bool, Any]:
         assert self._source_fps is not None and self._frame_count is not None
@@ -239,8 +244,18 @@ class DemoClipCapture:
             target = 0
         else:
             duration = self._frame_count / self._source_fps
-            elapsed = max(0.0, now - self._playback_started) % duration
-            target = min(self._frame_count - 1, int(elapsed * self._source_fps))
+            elapsed = max(0.0, now - self._playback_started)
+            cycle = int(elapsed / duration)
+            target = min(self._frame_count - 1, int((elapsed % duration) * self._source_fps))
+            if cycle != self._playback_cycle:
+                # A suspended/slow consumer can skip whole loops and land at the
+                # same or a later frame index. Detect the cycle before cache reuse.
+                if not self._seek_to_start():
+                    return False, None
+                self._next_frame_index = 0
+                self._last_target_index = None
+                self._cached_frame = None
+                self._playback_cycle = cycle
 
         if target == self._last_target_index and self._cached_frame is not None:
             return True, self._transform(self._cached_frame.copy())

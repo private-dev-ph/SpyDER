@@ -12,9 +12,7 @@ from spyder_cctv.demo_sources import DemoClipCapture, resolve_demo_source
 @pytest.fixture
 def demo_clip(tmp_path):
     path = tmp_path / "demo-test.mp4"
-    writer = cv2.VideoWriter(
-        str(path), cv2.VideoWriter_fourcc(*"mp4v"), 5, (32, 24)
-    )
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 5, (32, 24))
     if not writer.isOpened():
         pytest.skip("OpenCV MP4 writer unavailable")
     frames = []
@@ -115,3 +113,31 @@ def test_demo_source_label_is_distinct_from_camera_and_network_sources():
     assert worker.status()["source_label"] == "Demo clip"
     assert not worker._can_reconnect()
 
+
+@pytest.mark.parametrize("elapsed", [0.6, 0.81, 1.2])
+def test_epoch_changes_when_reads_skip_a_whole_loop(demo_clip, elapsed):
+    catalog, _ = demo_clip
+    capture = DemoClipCapture("demo://test", catalog_path=catalog)
+    try:
+        assert capture._read_timed_frame(10.0)[0]
+        assert capture.playback_epoch == 0
+        assert capture._read_timed_frame(10.0 + elapsed + 0.001)[0]
+        assert capture.playback_epoch == 1
+        assert capture._read_timed_frame(10.0 + elapsed + 0.002)[0]
+        assert capture.playback_epoch == 1, "Cached reads must not repeatedly reset analysis"
+    finally:
+        capture.close()
+
+
+def test_eof_fallback_also_announces_a_new_epoch(demo_clip):
+    catalog, _ = demo_clip
+    capture = DemoClipCapture("demo://test", catalog_path=catalog)
+    try:
+        capture._source_fps = capture._frame_count = None
+        for _ in range(3):
+            assert capture.read()[0]
+        assert capture.playback_epoch == 0
+        assert capture.read()[0]
+        assert capture.playback_epoch == 1
+    finally:
+        capture.close()

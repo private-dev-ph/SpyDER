@@ -149,3 +149,52 @@ def test_analysis_can_coexist_with_existing_model_configuration(tmp_path):
         assert camera.pipeline == "vision" and camera.analysis.enabled
     finally:
         manager.close()
+
+
+def test_source_epoch_discards_inflight_results_and_rebuilds_on_analysis_owner():
+    entered, release = threading.Event(), threading.Event()
+    instances = []
+
+    class GatedAnalyzer:
+        mask = None
+
+        def __init__(self, config):
+            self.config = config
+            self.owner = threading.get_ident()
+            self.closed = False
+            instances.append(self)
+
+        def process(self, frame):
+            assert threading.get_ident() == self.owner
+            value = int(frame[0, 0, 0])
+            if value == 1:
+                entered.set()
+                assert release.wait(3)
+            return frame, {"state": "ready", "regions": [], "tracks": [], "value": value}
+
+        def close(self):
+            assert threading.get_ident() == self.owner
+            self.closed = True
+
+    config = AnalysisConfig(enabled=True, roi=(0.1, 0.1, 0.8, 0.8))
+    runtime = AnalysisRuntime(config, factory=GatedAnalyzer)
+    try:
+        runtime.process(np.full((30, 40, 3), 1, np.uint8), source_epoch=("camera", 0))
+        assert entered.wait(2)
+        result = runtime.process(np.full((30, 40, 3), 2, np.uint8), source_epoch=("camera", 1))
+        assert result["state"] == "loading" and result["regions"] == []
+        assert runtime.mask() is None
+        release.set()
+        wait_for(lambda: runtime._result.get("value") == 2)
+        assert instances[-2].closed
+        assert instances[-1].config.roi == config.roi
+        count = len(instances)
+        with runtime._condition:
+            runtime._next = 0
+        runtime.process(np.full((30, 40, 3), 3, np.uint8), source_epoch=("camera", 1))
+        wait_for(lambda: runtime._result.get("value") == 3)
+        assert len(instances) == count, "Ordinary frames must retain their background model"
+    finally:
+        release.set()
+        runtime.close(3)
+    assert all(instance.closed for instance in instances)
