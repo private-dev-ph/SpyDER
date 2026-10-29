@@ -80,6 +80,7 @@ class CameraWorker:
         self._jpeg: bytes | None = None
         self._recording_jpeg: bytes | None = None
         self._recording_annotations: tuple[dict[str, Any], ...] = ()
+        self._preview_source_epoch: Any = None
         self._preview_raw: Any = None
         self._preview_updated = 0.0
         self._vision_preview_requested_until = 0.0
@@ -478,7 +479,11 @@ class CameraWorker:
             }
 
     def raw_frame(self, *, timeout: float = 0.0) -> Any:
-        """Lease raw pixels and optionally wait for the capture owner to publish them.
+        """Return fresh clean pixels; see raw_frame_sample for lease semantics."""
+        return self.raw_frame_sample(timeout=timeout)[0]
+
+    def raw_frame_sample(self, *, timeout: float = 0.0) -> tuple[Any, Any]:
+        """Atomically lease raw pixels and their optional demo playback epoch.
 
         A cold preview lease has no retained pixels yet. Waiting releases the state
         lock; it never opens a capture or enables inference. Stop or reconnect
@@ -500,15 +505,15 @@ class CameraWorker:
             )
             while self._state == "running" and not self._stop.is_set():
                 if session != self._capture_session:
-                    return None
+                    return None, None
                 now = time.monotonic()
                 if self._preview_raw is not None and now - self._preview_updated <= 1:
-                    return self._preview_raw.copy()
+                    return self._preview_raw.copy(), self._preview_source_epoch
                 remaining = deadline - now
                 if remaining <= 0:
-                    return None
+                    return None, None
                 self._preview_ready.wait(remaining)
-            return None
+            return None, None
 
     def jpeg(self) -> bytes | None:
         with self._lock:
@@ -628,6 +633,11 @@ class CameraWorker:
                     ok, frame = capture.read()
                     if not ok or frame is None:
                         raise _CaptureDisconnected
+                    source_epoch = (
+                        (self._capture_session, capture.playback_epoch)
+                        if isinstance(capture, DemoClipCapture)
+                        else None
+                    )
                 except CameraIdentityError as error:
                     self._connection_notice = str(error)
                     raise _CaptureDisconnected from None
@@ -715,6 +725,7 @@ class CameraWorker:
                     )
                 with self._lock:
                     self._preview_raw = raw
+                    self._preview_source_epoch = source_epoch
                     self._preview_updated = time.monotonic()
                     self._preview_ready.notify_all()
                 with self._lock:
@@ -749,7 +760,7 @@ class CameraWorker:
                     self._encoder(frame) if analysis is not None or pipeline_may_annotate else None
                 )
                 analysis_result = (
-                    analysis.process(frame)
+                    analysis.process(frame, source_epoch=source_epoch)
                     if analysis is not None
                     else {
                         "state": "error"

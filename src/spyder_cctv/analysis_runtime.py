@@ -27,6 +27,8 @@ class AnalysisRuntime:
         self._average_ms = 0.0
         self._dropped = 0
         self._result: dict[str, Any] = {"state": "loading", "regions": [], "tracks": []}
+        self._source_epoch: Any = None
+        self._source_revision = 0
         self._config_revision = 0
         self._thread = threading.Thread(target=self._run, name="motion-analysis", daemon=True)
         self._thread.start()
@@ -45,13 +47,21 @@ class AnalysisRuntime:
             self._mask = None
             self._updated = None
 
-    def process(self, frame: Any) -> dict[str, Any]:
+    def process(self, frame: Any, *, source_epoch: Any = None) -> dict[str, Any]:
         now = time.monotonic()
         with self._condition:
+            if source_epoch != self._source_epoch:
+                self._source_epoch = source_epoch
+                self._source_revision += 1
+                self._pending = None
+                self._next = 0.0
+                self._result = {"state": "loading", "regions": [], "tracks": []}
+                self._mask = None
+                self._updated = None
             if not self._stop and self._result["state"] != "error" and now >= self._next:
                 if self._pending is not None:
                     self._dropped += 1
-                self._pending = (frame.copy(), now)
+                self._pending = (frame.copy(), now, self._source_revision)
                 effective = min(self.config.inference_fps, 700 / max(1, self._average_ms))
                 self._next = now + 1 / effective
                 self._condition.notify()
@@ -104,17 +114,25 @@ class AnalysisRuntime:
         try:
             with self._condition:
                 config, applied_revision = self.config, self._config_revision
+                applied_source = self._source_revision
             analyzer = self._factory(replace(config, overlay=False))
             while True:
                 with self._condition:
                     self._condition.wait_for(lambda: self._stop or self._pending is not None)
                     if self._stop:
                         break
-                    frame, captured = self._pending
+                    frame, captured, source_revision = self._pending
                     self._pending = None
                     config, revision = self.config, self._config_revision
                 began = time.monotonic()
-                if revision != applied_revision:
+                if source_revision != applied_source:
+                    # Only the analysis owner touches OpenCV state. A loop starts a
+                    # fresh background and track set, without reopening the camera.
+                    analyzer.close()
+                    analyzer = None
+                    analyzer = self._factory(replace(config, overlay=False))
+                    applied_revision, applied_source = revision, source_revision
+                elif revision != applied_revision:
                     analyzer.reconfigure(replace(config, overlay=False))
                     applied_revision = revision
                 _, result = analyzer.process(frame)
@@ -132,7 +150,10 @@ class AnalysisRuntime:
                 with self._condition:
                     if self._stop:
                         break
-                    if applied_revision != self._config_revision:
+                    if (
+                        applied_revision != self._config_revision
+                        or applied_source != self._source_revision
+                    ):
                         continue
                     self._average_ms = (
                         duration

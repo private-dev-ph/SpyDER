@@ -92,7 +92,7 @@ class AnalysisPreviews:
 
     def _sample(self, draft: Draft) -> tuple[Any, dict]:
         worker = self.manager.get_worker(draft.camera_id)
-        frame = worker.raw_frame()
+        frame, source_epoch = worker.raw_frame_sample()
         if frame is None:
             live = worker.status()["state"] in ("running", "starting")
             return None, {
@@ -102,7 +102,7 @@ class AnalysisPreviews:
                 else "Start this camera in Control Room to preview settings",
             }
         result = (
-            draft.runtime.process(frame)
+            draft.runtime.process(frame, source_epoch=source_epoch)
             if draft.runtime
             else {"state": "disabled", "regions": [], "tracks": []}
         )
