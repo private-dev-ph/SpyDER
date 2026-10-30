@@ -88,8 +88,265 @@ if (typeof module === "object" && module.exports)
   let draftRevision = 0;
   let simulationSuspended = false;
   const rows = new Map();
+  const motionDefaults = Object.freeze({
+    history: 300,
+    threshold: 16,
+    detect_shadows: true,
+    learning_rate: -1,
+    warmup_frames: 15,
+    inference_fps: 5,
+    input_width: 320,
+  });
+  let motionEngine = "frame-difference";
+  let motionConfig = { ...motionDefaults };
+  let motionDirty = false;
+  let motionBusy = false;
+  let motionFeedback = "";
+  let motionPanel = null;
+  let motionConfigFields = [];
   function current(id, token) {
     return active === id && generation === token && dialog.open;
+  }
+
+  function showcaseMotionCamera() {
+    if (!window.spyderShowcase || !active) return null;
+    return (
+      app
+        .cameras()
+        .find((camera) => camera.id === active && camera.pipeline === "motion") ||
+      null
+    );
+  }
+
+  function createMotionPanel(container) {
+    if (!showcaseMotionCamera()) return;
+    if (!motionPanel) {
+      motionPanel = document.createElement("fieldset");
+      motionPanel.className = "browser-motion-panel";
+      motionPanel.setAttribute("aria-describedby", "browser-motion-help");
+      motionPanel.innerHTML = [
+        "<legend>Browser motion engine</legend>",
+        '<p id="browser-motion-help" class="field-help">Runs on this device in a local browser worker. Frames stay on this device; no uploads. OpenCV.js failure keeps video live and does not silently switch engines.</p>',
+        '<label for="browser-motion-engine">Engine</label>',
+        '<select id="browser-motion-engine"><option value="frame-difference">Frame difference</option><option value="mog2">MOG2 background subtraction (OpenCV.js)</option></select>',
+        '<div class="browser-motion-config" id="browser-motion-config">',
+        '<p class="field-help">Changing MOG2 settings resets its learned background.</p>',
+        '<div class="browser-motion-config-grid">',
+        '<label>Analysis rate (1–15 FPS)<input type="number" data-motion-config="inference_fps" min="1" max="15" step="1"></label>',
+        '<label>Input width<select data-motion-config="input_width"><option value="320">320 px · lower load</option><option value="480">480 px · native match</option></select></label>',
+        '<label>History frames (20–2000)<input type="number" data-motion-config="history" min="20" max="2000" step="1"></label>',
+        '<label>Foreground threshold (4–128)<input type="number" data-motion-config="threshold" min="4" max="128" step="1"></label>',
+        '<label>Warm-up frames (0–120)<input type="number" data-motion-config="warmup_frames" min="0" max="120" step="1"></label>',
+        '<label>Learning rate (−1 to 1)<input type="number" data-motion-config="learning_rate" min="-1" max="1" step="0.01"></label>',
+        '<label class="browser-motion-check"><input type="checkbox" data-motion-config="detect_shadows"> Detect shadows</label>',
+        "</div></div>",
+        '<div class="browser-motion-diagnostics" aria-label="Motion processing diagnostics">',
+        '<p class="browser-motion-state" id="browser-motion-state" role="status" aria-live="polite"></p>',
+        '<p class="browser-motion-metrics" id="browser-motion-metrics"></p></div>',
+        '<p class="browser-motion-feedback" id="browser-motion-feedback" role="status" aria-live="polite"></p>',
+        '<button type="button" class="button secondary" id="browser-motion-apply">Apply motion engine</button>',
+      ].join("");
+      container.append(motionPanel);
+      motionPanel
+        .querySelector("#browser-motion-engine")
+        .addEventListener("change", (event) => {
+          motionEngine = event.currentTarget.value;
+          motionChanged();
+        });
+      motionConfigFields = [...motionPanel.querySelectorAll("[data-motion-config]")];
+      for (const field of motionConfigFields) {
+        field.addEventListener("input", () => {
+          readMotionConfigField(field);
+          motionChanged();
+        });
+        field.addEventListener("change", () => {
+          readMotionConfigField(field);
+          motionChanged();
+        });
+      }
+      motionPanel
+        .querySelector("#browser-motion-apply")
+        .addEventListener("click", applyMotionSettings);
+    } else if (motionPanel.parentElement !== container) {
+      container.append(motionPanel);
+    }
+    syncMotionFields();
+    updateMotionControls();
+    renderMotionDiagnostics();
+  }
+
+  function syncMotionFields() {
+    if (!motionPanel) return;
+    motionPanel.querySelector("#browser-motion-engine").value = motionEngine;
+    for (const field of motionConfigFields) {
+      const key = field.dataset.motionConfig;
+      if (key === "detect_shadows") field.checked = !!motionConfig[key];
+      else field.value = String(motionConfig[key]);
+    }
+  }
+
+  function readMotionConfigField(field) {
+    const key = field.dataset.motionConfig;
+    if (key === "detect_shadows") motionConfig[key] = field.checked;
+    else if (
+      field.value !== "" &&
+      field.validity.valid &&
+      Number.isFinite(Number(field.value))
+    )
+      motionConfig[key] = Number(field.value);
+  }
+
+  function motionChanged() {
+    motionDirty = true;
+    motionFeedback = "Unsaved. Apply to start this engine with these settings.";
+    updateMotionControls();
+  }
+
+  function updateMotionControls() {
+    if (!motionPanel) return;
+    const engine = motionPanel.querySelector("#browser-motion-engine");
+    motionPanel.querySelector("#browser-motion-config").hidden =
+      motionEngine !== "mog2";
+    for (const field of motionConfigFields) {
+      field.disabled = motionBusy;
+    }
+    engine.disabled = motionBusy;
+    const button = motionPanel.querySelector("#browser-motion-apply");
+    button.disabled =
+      motionBusy || (!motionDirty && !canRetryMotion()) || !showcaseMotionCamera();
+    button.textContent = motionBusy ? "Applying…" : "Apply motion engine";
+  }
+
+  function canRetryMotion() {
+    const analysis = showcaseMotionCamera()?.motion_analysis;
+    return (
+      motionEngine === "mog2" &&
+      analysis?.engine === "mog2" &&
+      analysis.state === "error"
+    );
+  }
+
+  function formatMotionBytes(value) {
+    if (value == null) return null;
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes < 0) return null;
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KiB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
+  }
+
+  function renderMotionDiagnostics() {
+    if (!motionPanel) return;
+    const analysis = showcaseMotionCamera()?.motion_analysis;
+    const state = motionPanel.querySelector("#browser-motion-state");
+    const metrics = motionPanel.querySelector("#browser-motion-metrics");
+    const feedback = motionPanel.querySelector("#browser-motion-feedback");
+    let text = "No motion diagnostics reported yet.";
+    let failed = false;
+    if (analysis) {
+      const engineName =
+        analysis.engine === "mog2" ? "MOG2" : "Frame difference";
+      const stateText = {
+        idle: "Waiting to start",
+        loading: "Loading local OpenCV.js…",
+        warming_up: "Learning the background…",
+        ready: "Ready",
+        error: "Failed",
+      }[analysis.state] || String(analysis.state || "status unavailable");
+      text = engineName + " · " + stateText;
+      if (analysis.state === "error") {
+        text +=
+          ". Preview remains live; no automatic fallback. Apply MOG2 to retry, or choose Frame difference.";
+        failed = true;
+      }
+      if (analysis.error && analysis.state === "error")
+        text += " · " + analysis.error;
+    } else if (showcaseMotionCamera()) {
+      text = "Waiting for this camera’s motion status.";
+    }
+    if (state.textContent !== text) state.textContent = text;
+    state.classList.toggle("error", failed);
+    const values = [];
+    if (
+      analysis?.processing_ms != null &&
+      Number.isFinite(Number(analysis.processing_ms))
+    )
+      values.push(Number(analysis.processing_ms).toFixed(1) + " ms/frame");
+    if (
+      analysis?.effective_fps != null &&
+      Number.isFinite(Number(analysis.effective_fps))
+    )
+      values.push(Number(analysis.effective_fps).toFixed(1) + " FPS");
+    if (analysis?.width && analysis?.height)
+      values.push(analysis.width + " × " + analysis.height + " px");
+    if (
+      analysis?.region_count != null &&
+      Number.isFinite(Number(analysis.region_count))
+    )
+      values.push(Number(analysis.region_count) + " regions");
+    const heap = formatMotionBytes(analysis?.heap_bytes);
+    if (heap) values.push(heap + " memory");
+    const metricText = values.join(" · ");
+    if (metrics.textContent !== metricText) metrics.textContent = metricText;
+    metrics.hidden = values.length === 0;
+    if (feedback.textContent !== motionFeedback)
+      feedback.textContent = motionFeedback;
+    feedback.classList.toggle("error", motionFeedback.startsWith("Could not"));
+    updateMotionControls();
+  }
+
+  async function applyMotionSettings() {
+    if (motionBusy || !active || (!motionDirty && !canRetryMotion())) return;
+    const id = active;
+    const token = generation;
+    if (!showcaseMotionCamera()) return;
+    if (motionEngine === "mog2")
+      for (const field of motionConfigFields) {
+        if (!field.checkValidity()) {
+          field.reportValidity();
+          return;
+        }
+      }
+    const payload = { engine: motionEngine, ...motionConfig };
+    motionBusy = true;
+    motionFeedback = "Applying local motion engine…";
+    updateMotionControls();
+    renderMotionDiagnostics();
+    try {
+      await app.request("/api/cameras/" + id + "/motion", payload);
+      if (!current(id, token)) return;
+      motionDirty = false;
+      motionFeedback = "Motion engine requested. Loading and processing stay on this device.";
+      await app.refresh();
+      renderMotionDiagnostics();
+    } catch (error) {
+      if (current(id, token)) {
+        motionFeedback = "Could not apply motion engine: " + error.message;
+        renderMotionDiagnostics();
+      }
+    } finally {
+      if (current(id, token)) {
+        motionBusy = false;
+        updateMotionControls();
+      }
+    }
+  }
+
+  function resetMotionDraft() {
+    const analysis = showcaseMotionCamera()?.motion_analysis;
+    motionEngine = ["frame-difference", "mog2"].includes(analysis?.engine)
+      ? analysis.engine
+      : "frame-difference";
+    motionConfig = {
+      ...motionDefaults,
+      ...(analysis?.config && typeof analysis.config === "object"
+        ? analysis.config
+        : {}),
+    };
+    motionDirty = false;
+    motionBusy = false;
+    motionFeedback = "";
+    syncMotionFields();
+    updateMotionControls();
   }
 
   async function get(path, controller = new AbortController()) {
@@ -264,6 +521,7 @@ if (typeof module === "object" && module.exports)
       container.append(row);
       rows.set(name, { element: row, include, output, slider, native });
     }
+    createMotionPanel(container);
     updateReadbacks();
   }
   function updateReadbacks() {
@@ -338,6 +596,7 @@ if (typeof module === "object" && module.exports)
         simulationSuspended = false;
       if (changed && !dirty) chooseDraft();
       else updateReadbacks();
+      renderMotionDiagnostics();
       if (!busy && !dirty)
         settingsMessage(
           !snapshot.available
@@ -369,6 +628,7 @@ if (typeof module === "object" && module.exports)
     active = id;
     snapshot = null;
     draft = {};
+    resetMotionDraft();
     simulationSuspended = false;
     resetPreviewStyles();
     find("#settings-preview").removeAttribute("src");
@@ -437,6 +697,9 @@ if (typeof module === "object" && module.exports)
       "Start the camera for a live preview";
     find("#settings-preview-note").hidden = false;
     find("#profile-name").value = "";
+    motionDirty = false;
+    motionBusy = false;
+    motionFeedback = "";
   });
   find("#control-defaults").addEventListener("click", () => {
     for (const [name, row] of rows)
