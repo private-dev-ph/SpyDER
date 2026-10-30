@@ -300,6 +300,7 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
             elif path in (
                 "/demo-cameras.js",
                 "/demo-camera-picker.js",
+                "/browser-motion.js",
                 "/demo-camera-picker.css",
                 "/browser-demo-workflows.js",
             ):

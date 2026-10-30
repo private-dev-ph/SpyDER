@@ -16,11 +16,12 @@ let recordingSession = null;
 let pendingStartResolve = null;
 let deferStart = false;
 const localStorage = {
-  values: new Map(),
+  values: new Map([["spyder.demo.approach-presets.v1","1"]]),
   getItem(key) { return this.values.get(key) ?? null; },
   setItem(key, value) { this.values.set(key, value); },
 };
 const window = {
+  spyderBrowserMotion: require("../src/spyder_cctv/assets/browser-motion.js"),
   spyderWorkflowStore: {
     async save(graph) { saved.set(graph.id, structuredClone(graph)); return graph; },
     async get(id) { return saved.get(id) || null; },
@@ -94,6 +95,17 @@ function recordGraph(id) {
   assert.equal(runtime.inspect(graph("bad", true)).supported, false, "unsupported classifier must block activation");
   assert.match(runtime.inspect(graph("bad", true)).errors.join(" "), /Unsupported browser workflow node/);
 
+  const scoped=graph("region-proof");scoped.nodes.find(n=>n.type==="browser_motion").params.roi=[.5,0,1,1];
+  await runtime.enable(scoped);
+  const before=notifications.length;
+  frameListener({...frame(-3,0),motion_sample:{mask:new Uint8Array([1,0]),width:2,height:1}});
+  assert.equal(notifications.length,before,"outside-region movement cannot trigger");
+  frameListener({...frame(-2,2000),motion_sample:{mask:new Uint8Array([0,1]),width:2,height:1}});
+  assert.ok(notifications.length>before,"inside-region movement triggers");
+  await runtime.disable(scoped.id);
+  scoped.nodes.find(n=>n.type==="browser_motion").params.roi=[1,0,0,1];
+  assert.equal(runtime.inspect(scoped).supported,false);
+  notifications.length=0;
   const one = graph("one"), two = graph("two");
   const recordingAttachment = recordGraph("unsupported-event-recording");
   recordingAttachment.nodes.find((node) => node.type === "event").params.attachment = "recording";

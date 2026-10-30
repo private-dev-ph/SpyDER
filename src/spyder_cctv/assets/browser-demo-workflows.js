@@ -67,6 +67,8 @@
         errors.push(`Connect Camera ${camera.id} to Browser motion.`);
     }
     for (const motion of motionNodes) {
+      if (motion.params?.roi !== undefined && !window.spyderBrowserMotion?.validRoi(motion.params.roi))
+        errors.push(`Browser motion ${motion.id} approach area must be normalized left, top, right, bottom coordinates.`);
       if (!Number.isFinite(+motion.params?.threshold) || +motion.params.threshold < 0 || +motion.params.threshold > 1)
         errors.push(`Browser motion ${motion.id} threshold must be between 0 and 1.`);
       const reachable = descendants(graph, motion.id);
@@ -182,6 +184,17 @@
     if (!workflows.size) { unsubscribe?.(); unsubscribe = null; lastFrames.clear(); }
   }
   async function enable(graph) {
+    if(graph?.preset_clip_id) {
+      const cameras=await window.spyderShowcase.fetch("/api/cameras").then(r=>r.json());
+      const missing=graph.nodes?.filter(n=>n.type==="camera" && !cameras.some(c=>c.id===n.params?.camera_id)) || [];
+      if(missing.length) {
+        const camera=cameras.find(c=>c.demo_clip_id===graph.preset_clip_id);
+        if(!camera) throw Error("Add the matching demo scene before enabling this approach preset, or choose a camera in its Camera node.");
+        graph=JSON.parse(JSON.stringify(graph));
+        for(const node of graph.nodes) if(missing.some(n=>n.id===node.id)) node.params={...node.params,camera_id:camera.id};
+        graph.camera_ids=[...new Set(graph.nodes.filter(n=>n.type==="camera").map(n=>n.params.camera_id))];
+      }
+    }
     const report = inspect(graph);
     if (!report.supported) throw Error(report.errors.join(" "));
     if (!window.spyderWorkflowStore) throw Error("Browser workflow storage is unavailable.");
@@ -281,7 +294,9 @@
         if (camera.type !== "camera" || camera.params?.camera_id !== cameraId) continue;
         for (const motion of map.values()) {
           if (motion.type !== "browser_motion" || !(graph.edges || []).some((e) => e.from === camera.id && e.to === motion.id)) continue;
-          if (frame.motion_fraction < Number(motion.params.threshold ?? 0.1)) continue;
+          const measured = motion.params.roi !== undefined
+            ? window.spyderBrowserMotion.fraction(frame.motion_sample,motion.params.roi) : frame.motion_fraction;
+          if (measured <= 0 || measured < Number(motion.params.threshold ?? 0.1)) continue;
           const rateKey = `${graph.id}:${cameraId}:rate`;
           if (frame.timestamp < (rateLimits.get(rateKey) || 0)) continue;
           const adjacency = new Map([...map.keys()].map((id) => [id, []]));
@@ -304,7 +319,7 @@
                 setBounded(rateLimits, rateKey, frame.timestamp + 1000, 2048);
                 firstAction = false;
               }
-              void fire(graph, cameraId, node, frame).catch((error) => {
+              void fire(graph, cameraId, node, {...frame,motion_fraction:measured}).catch((error) => {
                 if (workflows.get(graph.id) === graph)
                   window.spyder?.notify?.(`Workflow action failed: ${error.message}`);
               });
@@ -352,5 +367,17 @@
     return new Response(JSON.stringify({ events: [...events].reverse(), retention_limit: MAX_EVENTS, storage_error: null }), { status: 200, headers: { "Content-Type": "application/json" } });
   }
   window.spyderDemoWorkflowRuntime = { inspect, enable, disable, removeLocal, savedDisabled: removeLocal, request, fetch, active: () => [...workflows.values()].map((g) => g.id) };
-  restore();
+  window.spyderDemoWorkflowRuntime.ready=restore();
+  // Camera loading must not block restoration of existing enabled workflows.
+  window.spyderDemoWorkflowRuntime.presetsReady=(async()=>{
+    await window.spyderDemoWorkflowRuntime.ready;
+    await window.spyderShowcase?.ready;
+    if(window.spyderBrowserMotion && window.spyderShowcase) {
+      try {
+        const cameras=await window.spyderShowcase.fetch("/api/cameras").then(r=>r.json());
+        await window.spyderBrowserMotion.seed(window.spyderWorkflowStore,cameras,localStorage);
+      } catch(error) { window.spyder?.notify?.(`Approach presets could not be prepared: ${error.message}`); }
+    }
+    return true;
+  })().catch(error=>{window.spyder?.notify?.(`Approach presets could not load: ${error.message}`);return false;});
 })();

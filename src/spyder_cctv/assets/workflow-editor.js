@@ -2,7 +2,7 @@
 (() => {
   const TYPES = {
     camera: { label: "Camera", params: { camera_id: "" } },
-    browser_motion: { label: "Browser motion", params: { threshold: 0.1 } },
+    browser_motion: { label: "Browser motion", params: { threshold: 0.1, roi: [0,0,1,1] } },
     model: { label: "Model", params: { model_id: "builtin-scrfd-500mf" } },
     classifier: {
       label: "Classifier",
@@ -501,10 +501,13 @@
             "execution",
             "callable_version",
             "history",
+            "preset_clip_id",
           ].includes(k),
       )
     )
       throw Error("Unknown workflow field.");
+    if(graph.preset_clip_id !== undefined && !approachMotion.clips().some(clip=>clip.id===graph.preset_clip_id))
+      throw Error("Unknown approach preset scene.");
     if (graph.history !== undefined && !validHistory(graph.history))
       throw Error("Invalid workflow history settings.");
     if (
@@ -621,6 +624,8 @@
       errors.push("Workflow can contain at most 128 connections.");
     for (const n of nodes) {
       if (!TYPES[n.type]) errors.push(`Unknown node type: ${n.type}`);
+      if(n.type === "browser_motion" && n.params?.roi !== undefined && !approachMotion.validRoi(n.params.roi))
+        errors.push(`Browser motion ${n.id} region must be normalized left, top, right, bottom coordinates.`);
       if (n.type === "browser_motion" && (!Number.isFinite(+n.params?.threshold) || +n.params.threshold < 0 || +n.params.threshold > 1))
         errors.push(`Browser motion ${n.id} threshold must be between 0 and 1.`);
       if (
@@ -1011,6 +1016,13 @@
       showcaseOnly: true,
     },
   ];
+  const approachMotion = typeof module === "object" && module.exports ? require("./browser-motion.js") : window.spyderBrowserMotion;
+  TEMPLATE_CATALOG.push(...(approachMotion?.clips() || []).map(clip=>({
+    id:"demo-approach-"+clip.id,name:"Approach · "+clip.motion_preset.name,category:"Home security motion",engine:"Browser ROI motion",showcaseOnly:true,
+    description:clip.motion_preset.description,purpose:"Watch a reviewed approach area in "+clip.name,
+    details:"6s cooldown · approach region · frame capture",requirements:["Browser showcase",clip.name,"Camera running"],
+    setup:"Add the matching bundled demo scene. The Camera node selects it when available; otherwise choose it before enabling. This measures movement, not person recognition.",
+  })));
   function templateEntries(query = "", demo = false) {
     const words = String(query)
       .trim()
@@ -1035,6 +1047,13 @@
     );
   }
   function createWorkflowTemplate(id, context = {}) {
+    const clip=approachMotion?.clips().find(clip=>id==="demo-approach-"+clip.id);
+    if(clip) {
+      const camera=context.cameras?.find(camera=>camera.demo_clip_id===clip.id);
+      const graph=approachMotion.workflow(clip,camera?.id || "");
+      graph.id=`workflow-${Math.random().toString(36).slice(2,14)}`;
+      return graph;
+    }
     if (id === "browser-clip-motion") return browserMotionTemplate(context);
     if (id === "pre-event-person") return preEventTemplate(context);
     if (id === "insightface-alert")
@@ -2687,7 +2706,7 @@
       }
       function nodeSummary(n) {
         if (n.type === "browser_motion")
-          return `Motion fraction ≥ ${Number(n.params?.threshold ?? 0.1).toFixed(2)}`;
+          return `${n.params?.roi ? "Region motion" : "Motion fraction"} ≥ ${(100*Number(n.params?.threshold ?? 0.1)).toFixed(1)}%`;
         if (
           n.type === "filter" &&
           n.params.rules?.some((r) => r.operator === "is_unknown")
@@ -2734,6 +2753,7 @@
       }
       const templateContext = () => ({
         cameraId: cameraList()[0]?.id || "",
+        cameras: cameraList(),
         classifierId: classifierModels()[0]?.id || "",
       });
       function templateThumbnail(entry) {
@@ -2879,6 +2899,10 @@
           Object.entries(n.params || {})
             .filter(([k]) => !["rules", "match"].includes(k))
             .map(([k, v]) => {
+              if(n.type==="browser_motion" && k==="threshold")
+                return `<label>Motion fraction in region<input data-param="threshold" type="number" min="0" max="1" step="0.001" value="${esc(v)}"></label><p>Changed pixels divided by pixels inside the approach region. 0.025 means 2.5%. This does not recognize a person.</p>`;
+              if(n.type==="browser_motion" && k==="roi")
+                return `<label>Approach area: left, top, right, bottom<input data-param="roi" value="${esc(v.join(","))}"></label><p>Four normalized coordinates from 0 to 1, relative to the tuned camera image. Movement outside this area does not trigger this node.</p>`;
               if (
                 n.type === "event" &&
                 k === "pre_event_seconds" &&

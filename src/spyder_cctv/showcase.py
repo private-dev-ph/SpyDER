@@ -43,6 +43,7 @@ def export_showcase(output: Path) -> None:
         "demo-cameras.js",
         "demo-cameras.json",
         "demo-camera-picker.js",
+        "browser-motion.js",
         "demo-camera-picker.css",
         "activity.js",
         "icons.svg",

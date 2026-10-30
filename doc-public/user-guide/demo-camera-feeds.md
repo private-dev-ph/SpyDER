@@ -22,6 +22,27 @@ In Vision Lab, open the template picker and load **Browser clip motion event**. 
 
 The browser runtime accepts Camera, Browser motion, Cooldown, Event, Notification, Capture and Record nodes. It validates the graph before enabling it and explains unsupported nodes. Browser motion is a showcase-only source; installed workflows retain the native detection engines. Workflow edits disable the running saved graph until it is enabled again. Event metadata persists in this browser, but attached Blob images and recordings last only for the current tab session. Download media before reloading.
 
+## Bundled approach motion presets
+
+The Cloudflare showcase includes six reviewed approach regions. Add a scene through **Add camera → Home security demo clip** and keep its motion pipeline on. Control Room shows the default approach guide and its motion percentage. The guide is a separate UI layer: recordings, captures and enrollment pixels remain clean.
+
+| Scene | Watched area |
+| --- | --- |
+| Front porch: person and parcel | Porch entry and parcel pickup area |
+| Driveway: person approaching | Sidewalk and upper driveway route |
+| Front door: close approach | Walkway and doorstep, excluding the door reflection |
+| Covered porch: person at the door | Covered entrance and door approach |
+| Ring doorbell: person at the entrance | Right-hand doorstep where the person is visible |
+| Front yard: person approaching porch | Sidewalk-to-porch approach path |
+
+The vehicle-only driveway scene and empty patio have no approach preset. The Ring clip keeps its original internal ID for saved-camera compatibility, but its description now correctly mentions the visible person.
+
+Six disabled **Approach** workflows are added to the browser workflow library once. Choose one in Vision Lab and enable it to log motion events with frame captures. If its scene is not loaded, add that scene first or select a camera in its Camera node. Scene-specific copies also appear under **Templates → Home security motion**, so a deleted default can be recreated. Existing edits, disabled workflows and deletions are preserved across reloads.
+
+Each Browser motion node exposes **Motion fraction in region** and **Approach area: left, top, right, bottom**. Coordinates range from 0 to 1 and refer to the tuned image; for example `[0.2, 0.1, 0.8, 0.7]`. The denominator is the region's area, not the full frame. A threshold of `0.025` means 2.5% of that region changed. Workflows can use independent regions on the same camera; the Control Room guide shows the scene default. Review regions after changing zoom, pan or field of view. Presets use a six-second event cooldown and suppress large scene cuts.
+
+This is actual browser pixel-motion analysis, not a person classifier: other movement inside the region can trigger it. No model download or cloud inference is required. Events retain metadata in the browser; attached captures remain session-local until downloaded.
+
 ## Source characteristics
 
 Clips are eight seconds, silent, 15fps, 360px high and aspect-ratio preserving. Original camera watermarks and timestamps remain; timestamps are archival, not current. Loops restart at the cut without reversed action or blended ghost frames. On each native loop, motion analysis resets its learned background and tracks in both Control Room and Vision Lab, then observes the configured warm-up period again. This prevents repeated activity from being learned away as permanent background. The browser resets its previous-frame motion reference at the cut. A loop is not a camera disconnection and does not stop an ongoing recording. Some cameras share a source recording and show different views of the same property. They are not eight separate homes.
