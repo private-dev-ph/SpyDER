@@ -628,7 +628,7 @@ function render() {
     ).textContent;
     window.spyderBrowserMotion?.renderRegion($(".video-stage",element),camera);
     const fraction = camera.metadata.motion_fraction || 0;
-    const motionThreshold = camera.metadata.motion_region?.threshold ?? 0.02;
+    const motionThreshold = (camera.motion_analysis?.engine === "mog2" ? camera.metadata.motion_region?.mog2_threshold : camera.metadata.motion_region?.threshold) ?? 0.02;
     element.dataset.motion =
       connected && fraction >= motionThreshold && camera.state === "running"
         ? "active"
@@ -660,6 +660,13 @@ function render() {
     if(camera.metadata.motion_region && camera.state === "running")
       $(".motion-reading span",element).textContent = (camera.metadata.motion_region.active?"Approach motion · ":"Watching approach · ")+(fraction*100).toFixed(1)+"%";
     $(".motion-reading", element).title = camera.metadata.motion_region?.name || camera.metadata.cv?.message || "";
+    if(camera.motion_analysis?.engine === "mog2") {
+      const a=camera.motion_analysis;
+      $(".motion-reading span",element).textContent = a.state === "ready"
+        ? `MOG2 · ${a.region_count || 0} regions · ${(fraction*100).toFixed(1)}%`
+        : a.state === "error" ? "MOG2 unavailable · video stays live" : `MOG2 · ${a.state}${a.warmup_remaining ? " · "+a.warmup_remaining+" frames" : ""}`;
+      $(".motion-reading",element).title=a.error || `Browser OpenCV · ${(a.processing_ms || 0).toFixed(1)} ms · ${(a.effective_fps || 0).toFixed(1)} analysis FPS`;
+    }
     if (camera.analysis_enabled && camera.state === "running") {
       const analysis = camera.metadata.analysis || {};
       $(".motion-reading span", element).textContent =

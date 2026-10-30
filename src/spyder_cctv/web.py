@@ -301,6 +301,11 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 "/demo-cameras.js",
                 "/demo-camera-picker.js",
                 "/browser-motion.js",
+                "/browser-mog2.js",
+                "/mog2-worker.js",
+                "/opencv-4.12.0.js",
+                "/opencv-LICENSE.txt",
+                "/opencv-runtime.json",
                 "/demo-camera-picker.css",
                 "/browser-demo-workflows.js",
             ):
@@ -308,6 +313,10 @@ def create_server(manager: CameraManager, port: int = 8765) -> ThreadingHTTPServ
                 content_type = (
                     "text/css; charset=utf-8"
                     if asset.endswith(".css")
+                    else "application/json; charset=utf-8"
+                    if asset.endswith(".json")
+                    else "text/plain; charset=utf-8"
+                    if asset.endswith(".txt")
                     else "text/javascript; charset=utf-8"
                 )
                 self.send(

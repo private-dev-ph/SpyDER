@@ -157,3 +157,12 @@ test("pending camera startup cannot block saved enabled workflow restoration", a
     clearTimeout(timer);
   }
 });
+
+
+test("immutable masks share ROI fractions across consumers instead of rescanning at video FPS",()=>{
+ let reads=0;const pixels=[1,0,0,1];const mask=new Proxy(pixels,{get(target,key){if(/^\d+$/.test(String(key)))reads++;return target[key];}});
+ const sample={width:2,height:2,mask};
+ assert.equal(motion.fraction(sample,[0,0,1,1]),.5);const first=reads;
+ assert.equal(motion.fraction(sample,[0,0,1,1]),.5);assert.equal(reads,first);
+ assert.equal(motion.fraction(sample,[0,0,.5,1]),.5);assert.ok(reads>first);
+});

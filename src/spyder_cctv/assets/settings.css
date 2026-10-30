@@ -233,6 +233,89 @@
 .settings-result.error {
   color: var(--danger);
 }
+.browser-motion-panel {
+  min-width: 0;
+  margin: 22px 0 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.browser-motion-panel legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.browser-motion-panel > label {
+  display: block;
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 650;
+}
+.browser-motion-panel select,
+.browser-motion-panel input[type="number"] {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 5px;
+}
+.browser-motion-config {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.browser-motion-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+.browser-motion-config-grid > label {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+.browser-motion-config-grid input[type="number"],
+.browser-motion-config-grid select {
+  width: 100%;
+  min-height: 44px;
+}
+.browser-motion-config-grid .browser-motion-check {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 8px;
+}
+.browser-motion-check input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+.browser-motion-state,
+.browser-motion-metrics,
+.browser-motion-feedback {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.browser-motion-state {
+  font-weight: 650;
+}
+.browser-motion-metrics {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.browser-motion-state.error,
+.browser-motion-feedback.error {
+  color: var(--danger);
+}
+.browser-motion-panel > .button {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 12px;
+}
 #profile-targets {
   margin: 22px 0 0;
   border: 1px solid var(--border);
@@ -288,6 +371,9 @@
   }
   .settings-actions > .button {
     flex: 1 1 130px;
+  }
+  .browser-motion-config-grid {
+    grid-template-columns: 1fr;
   }
 }
 @media (max-width: 360px) {

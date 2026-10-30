@@ -50,7 +50,7 @@ before configuring DNS. A generated export does not deploy the site or configure
 | Feature | Installed app | Static showcase |
 | --- | --- | --- |
 | Sources | OpenCV devices, files, supported streams, bundled looping demo clips | Bundled home-camera loops, generated feeds, permitted webcams, selected local videos. |
-| Motion | MOG2, regions, tracking | Small browser frame-difference demonstration. |
+| Motion | MOG2, regions, tracking | Lightweight frame difference or optional local OpenCV.js MOG2 with foreground regions. |
 | YOLO/InsightFace and native capacity assessment | Local Python engines | Unavailable. |
 | Workflow editing and JSON exchange | Supported | Browser-only drafts/import/export. |
 | Workflow execution | Full local graph execution | Supported browser-motion, cooldown, event, notification, capture and time-limited recording nodes; native model/code/subflow nodes are refused. |
@@ -66,8 +66,12 @@ controls depend on track capabilities and generally offer less than native drive
 
 ## Privacy and limits
 
-The export's Content Security Policy includes `connect-src 'none'`, blocks workers,
-and allows same-origin bundled clips plus local Blob media. The browser adapter handles its API-shaped operations
+The document policy keeps `connect-src 'none'`, permits only same-origin workers,
+and allows same-origin bundled clips plus local Blob media. It does not allow JavaScript evaluation.
+The dedicated `/mog2-worker.js` response has a separate policy permitting Emscripten's
+generated bindings (`script-src 'self' 'unsafe-eval'`), while blocking all network
+connections and nested workers. OpenCV and embedded WebAssembly are bundled locally;
+no CDN or browser cross-origin-isolation headers are required. The browser adapter handles its API-shaped operations
 in memory; it does not contact the installed Python service. The export contains no
 private camera configuration, user media, or uploaded models. The eight approved demo clips total
 886,080 bytes, carry source attribution, and are decoded and processed on the visitor's device. See [Demo camera feeds](../user-guide/demo-camera-feeds.md) for licenses and camera setup.
@@ -83,3 +87,14 @@ They are outside the intended privacy boundary and may conflict with its CSP. Be
 publishing, inspect deployed response headers, console errors, and Network activity
 while testing capture, recording, model controls, and workflow editing. Local tests
 cannot prove account-specific headers, DNS, or injected scripts are configured correctly.
+
+
+## Optional browser OpenCV
+
+Open **Camera Settings → Browser motion engine** on a motion-enabled camera and select **MOG2 background subtraction (OpenCV.js)**. Apply the engine separately from image tuning. This starts one lazily loaded browser worker shared by up to eight MOG2 cameras, with separate background models. The default Frame difference engine does not download OpenCV.
+
+The pinned OpenCV 4.12.0 runtime is 10,872,779 bytes (about 3.52 MB using gzip in the development check), below [Cloudflare's 25 MiB per-asset limit](https://developers.cloudflare.com/workers/platform/limits/#static-assets). The build needs no npm installation: the verified distribution, embedded WebAssembly, license and provenance are package assets. See `opencv-runtime.json` in the export. Browser downloads are served as static bytes; processing and camera pixels stay on the device.
+
+Do not apply the document policy to every asset indiscriminately: doing so would also restrict the worker's generated bindings. `_headers` assigns CSP separately to `/`, `/index.html`, `/404.html`, and `/mog2-worker.js`. The export includes a 404 page to prevent implicit SPA fallback; keep hash-based workspace navigation and apply the document policy explicitly if adding HTML routes. Verify these responses on the deployed site. A generic Python HTTP preview does not apply `_headers`; the automated browser regression serves and enforces both execution-context policies.
+
+See [Browser motion engines](../user-guide/browser-motion-engines.md) for limits, controls and measured tradeoffs. Native Python inference, InsightFace/YOLO, native draft-mask previews and MIL tracking remain separate installed-app features.

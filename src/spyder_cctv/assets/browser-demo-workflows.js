@@ -67,6 +67,7 @@
         errors.push(`Connect Camera ${camera.id} to Browser motion.`);
     }
     for (const motion of motionNodes) {
+      if(motion.params?.mog2_threshold !== undefined && (!Number.isFinite(motion.params.mog2_threshold) || motion.params.mog2_threshold<0 || motion.params.mog2_threshold>1))errors.push("MOG2 foreground threshold must be between 0 and 1.");
       if (motion.params?.roi !== undefined && !window.spyderBrowserMotion?.validRoi(motion.params.roi))
         errors.push(`Browser motion ${motion.id} approach area must be normalized left, top, right, bottom coordinates.`);
       if (!Number.isFinite(+motion.params?.threshold) || +motion.params.threshold < 0 || +motion.params.threshold > 1)
@@ -296,7 +297,8 @@
           if (motion.type !== "browser_motion" || !(graph.edges || []).some((e) => e.from === camera.id && e.to === motion.id)) continue;
           const measured = motion.params.roi !== undefined
             ? window.spyderBrowserMotion.fraction(frame.motion_sample,motion.params.roi) : frame.motion_fraction;
-          if (measured <= 0 || measured < Number(motion.params.threshold ?? 0.1)) continue;
+          const threshold=frame.camera.motion_analysis?.engine === "mog2" ? motion.params.mog2_threshold ?? motion.params.threshold ?? .1 : motion.params.threshold ?? .1;
+          if (measured <= 0 || measured < Number(threshold)) continue;
           const rateKey = `${graph.id}:${cameraId}:rate`;
           if (frame.timestamp < (rateLimits.get(rateKey) || 0)) continue;
           const adjacency = new Map([...map.keys()].map((id) => [id, []]));

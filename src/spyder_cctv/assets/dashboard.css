@@ -1754,3 +1754,7 @@ input[type="search"]::-webkit-search-cancel-button {
 .demo-motion-region { position:absolute;inset:0;width:100%;height:100%;pointer-events:none; }
 .demo-motion-region rect { fill:none;stroke:var(--accent, #BE1A1A);stroke-width:2;stroke-dasharray:7 5;vector-effect:non-scaling-stroke; }
 .demo-motion-region[data-active="true"] rect { stroke:#F7D87F;stroke-dasharray:none;stroke-width:3; }
+
+.demo-motion-region rect[data-kind="region"] {stroke:#F7D87F;stroke-dasharray:none;stroke-width:2;}
+
+.error-page {grid-column:1/-1;max-width:40rem;margin:10vh auto;padding:2rem;}

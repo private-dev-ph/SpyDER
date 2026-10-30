@@ -4,7 +4,7 @@ from html.parser import HTMLParser
 from importlib.resources import files
 
 from spyder_cctv.cli import main
-from spyder_cctv.showcase import export_showcase
+from spyder_cctv.showcase import MAIN_CSP, WORKER_CSP, export_showcase
 
 
 def test_export_is_complete_static_and_config_independent(tmp_path):
@@ -31,6 +31,12 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "demo-cameras.json",
         "demo-camera-picker.js",
         "browser-motion.js",
+        "browser-mog2.js",
+        "404.html",
+        "mog2-worker.js",
+        "opencv-4.12.0.js",
+        "opencv-LICENSE.txt",
+        "opencv-runtime.json",
         "demo-camera-picker.css",
         *[
             c["filename"]
@@ -134,4 +140,22 @@ def test_demo_clips_export_with_verified_credits_and_browser_only_policy(tmp_pat
     policy = (output / "_headers").read_text(encoding="utf-8")
     assert "media-src 'self' blob:" in policy
     assert "connect-src 'none'" in policy
-    assert "worker-src 'none'" in policy
+    assert "worker-src 'self'" in MAIN_CSP
+    assert "unsafe-eval" not in MAIN_CSP
+    assert "connect-src 'none'" in MAIN_CSP
+    assert "script-src 'self' 'unsafe-eval'" in WORKER_CSP
+    assert "connect-src 'none'" in WORKER_CSP
+    assert f"/mog2-worker.js\n  Content-Security-Policy: {WORKER_CSP}" in policy
+
+
+def test_pinned_opencv_asset_matches_provenance_and_cloudflare_size_limit():
+    import gzip
+    import json
+
+    assets = files("spyder_cctv").joinpath("assets")
+    provenance = json.loads(assets.joinpath("opencv-runtime.json").read_text(encoding="utf-8"))
+    data = assets.joinpath("opencv-4.12.0.js").read_bytes()
+    assert hashlib.sha256(data).hexdigest() == provenance["sha256"]
+    assert len(data) == provenance["bytes"] < 25 * 1024 * 1024
+    assert len(gzip.compress(data)) < 4 * 1024 * 1024
+    assert "Apache" in assets.joinpath("opencv-LICENSE.txt").read_text(encoding="utf-8")

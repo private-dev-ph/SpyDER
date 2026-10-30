@@ -20,6 +20,8 @@
               source: "demo://" + c.clip.id,
               fps: c.fps,
               pipeline: c.pipeline,
+              motion_engine: c.motion_engine,
+              motion_config: c.motion_config,
               autostart: !!c.wantsRunning,
               settings: c.settings,
               profile_id: c.profile_id,
@@ -240,10 +242,17 @@
       error: camera.error,
       frames: camera.frames,
       capture_session: camera.capture_session,
+      motion_analysis: {engine:camera.motion_engine || "frame-difference", config:camera.motion_config,
+        ...(camera.motion_engine === "mog2" ? window.spyderBrowserMog2.status(camera.id) : {
+          state:camera.state === "running" ? "ready" : "idle",processing_ms:camera.differenceMs || 0,
+          mean_processing_ms:camera.differenceMean || 0,p95_processing_ms:camera.differenceP95 || 0,processed_frames:camera.differenceCount || 0,effective_fps:camera.differenceFps || 0,
+          width:80,height:45,heap_bytes:0,region_count:0,error:null,
+        }),
+      },
       metadata: { motion_fraction: camera.motion || 0,
         ...(camera.clip?.motion_preset && camera.pipeline === "motion" ? {motion_region:{
           ...camera.clip.motion_preset, fraction:camera.motion || 0,
-          active:(camera.motion || 0)>=camera.clip.motion_preset.threshold,
+          active:(camera.motion || 0)>=(camera.motion_engine==="mog2"?camera.clip.motion_preset.mog2_threshold:camera.clip.motion_preset.threshold),
           frame_size:[camera.canvas.width,camera.canvas.height],
         }} : {}),
       },
@@ -282,6 +291,7 @@
       camera.settings_state = "applied";
       camera.blob = null;
       camera.previous = null;
+      camera.motionEpoch++;
       return;
     }
     const track = camera.track;
@@ -329,6 +339,9 @@
     camera.retryTimer = null;
     camera.retryDeadline = null;
     camera.epoch++;
+    camera.motionEpoch++;
+    window.spyderBrowserMog2?.release(camera.id);
+    camera.motionSample = null;
     camera.framePromise = null;
     camera.track = null;
     camera.stream?.getTracks().forEach((track) => track.stop());
@@ -520,6 +533,7 @@
           video.src = "/" + camera.clip.filename;
           video.addEventListener("seeking", () => {
             camera.previous = null;
+            camera.motionEpoch++;
             camera.motion = 0;
             camera.blob = null;
           });
@@ -647,6 +661,9 @@
       results: {},
       frames: 0,
       epoch: 0,
+      motionEpoch: 0,
+      motion_engine: data.motion_engine === "mog2" ? "mog2" : "frame-difference",
+      motion_config: window.spyderBrowserMog2?.validate(data.motion_config || clip?.motion_preset?.mog2_config || {}) || {},
       retryTimer: null,
       retryDeadline: null,
       openEpoch: null,
@@ -724,6 +741,7 @@
         camera.video.currentTime < (camera.sourceTime || 0)
       ) {
         camera.previous = null;
+        camera.motionEpoch++;
         camera.motion = 0;
       }
       camera.sourceTime = camera.video.currentTime;
@@ -755,14 +773,27 @@
       } else ctx.drawImage(camera.video, 0, 0, canvas.width, canvas.height);
     }
     if (camera.pipeline === "motion") {
-      const sample = camera.sample.getContext("2d", {
-        willReadFrequently: true,
-      });
-      sample.drawImage(canvas, 0, 0, 80, 45);
-      const pixels = sample.getImageData(0, 0, 80, 45).data;
-      camera.motionSample = window.spyderBrowserMotion.measure(pixels,camera.previous);
-      camera.motion = window.spyderBrowserMotion.fraction(camera.motionSample,camera.clip?.motion_preset?.roi || null);
-      camera.previous = pixels;
+      const motionBegan=performance.now();
+      if(camera.motion_engine === "mog2") {
+        camera.motionSample=window.spyderBrowserMog2.analyze(camera.id,canvas,camera.motion_config,camera.motionEpoch,camera.clip?.motion_preset?.roi || null);
+      } else {
+        const sample=camera.sample.getContext("2d",{willReadFrequently:true});
+        sample.drawImage(canvas,0,0,80,45);
+        const pixels=sample.getImageData(0,0,80,45).data;
+        camera.motionSample=window.spyderBrowserMotion.measure(pixels,camera.previous);
+        camera.previous=pixels;
+
+      }
+      camera.motion=window.spyderBrowserMotion.fraction(camera.motionSample,camera.clip?.motion_preset?.roi || null);
+      if(camera.motion_engine!=="mog2"){
+        const now=performance.now();camera.differenceMs=now-motionBegan;
+        camera.differenceSamples ||= [];camera.differenceSamples.push(camera.differenceMs);if(camera.differenceSamples.length>180)camera.differenceSamples.shift();
+        camera.differenceCount=(camera.differenceCount || 0)+1;
+        camera.differenceMean=camera.differenceSamples.reduce((a,b)=>a+b,0)/camera.differenceSamples.length;
+        const sorted=[...camera.differenceSamples].sort((a,b)=>a-b);camera.differenceP95=sorted[Math.floor((sorted.length-1)*.95)];
+        camera.differenceTimes ||= [];camera.differenceTimes.push(now);camera.differenceTimes=camera.differenceTimes.filter(t=>now-t<5000);
+        camera.differenceFps=camera.differenceTimes.length>1?(camera.differenceTimes.length-1)*1000/(now-camera.differenceTimes[0]):0;
+      }
     }
     camera.frames++;
     const blob = await new Promise((resolve, reject) =>
@@ -866,6 +897,14 @@
           sleeping.delete(camera.id);
           await start(camera);
         }
+      } else if(parts[3] === "motion") {
+        if(!["frame-difference","mog2"].includes(data.engine))throw Error("Choose frame difference or MOG2.");
+        const options={...data};delete options.engine;
+        const config=window.spyderBrowserMog2.validate({...camera.motion_config,...options});
+        camera.motion_engine=data.engine;camera.motion_config=config;camera.motionEpoch++;
+        camera.previous=null;camera.motionSample=null;camera.motion=0;
+        if(data.engine==="mog2" && camera.state==="running")window.spyderBrowserMog2.configure(camera.id,config);
+        else window.spyderBrowserMog2.release(camera.id);
       } else if (parts[3] === "settings") {
         camera.settings = validate(data.settings);
         camera.profile_id = null;

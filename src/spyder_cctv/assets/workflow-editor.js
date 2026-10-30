@@ -2,7 +2,7 @@
 (() => {
   const TYPES = {
     camera: { label: "Camera", params: { camera_id: "" } },
-    browser_motion: { label: "Browser motion", params: { threshold: 0.1, roi: [0,0,1,1] } },
+    browser_motion: { label: "Browser motion", params: { threshold: 0.1, mog2_threshold:0.02, roi: [0,0,1,1] } },
     model: { label: "Model", params: { model_id: "builtin-scrfd-500mf" } },
     classifier: {
       label: "Classifier",
@@ -624,6 +624,8 @@
       errors.push("Workflow can contain at most 128 connections.");
     for (const n of nodes) {
       if (!TYPES[n.type]) errors.push(`Unknown node type: ${n.type}`);
+      if(n.type === "browser_motion" && n.params?.mog2_threshold !== undefined && (!Number.isFinite(n.params.mog2_threshold) || n.params.mog2_threshold<0 || n.params.mog2_threshold>1))
+        errors.push(`Browser motion ${n.id} MOG2 threshold must be between 0 and 1.`);
       if(n.type === "browser_motion" && n.params?.roi !== undefined && !approachMotion.validRoi(n.params.roi))
         errors.push(`Browser motion ${n.id} region must be normalized left, top, right, bottom coordinates.`);
       if (n.type === "browser_motion" && (!Number.isFinite(+n.params?.threshold) || +n.params.threshold < 0 || +n.params.threshold > 1))
@@ -1062,6 +1064,7 @@
     throw new Error("Unknown workflow template");
   }
   const FIELD_HELP = {
+    mog2_threshold:"Minimum foreground fraction inside the ROI for OpenCV MOG2. Use 0 to 1; 0.003 means 0.3%. It is separate from frame-difference sensitivity.",
     camera_id:
       "Choose a configured camera as this node's source. Connecting it to CAM supplies that camera's frames and detections; it does not start the camera.",
     model_id:
@@ -2896,11 +2899,13 @@
               ? '<section class="we-notification-delivery"><h4>In-app notifications</h4><p role="status">Browser showcase displays alerts inside this page. Desktop notifications are unavailable.</p></section>'
               : `<section class="we-notification-delivery"><h4>PC / browser notifications</h4><p data-notification-status role="status">${esc(window.spyderNotifications?.desktopStatus?.() || "Desktop permission is requested when this Notification node is used.")}</p><button class="button secondary" data-notification-permission>${window.spyderNotifications?.desktopEnabled?.() ? "Disable desktop alerts" : "Enable desktop alerts"}</button><button class="button secondary" data-notification-test>Send test notification</button><p>Allow browser notifications to receive operating-system alerts while SpyDER is unfocused. Keep a SpyDER page open and disable pause when unfocused in System settings for continuous monitoring. In-app alerts remain available if permission is blocked.</p></section>`
             : "") +
-          Object.entries(n.params || {})
+          Object.entries(n.type==="browser_motion"?{...n.params,mog2_threshold:n.params.mog2_threshold??n.params.threshold}:n.params || {})
             .filter(([k]) => !["rules", "match"].includes(k))
             .map(([k, v]) => {
               if(n.type==="browser_motion" && k==="threshold")
-                return `<label>Motion fraction in region<input data-param="threshold" type="number" min="0" max="1" step="0.001" value="${esc(v)}"></label><p>Changed pixels divided by pixels inside the approach region. 0.025 means 2.5%. This does not recognize a person.</p>`;
+                return `<label>Frame difference fraction in region<input data-param="threshold" type="number" min="0" max="1" step="0.001" value="${esc(v)}"></label><p>Changed pixels divided by pixels inside the approach region. 0.025 means 2.5%. This does not recognize a person.</p>`;
+              if(n.type==="browser_motion" && k==="mog2_threshold")
+                return `<label>MOG2 foreground fraction in region<input data-param="mog2_threshold" type="number" min="0" max="1" step="0.001" value="${esc(v)}"></label><p>Foreground pixels divided by the region area when this camera uses OpenCV MOG2. This differs from inter-frame change; 0.003 means 0.3%. Existing workflows without an override retain their original threshold.</p>`;
               if(n.type==="browser_motion" && k==="roi")
                 return `<label>Approach area: left, top, right, bottom<input data-param="roi" value="${esc(v.join(","))}"></label><p>Four normalized coordinates from 0 to 1, relative to the tuned camera image. Movement outside this area does not trigger this node.</p>`;
               if (
@@ -4103,7 +4108,7 @@
         }
         n.params[k] = Array.isArray(old)
           ? t.value.split(",").map(Number).slice(0, 4)
-          : typeof old === "number"
+          : typeof old === "number" || (n.type==="browser_motion" && k==="mog2_threshold")
             ? Number(t.value)
             : t.value;
         if (
