@@ -14,7 +14,17 @@ The browser uses the real OpenCV 4.12.0 `BackgroundSubtractorMOG2`, compiled to 
 
 Processing follows the native motion path: resize, grayscale conversion, MOG2, shadow/foreground thresholding, 3×3 morphological opening and closing, ROI-aware connected components, and minimum-area filtering. Warm-up suppresses foreground actions until the configured number of analyzed frames has arrived. Region guides and boxes are UI overlays, not baked into capture/recording pixels.
 
-This implements MOG2 and foreground-region boxes, not native MIL tracking, identity recognition or the Vision Lab draft-mask editor. Browser resize sampling, scheduling, resolution and OpenCV builds can produce different masks or throughput from Python; matching the algorithm does not guarantee identical frame-by-frame output.
+This implements MOG2 and foreground-region boxes, plus optional MIL tracking on the bundled porch scene. Identity recognition and the Vision Lab draft-mask editor still require the installed application. Browser resize sampling, scheduling, resolution and OpenCV builds can produce different masks or throughput from Python; matching the algorithm does not guarantee identical frame-by-frame output.
+
+## Optional porch MIL tracking
+
+Open **Front porch: person and parcel → Settings → Browser motion engine**, select **MOG2**, enable **MIL tracking · one porch object**, and apply. It starts disabled. The choice persists for the bundled sample camera.
+
+This uses the real OpenCV `TrackerMIL`, seeded from the largest eligible MOG2 foreground region inside the approach ROI. Its red box and temporary track ID appear in Control Room. It tracks an image patch, not a recognized person: shadows, parcels, occlusion and fast motion can cause drift or reacquisition. IDs reset on clip loops and seeks and must not be treated as identities.
+
+The showcase enforces **one tracked object on one porch camera per tab**, even if the same clip is added twice. Other feeds keep their existing motion engines. Disable MIL on the selected porch camera before assigning it to another copy. Tracking updates are capped at **2 FPS** and may run slower on busy devices. MOG2 keeps its separate requested analysis rate. Settings report tracking state, update cost and measured cadence; a tracker failure leaves background subtraction and video available. Reapply to retry.
+
+No additional model or runtime download is required beyond the existing optional OpenCV asset. Loop/reset, stop, removal and engine changes release the tracker; stopping the last MOG2 camera releases the shared worker. The limit is per browser tab, not a cross-tab hardware quota. Tracks are display-only overlays; capture and recording pixels remain clean. Browser workflow motion conditions still use MOG2's foreground mask, not MIL identities or track IDs.
 
 ## Settings
 
@@ -54,6 +64,7 @@ The real-browser regression runs six bundled person scenes with their Approach w
 ```powershell
 .\.venv\Scripts\python.exe -m spyder_cctv export-showcase --output .\dist\mog2-check
 node tests/browser-mog2-browser.mjs .\dist\mog2-check
+node tests/browser-mil-browser.mjs .\dist\mog2-check
 ```
 
 Use a fresh export path. Node runs the development harness; it does not execute the downloaded OpenCV distribution. OpenCV executes only in the isolated browser worker. Timings are sampled diagnostics, not a hardware capacity guarantee. Keep the page visible while testing.
@@ -72,6 +83,6 @@ Frame difference includes its small canvas sample, pixel difference and ROI frac
 
 MOG2 initialization was about 0.53 seconds in this loopback run; an earlier cold smoke test took about 3.3 seconds. Network speed, caches, other work and browser compilation affect startup. The 128 MiB figure is one shared linear heap, not six heaps and not total browser memory.
 
-**Current choice:** keep Frame difference as the default, with MOG2 at 320px / 5 requested FPS as an explicit option. 480px is available for detail at a greater processing cost. All six calibrated MOG2/ROI workflows produced events in the test; video capture and recording remained usable, including after a simulated worker failure and explicit fallback. MIL tracking is not part of this browser implementation.
+**Current choice:** keep Frame difference as the default, with MOG2 at 320px / 5 requested FPS as an explicit option. 480px is available for detail at a greater processing cost. All six calibrated MOG2/ROI workflows produced events in the test; video capture and recording remained usable, including after a simulated worker failure and explicit fallback. These measurements exclude optional MIL tracking.
 
 [Recorded measurements and methodology](../reference/browser-mog2-benchmark.json). Re-run the browser test on the target device before choosing its limits.

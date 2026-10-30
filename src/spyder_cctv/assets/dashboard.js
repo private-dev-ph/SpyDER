@@ -663,7 +663,7 @@ function render() {
     if(camera.motion_analysis?.engine === "mog2") {
       const a=camera.motion_analysis;
       $(".motion-reading span",element).textContent = a.state === "ready"
-        ? `MOG2 · ${a.region_count || 0} regions · ${(fraction*100).toFixed(1)}%`
+        ? `MOG2 · ${a.region_count || 0} regions${a.config?.tracking ? " · MIL "+(a.track_count || 0)+"/1" : ""} · ${(fraction*100).toFixed(1)}%`
         : a.state === "error" ? "MOG2 unavailable · video stays live" : `MOG2 · ${a.state}${a.warmup_remaining ? " · "+a.warmup_remaining+" frames" : ""}`;
       $(".motion-reading",element).title=a.error || `Browser OpenCV · ${(a.processing_ms || 0).toFixed(1)} ms · ${(a.effective_fps || 0).toFixed(1)} analysis FPS`;
     }

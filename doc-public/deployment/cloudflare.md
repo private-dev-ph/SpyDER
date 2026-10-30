@@ -50,7 +50,7 @@ before configuring DNS. A generated export does not deploy the site or configure
 | Feature | Installed app | Static showcase |
 | --- | --- | --- |
 | Sources | OpenCV devices, files, supported streams, bundled looping demo clips | Bundled home-camera loops, generated feeds, permitted webcams, selected local videos. |
-| Motion | MOG2, regions, tracking | Lightweight frame difference or optional local OpenCV.js MOG2 with foreground regions. |
+| Motion | MOG2, regions, tracking | Lightweight frame difference or optional local OpenCV.js MOG2 with foreground regions; opt-in MIL for one object on the bundled porch feed only. |
 | YOLO/InsightFace and native capacity assessment | Local Python engines | Unavailable. |
 | Workflow editing and JSON exchange | Supported | Browser-only drafts/import/export. |
 | Workflow execution | Full local graph execution | Supported browser-motion, cooldown, event, notification, capture and time-limited recording nodes; native model/code/subflow nodes are refused. |
@@ -97,4 +97,4 @@ The pinned OpenCV 4.12.0 runtime is 10,872,779 bytes (about 3.52 MB using gzip i
 
 Do not apply the document policy to every asset indiscriminately: doing so would also restrict the worker's generated bindings. `_headers` assigns CSP separately to `/`, `/index.html`, `/404.html`, and `/mog2-worker.js`. The export includes a 404 page to prevent implicit SPA fallback; keep hash-based workspace navigation and apply the document policy explicitly if adding HTML routes. Verify these responses on the deployed site. A generic Python HTTP preview does not apply `_headers`; the automated browser regression serves and enforces both execution-context policies.
 
-See [Browser motion engines](../user-guide/browser-motion-engines.md) for limits, controls and measured tradeoffs. Native Python inference, InsightFace/YOLO, native draft-mask previews and MIL tracking remain separate installed-app features.
+See [Browser motion engines](../user-guide/browser-motion-engines.md) for limits, controls and measured tradeoffs. Native Python inference, InsightFace/YOLO and native draft-mask previews remain installed-app features. Browser MIL is limited to one object on one bundled porch camera per tab, at no more than two tracking updates per second.

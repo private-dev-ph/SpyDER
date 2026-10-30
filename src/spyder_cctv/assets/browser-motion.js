@@ -154,10 +154,14 @@
       analysis?.engine === "mog2" && analysis.state === "ready"
         ? analysis.regions || []
         : [];
+    const tracks =
+      analysis?.engine === "mog2" && analysis.state === "ready"
+        ? analysis.tracks || []
+        : [];
     const showGuide = region && validRoi(region.roi);
     let svg = stage.querySelector(".demo-motion-region");
     if (
-      (!showGuide && !boxes.length) ||
+      (!showGuide && !boxes.length && !tracks.length) ||
       camera.state !== "running" ||
       stage.querySelector(".camera-image")?.hidden
     ) {
@@ -200,6 +204,17 @@
         (bh * h) / analysis.height,
         "region",
       );
+    }
+    for (const track of tracks.slice(0, 1)) {
+      const [x, y, bw, bh] = track.bbox,
+        sx = w / analysis.width,
+        sy = h / analysis.height;
+      rect(x * sx, y * sy, bw * sx, bh * sy, "track");
+      const label = document.createElementNS(svg.namespaceURI, "text");
+      label.setAttribute("x", Math.max(2, x * sx));
+      label.setAttribute("y", Math.max(14, y * sy - 5));
+      label.textContent = "MIL #" + track.id;
+      svg.append(label);
     }
   }
   const api = {

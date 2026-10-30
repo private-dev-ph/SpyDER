@@ -2,6 +2,7 @@
 (() => {
   "use strict";
   const defaults = Object.freeze({
+    tracking: false,
     history: 300,
     threshold: 16,
     min_area_percent: 0.5,
@@ -39,6 +40,7 @@
         throw Error("Invalid motion setting: " + key);
     if (
       typeof c.detect_shadows !== "boolean" ||
+      typeof c.tracking !== "boolean" ||
       ![320, 480].includes(c.input_width) ||
       !Number.isFinite(c.learning_rate) ||
       (c.learning_rate !== -1 && (c.learning_rate < 0 || c.learning_rate > 1))
@@ -90,6 +92,7 @@
             load_ms: d.load_ms,
             heap_bytes: d.heap_bytes,
             build: d.build,
+            mil_available: d.mil_available,
           };
           return;
         }
@@ -135,6 +138,13 @@
           heap_bytes: d.heap_bytes,
           region_count: d.region_count,
           regions: d.regions,
+          tracks: d.tracks || [],
+          track_count: d.track_count || 0,
+          tracking_state: d.tracking_state || "disabled",
+          tracking_error: d.tracking_error || null,
+          tracking_ms: d.tracking_ms || 0,
+          tracking_fps: d.tracking_fps || 0,
+          max_tracks: 1,
           warmup_remaining: d.warmup_remaining,
           effective_fps:
             entry.times.length > 1
@@ -152,8 +162,25 @@
       fail(error.message);
     }
   }
-  function configure(id, config) {
+  function validateTracking(id, config, clipId) {
     const options = validate(config);
+    if (options.tracking && clipId !== "porch-parcel")
+      throw Error(
+        "Demo MIL is available only for Front porch: person and parcel.",
+      );
+    if (
+      options.tracking &&
+      [...entries].some(
+        ([key, e]) => key !== id && e.config.tracking && e.state !== "error",
+      )
+    )
+      throw Error(
+        "Only one porch feed can use the demo MIL tracker at a time.",
+      );
+    return options;
+  }
+  function configure(id, config, clipId = null) {
+    const options = validateTracking(id, config, clipId);
     const capacity = [...entries].filter(
       ([key, value]) => key !== id && value.state !== "error",
     ).length;
@@ -161,6 +188,7 @@
     entries.set(id, {
       revision: ++sequence,
       config: options,
+      clip_id: clipId,
       state: "loading",
       pending: false,
       sample: null,
@@ -204,6 +232,10 @@
     entry.stats = {
       ...entry.stats,
       regions: [],
+      tracks: [],
+      track_count: 0,
+      tracking_state: entry.config.tracking ? "warming_up" : "disabled",
+      tracking_error: null,
       region_count: 0,
       warmup_remaining: entry.config.warmup_frames,
       effective_fps: 0,
@@ -211,10 +243,10 @@
     entry.state = loaded ? "warming_up" : "loading";
     worker?.postMessage({ type: "release", id });
   }
-  function analyze(id, canvas, config, sourceEpoch, roi) {
+  function analyze(id, canvas, config, sourceEpoch, roi, clipId = null) {
     let entry = entries.get(id);
     if (!entry) {
-      configure(id, config);
+      configure(id, config, clipId);
       entry = entries.get(id);
     }
     if (entry.state === "error") return null;
@@ -264,6 +296,7 @@
           width,
           height,
           config: entry.config,
+          clip_id: entry.clip_id,
           roi,
           buffer: image.data.buffer,
         },
@@ -291,6 +324,7 @@
   window.spyderBrowserMog2 = {
     defaults,
     validate,
+    validateTracking,
     configure,
     release,
     analyze,

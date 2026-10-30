@@ -168,3 +168,37 @@ test("analysis cadence does not halve FPS when video frames arrive just above th
       count,
   );
 });
+
+test("MIL requires the porch source, one owner and a fixed track limit", () => {
+  const h = harness();
+  assert.equal(h.api.defaults.tracking, false);
+  assert.throws(
+    () => h.api.configure("other", { tracking: true }, "driveway"),
+    /available only/,
+  );
+  assert.throws(() =>
+    h.api.configure("other", { tracking: true, max_tracks: 2 }, "porch-parcel"),
+  );
+  assert.equal(h.workers.length, 0);
+  h.api.configure("porch", { tracking: true }, "porch-parcel");
+  assert.throws(
+    () => h.api.configure("duplicate", { tracking: true }, "porch-parcel"),
+    /Only one/,
+  );
+  h.api.configure("other", { tracking: false }, "driveway");
+  h.api.release("porch");
+  h.api.configure("duplicate", { tracking: true }, "porch-parcel");
+  const w = h.workers[0];
+  w.emit({ type: "ready", mil_available: true });
+  h.api.analyze(
+    "duplicate",
+    { width: 640, height: 360 },
+    { tracking: true },
+    0,
+    null,
+    "porch-parcel",
+  );
+  assert.equal(w.messages.at(-1).clip_id, "porch-parcel");
+  h.api.configure("duplicate", { tracking: false }, "porch-parcel");
+  h.api.configure("porch", { tracking: true }, "porch-parcel");
+});
