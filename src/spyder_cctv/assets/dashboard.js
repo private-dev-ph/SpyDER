@@ -626,16 +626,18 @@ function render() {
       ".camera-profile",
       element,
     ).textContent;
+    window.spyderBrowserMotion?.renderRegion($(".video-stage",element),camera);
     const fraction = camera.metadata.motion_fraction || 0;
+    const motionThreshold = camera.metadata.motion_region?.threshold ?? 0.02;
     element.dataset.motion =
-      connected && fraction > 0.02 && camera.state === "running"
+      connected && fraction >= motionThreshold && camera.state === "running"
         ? "active"
         : "quiet";
     $(".motion-reading span", element).textContent = !connected
       ? "Preview unavailable"
       : camera.state === "running"
         ? camera.pipeline === "motion"
-          ? (fraction > 0.02 ? "Motion " : "Quiet scene · ") +
+          ? (fraction >= motionThreshold ? "Motion " : "Quiet scene · ") +
             (fraction * 100).toFixed(1) +
             "%"
           : camera.pipeline === "vision"
@@ -655,7 +657,9 @@ function render() {
             : released
               ? "Released while away"
               : "Not streaming";
-    $(".motion-reading", element).title = camera.metadata.cv?.message || "";
+    if(camera.metadata.motion_region && camera.state === "running")
+      $(".motion-reading span",element).textContent = (camera.metadata.motion_region.active?"Approach motion · ":"Watching approach · ")+(fraction*100).toFixed(1)+"%";
+    $(".motion-reading", element).title = camera.metadata.motion_region?.name || camera.metadata.cv?.message || "";
     if (camera.analysis_enabled && camera.state === "running") {
       const analysis = camera.metadata.analysis || {};
       $(".motion-reading span", element).textContent =

@@ -3043,7 +3043,7 @@ test("pre-event template connects lightweight InsightFace and unknown identity f
 });
 
 test("template catalog describes requirements and supports purpose search", () => {
-  assert.equal(new Set(TEMPLATE_CATALOG.map((t) => t.id)).size, 4);
+  assert.equal(new Set(TEMPLATE_CATALOG.map((t) => t.id)).size, 10);
   for (const entry of TEMPLATE_CATALOG) {
     assert.ok(
       entry.name &&
@@ -3065,7 +3065,7 @@ test("template catalog describes requirements and supports purpose search", () =
   );
   assert.equal(templateEntries("no-such-template").length, 0);
   assert.deepEqual(templateEntries("browser clip motion").map((item) => item.id), []);
-  assert.deepEqual(templateEntries("browser clip motion", true).map((item) => item.id), ["browser-clip-motion"]);
+  assert.ok(templateEntries("browser clip motion", true).some((item) => item.id === "browser-clip-motion"));
   const browserMotion = createWorkflowTemplate("browser-clip-motion", { cameraId: "clip-1" });
   assert.equal(browserMotion.nodes.find((item) => item.type === "camera").params.camera_id, "clip-1");
   assert.deepEqual(validate(browserMotion), []);

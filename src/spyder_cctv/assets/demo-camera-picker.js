@@ -53,7 +53,9 @@
     video.pause();
     video.src = "/" + clip.filename;
     video.load();
-    note.textContent = clip.notes;
+    note.textContent = clip.notes + (window.spyderShowcase ? (clip.motion_preset
+      ? " Approach motion is preset for this scene. Enable its Approach workflow in Vision Lab to log events and captures."
+      : " No person approach preset: this scene contains no visible person.") : "");
     credit.textContent = `${clip.original_title} — ${clip.author}. ${clip.license}. Excerpt resized, frame rate changed and audio removed. ${clip.context}`;
     link.href = clip.source_url;
     const name = document.querySelector("#camera-name");

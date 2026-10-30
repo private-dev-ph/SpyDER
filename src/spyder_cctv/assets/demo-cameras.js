@@ -53,6 +53,14 @@
         changes:
           "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
         source_start_seconds: 1,
+        motion_preset: {
+          name: "Porch arrival and parcel area",
+          roi: [0.02, 0.12, 0.53, 0.68],
+          threshold: 0.025,
+          cooldown_seconds: 6,
+          description:
+            "Watches the porch entry, person and parcel pickup area.",
+        },
       },
       {
         id: "front-walk-approach",
@@ -78,6 +86,14 @@
         changes:
           "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
         source_start_seconds: 47,
+        motion_preset: {
+          name: "Driveway approach",
+          roi: [0.02, 0.04, 0.58, 0.43],
+          threshold: 0.018,
+          cooldown_seconds: 6,
+          description:
+            "Watches the route from the sidewalk across the upper driveway.",
+        },
       },
       {
         id: "front-door-close",
@@ -103,6 +119,14 @@
         changes:
           "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
         source_start_seconds: 91,
+        motion_preset: {
+          name: "Front-door approach",
+          roi: [0.0, 0.15, 0.57, 0.98],
+          threshold: 0.025,
+          cooldown_seconds: 6,
+          description:
+            "Watches the path and doorstep, excluding the right-hand door reflection.",
+        },
       },
       {
         id: "covered-porch",
@@ -128,6 +152,14 @@
         changes:
           "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
         source_start_seconds: 2,
+        motion_preset: {
+          name: "Covered entrance",
+          roi: [0.28, 0.18, 0.91, 0.98],
+          threshold: 0.025,
+          cooldown_seconds: 6,
+          description:
+            "Watches the entrance and the person approaching the door.",
+        },
       },
       {
         id: "quiet-patio",
@@ -156,7 +188,7 @@
       },
       {
         id: "ring-doorbell-idle",
-        name: "Ring doorbell: quiet entrance",
+        name: "Ring doorbell: person at the entrance",
         filename: "demo-07-ring-doorbell-idle.mp4",
         width: 640,
         height: 360,
@@ -174,10 +206,18 @@
         context:
           "Original source documents reported package theft and includes actual Ring-branded doorbell footage. Despite temporary source slug, this is daytime, not night footage.",
         notes:
-          "Real fisheye doorbell view under a porch, facing the front path and street. Original Ring watermark retained; no person during this excerpt.",
+          "Real fisheye doorbell view under a porch, facing the front path and street. A person is visible at the right-hand doorstep, especially near the end. Original Ring watermark retained.",
         changes:
           "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
         source_start_seconds: 56,
+        motion_preset: {
+          name: "Doorbell doorstep",
+          roi: [0.83, 0.3, 1, 1],
+          threshold: 0.025,
+          cooldown_seconds: 6,
+          description:
+            "Watches the person at the right edge of the doorstep near the end of the clip.",
+        },
       },
       {
         id: "front-yard-walk",
@@ -203,6 +243,14 @@
         changes:
           "Trimmed excerpt, resized preserving aspect ratio, 15fps H.264 main/yuv420p, silent, faststart. No image synthesis, reversed motion or blended/ghost frames. Normal hard restart when looping. Original watermarks retained.",
         source_start_seconds: 42,
+        motion_preset: {
+          name: "Front path arrival",
+          roi: [0.26, 0.14, 0.87, 0.61],
+          threshold: 0.018,
+          cooldown_seconds: 6,
+          description:
+            "Watches the approach from the sidewalk to the porch path.",
+        },
       },
     ],
   };

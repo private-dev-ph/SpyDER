@@ -59,7 +59,7 @@ function runtime(
       toBlob: encode,
     };
   }
-  const window = { addEventListener() {} };
+  const window = { addEventListener() {}, spyderBrowserMotion: require("../src/spyder_cctv/assets/browser-motion.js") };
   const context = vm.createContext({
     window,
     document: {

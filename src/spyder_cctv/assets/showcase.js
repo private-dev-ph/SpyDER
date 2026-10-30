@@ -240,7 +240,13 @@
       error: camera.error,
       frames: camera.frames,
       capture_session: camera.capture_session,
-      metadata: { motion_fraction: camera.motion || 0 },
+      metadata: { motion_fraction: camera.motion || 0,
+        ...(camera.clip?.motion_preset && camera.pipeline === "motion" ? {motion_region:{
+          ...camera.clip.motion_preset, fraction:camera.motion || 0,
+          active:(camera.motion || 0)>=camera.clip.motion_preset.threshold,
+          frame_size:[camera.canvas.width,camera.canvas.height],
+        }} : {}),
+      },
       reconnection: {
         ...camera.reconnection,
         retry_in_seconds:
@@ -754,17 +760,8 @@
       });
       sample.drawImage(canvas, 0, 0, 80, 45);
       const pixels = sample.getImageData(0, 0, 80, 45).data;
-      let changed = 0;
-      if (camera.previous)
-        for (let i = 0; i < pixels.length; i += 4)
-          if (
-            Math.abs(pixels[i] - camera.previous[i]) +
-              Math.abs(pixels[i + 1] - camera.previous[i + 1]) +
-              Math.abs(pixels[i + 2] - camera.previous[i + 2]) >
-            75
-          )
-            changed++;
-      camera.motion = changed / (80 * 45);
+      camera.motionSample = window.spyderBrowserMotion.measure(pixels,camera.previous);
+      camera.motion = window.spyderBrowserMotion.fraction(camera.motionSample,camera.clip?.motion_preset?.roi || null);
       camera.previous = pixels;
     }
     camera.frames++;
@@ -787,6 +784,7 @@
             camera: status(camera),
             canvas,
             motion_fraction: camera.motion || 0,
+            motion_sample: camera.pipeline === "motion" ? camera.motionSample : null,
             frameId: camera.frames,
             timestamp: camera.frameTime,
           }),
@@ -1090,7 +1088,7 @@
     }
   });
   if (catalog) {
-    (async () => {
+    window.spyderShowcase.ready = (async () => {
       let saved = null;
       try {
         const value = localStorage.getItem(sampleStorageKey);

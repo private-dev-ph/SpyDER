@@ -107,6 +107,9 @@ def test_demo_assets_use_catalog_allowlist_and_support_video_ranges(server, tmp_
         yield media
 
     monkeypatch.setattr(web_module, "demo_media_path", allowlisted)
+    with urlopen(url + "/browser-motion.js", timeout=4) as response:
+        assert response.status == 200
+        assert b"spyderBrowserMotion" in response.read()
     with urlopen(url + "/demo-cameras.json", timeout=4) as response:
         assert json.load(response) == {"version": 1, "cameras": []}
     request = Request(url + "/demo-test.mp4", headers={"Range": "bytes=2-5"})

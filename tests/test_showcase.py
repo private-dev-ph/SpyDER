@@ -30,6 +30,7 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "demo-cameras.js",
         "demo-cameras.json",
         "demo-camera-picker.js",
+        "browser-motion.js",
         "demo-camera-picker.css",
         *[
             c["filename"]
