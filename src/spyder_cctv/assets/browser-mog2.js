@@ -135,6 +135,7 @@
             entry.samples.reduce((a, b) => a + b, 0) / entry.samples.length,
           p95_processing_ms: ordered[Math.floor((ordered.length - 1) * 0.95)],
           processing_ms: d.processing_ms,
+          roundtrip_ms: Math.max(0, now - entry.pendingSince),
           heap_bytes: d.heap_bytes,
           region_count: d.region_count,
           regions: d.regions,

@@ -54,6 +54,7 @@ def export_showcase(output: Path) -> None:
         "demo-camera-picker.js",
         "browser-motion.js",
         "browser-mog2.js",
+        "browser-motion-policy.js",
         "404.html",
         "mog2-worker.js",
         "opencv-4.12.0.js",

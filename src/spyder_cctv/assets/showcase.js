@@ -21,6 +21,7 @@
               fps: c.fps,
               pipeline: c.pipeline,
               motion_engine: c.motion_engine,
+              motion_auto: !!c.motion_auto,
               motion_config: c.motion_config,
               autostart: !!c.wantsRunning,
               settings: c.settings,
@@ -245,6 +246,8 @@
       motion_analysis: {
         engine: camera.motion_engine || "frame-difference",
         config: camera.motion_config,
+        automatic: !!camera.motion_auto,
+        adaptation: camera.motionPolicy?.state() || null,
         ...(camera.motion_engine === "mog2"
           ? window.spyderBrowserMog2.status(camera.id)
           : {
@@ -294,6 +297,56 @@
       idle_suspended: sleeping.has(camera.id),
       settings_state: camera.settings_state,
     };
+  }
+  function applyAutomaticLevel(camera, level) {
+    const config = window.spyderBrowserMog2.validate({
+      ...camera.motion_config,
+      input_width: 320,
+      tracking: level.tracking,
+      inference_fps: level.inference_fps,
+      warmup_frames: Math.ceil(level.inference_fps),
+    });
+    authorizeTracking(camera, level.engine, config);
+    camera.motion_engine = level.engine;
+    camera.motion_config = config;
+    camera.motionEpoch++;
+    camera.previous = null;
+    camera.motionSample = null;
+    camera.motion = 0;
+    if (level.engine === "mog2" && camera.state === "running")
+      window.spyderBrowserMog2.configure(
+        camera.id,
+        config,
+        camera.clip?.id || null,
+      );
+    else window.spyderBrowserMog2.release(camera.id);
+    // Reuse the loaded worker between MOG2 levels; never restart video/recording.
+  }
+  function startAutomaticMotion(camera) {
+    if (camera.clip?.id !== "porch-parcel")
+      throw Error(
+        "Automatic MIL is available only for Front porch: person and parcel.",
+      );
+    const policy = window.spyderMotionPolicy.create();
+    applyAutomaticLevel(camera, policy.state());
+    camera.motionPolicy = policy;
+    camera.motion_auto = true;
+  }
+  function adaptMotion(camera) {
+    if (!camera.motion_auto || !camera.motionPolicy) return;
+    const now = performance.now(),
+      previous = camera.policyFrameAt;
+    camera.policyFrameAt = now;
+    const analysis = window.spyderBrowserMog2.status(camera.id);
+    const level = camera.motionPolicy.observe(
+      {
+        ...analysis,
+        lag_ms: previous ? Math.max(0, now - previous - 1000 / camera.fps) : 0,
+      },
+      now,
+      !document.hidden,
+    );
+    if (level) applyAutomaticLevel(camera, level);
   }
   function authorizeTracking(camera, engine, config) {
     if (!config.tracking) return;
@@ -732,7 +785,17 @@
     };
     camera.sample.width = 80;
     camera.sample.height = 45;
-    authorizeTracking(camera, camera.motion_engine, camera.motion_config);
+    const hasTracker = [...cameras.values()].some(
+      (c) => c.motion_config?.tracking || c.motion_auto,
+    );
+    if (
+      data.motion_auto === true ||
+      (data.motion_auto === undefined &&
+        clip?.id === "porch-parcel" &&
+        !hasTracker)
+    )
+      startAutomaticMotion(camera);
+    else authorizeTracking(camera, camera.motion_engine, camera.motion_config);
     cameras.set(camera.id, camera);
     camera.ptz = document.querySelector("#browser-ptz").checked;
     if (data.autostart) {
@@ -827,6 +890,7 @@
       } else ctx.drawImage(camera.video, 0, 0, canvas.width, canvas.height);
     }
     if (camera.pipeline === "motion") {
+      adaptMotion(camera);
       const motionBegan = performance.now();
       if (camera.motion_engine === "mog2") {
         camera.motionSample = window.spyderBrowserMog2.analyze(
@@ -982,8 +1046,13 @@
           await start(camera);
         }
       } else if (parts[3] === "motion") {
-        if (!["frame-difference", "mog2"].includes(data.engine))
+        if (!["auto", "frame-difference", "mog2"].includes(data.engine))
           throw Error("Choose frame difference or MOG2.");
+        if (data.engine === "auto") {
+          startAutomaticMotion(camera);
+          persistSamples();
+          return status(camera);
+        }
         const options = { ...data };
         delete options.engine;
         const config = window.spyderBrowserMog2.validate({
@@ -992,6 +1061,8 @@
         });
         if (data.engine !== "mog2") config.tracking = false;
         authorizeTracking(camera, data.engine, config);
+        camera.motion_auto = false;
+        camera.motionPolicy = null;
         camera.motion_engine = data.engine;
         camera.motion_config = config;
         camera.motionEpoch++;

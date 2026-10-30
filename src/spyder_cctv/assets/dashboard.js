@@ -667,6 +667,12 @@ function render() {
         : a.state === "error" ? "MOG2 unavailable · video stays live" : `MOG2 · ${a.state}${a.warmup_remaining ? " · "+a.warmup_remaining+" frames" : ""}`;
       $(".motion-reading",element).title=a.error || `Browser OpenCV · ${(a.processing_ms || 0).toFixed(1)} ms · ${(a.effective_fps || 0).toFixed(1)} analysis FPS`;
     }
+    if(camera.motion_analysis?.automatic) {
+      const adaptation=camera.motion_analysis.adaptation;
+      const reading=$(".motion-reading span",element);
+      reading.textContent="Auto · "+(adaptation?.name || "starting")+" · "+(fraction*100).toFixed(1)+"%";
+      $(".motion-reading",element).title=adaptation?.reason || "Adapts motion analysis to measured device load";
+    }
     if (camera.analysis_enabled && camera.state === "running") {
       const analysis = camera.metadata.analysis || {};
       $(".motion-reading span", element).textContent =

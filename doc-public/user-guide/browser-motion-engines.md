@@ -4,9 +4,9 @@
 
 ## Select an engine
 
-In the Cloudflare showcase or its local static preview, open a camera's **Settings → Browser motion engine**. Select **Frame difference** or **MOG2 background subtraction (OpenCV.js)**, then use **Apply motion engine**. Image tuning's Apply button and saved tuning profiles remain separate. The choice and motion options persist for bundled sample cameras; webcam and visitor-file access remain session-bound.
+In the Cloudflare showcase or its local static preview, open a camera's **Settings → Browser motion engine**. Select **Automatic · MIL with performance fallback** for the porch scene, or manually select **Frame difference** or **MOG2 background subtraction (OpenCV.js)**, then use **Apply motion engine**. Image tuning's Apply button and saved tuning profiles remain separate. The choice and motion options persist for bundled sample cameras; webcam and visitor-file access remain session-bound.
 
-Frame difference remains the lightweight default. OpenCV is downloaded only when MOG2 is first selected. Loading, warm-up, analysis rate, processing time, region count and shared WebAssembly heap appear in the camera settings. Control Room shows MOG2 foreground-region boxes. Failure keeps the camera video and captures available, reports an error, and offers explicit retry or selection of Frame difference. There is no silent substitution of algorithms.
+The first bundled Front porch: person and parcel camera defaults to Automatic mode, which loads OpenCV and starts MIL with MOG2. Other feeds default to lightweight frame difference. OpenCV is downloaded once when a MOG2 camera starts, including the automatic porch camera. Loading, warm-up, analysis rate, processing time, region count and shared WebAssembly heap appear in the camera settings. Control Room shows MOG2 foreground-region boxes. Failure keeps the camera video and captures available, reports an error, and offers explicit retry or selection of Frame difference. Automatic mode reports its fallback and reason; manual mode reports failures without substituting algorithms.
 
 ## What MOG2 runs
 
@@ -18,7 +18,13 @@ This implements MOG2 and foreground-region boxes, plus optional MIL tracking on 
 
 ## Optional porch MIL tracking
 
-Open **Front porch: person and parcel → Settings → Browser motion engine**, select **MOG2**, enable **MIL tracking · one porch object**, and apply. It starts disabled. The choice persists for the bundled sample camera.
+The first **Front porch: person and parcel** camera starts in **Automatic · MIL with performance fallback**. Camera Settings show the effective engine and adaptation reason. Other copies do not automatically acquire a second tracker. Older saved porch cameras without a mode preference migrate to Automatic; explicit manual choices persist.
+
+Automatic mode starts at 320px, MOG2 at 5 requested FPS, and MIL at up to 2 updates/sec. After six seconds of sustained measured overload it steps down to MOG2 without tracking at 3 FPS, then MOG2 at 1 FPS, then frame difference. Automatic warm-up scales with analysis rate to remain about one second instead of consuming most of a short loop. Processing and MIL update cost, shared-worker queue delay and late camera-frame scheduling inform the decision. Hidden tabs and long idle gaps reset the overload window; warm-up frames and duplicate analysis results are not evaluated. A multi-second analysis/frame stall steps down immediately. OpenCV failure immediately selects frame difference; tracker failure retains MOG2. Settings and Control Room report the effective mode and reason.
+
+Fallback is session-only and does not automatically upgrade, preventing repeated mode switching. Reload or reapply Automatic to retry full quality. The camera, captures and active recording continue across changes. MOG2 fallback levels reuse the loaded worker rather than loading OpenCV again. These are practical load heuristics, not a hardware capacity guarantee. The initial optional runtime costs about 3.5 MB gzipped and a shared 128 MiB Wasm heap, even if the device later falls back; stopping the last MOG2 camera releases that worker heap.
+
+To override, choose **MOG2** and set the MIL checkbox manually, or select **Frame difference**, then apply. Automatic manages its own settings; manual mode keeps the existing error/retry controls.
 
 This uses the real OpenCV `TrackerMIL`, seeded from the largest eligible MOG2 foreground region inside the approach ROI. Its red box and temporary track ID appear in Control Room. It tracks an image patch, not a recognized person: shadows, parcels, occlusion and fast motion can cause drift or reacquisition. IDs reset on clip loops and seeks and must not be treated as identities.
 
@@ -65,6 +71,7 @@ The real-browser regression runs six bundled person scenes with their Approach w
 .\.venv\Scripts\python.exe -m spyder_cctv export-showcase --output .\dist\mog2-check
 node tests/browser-mog2-browser.mjs .\dist\mog2-check
 node tests/browser-mil-browser.mjs .\dist\mog2-check
+node tests/browser-motion-auto-browser.mjs .\dist\mog2-check
 ```
 
 Use a fresh export path. Node runs the development harness; it does not execute the downloaded OpenCV distribution. OpenCV executes only in the isolated browser worker. Timings are sampled diagnostics, not a hardware capacity guarantee. Keep the page visible while testing.
@@ -83,6 +90,6 @@ Frame difference includes its small canvas sample, pixel difference and ROI frac
 
 MOG2 initialization was about 0.53 seconds in this loopback run; an earlier cold smoke test took about 3.3 seconds. Network speed, caches, other work and browser compilation affect startup. The 128 MiB figure is one shared linear heap, not six heaps and not total browser memory.
 
-**Current choice:** keep Frame difference as the default, with MOG2 at 320px / 5 requested FPS as an explicit option. 480px is available for detail at a greater processing cost. All six calibrated MOG2/ROI workflows produced events in the test; video capture and recording remained usable, including after a simulated worker failure and explicit fallback. These measurements exclude optional MIL tracking.
+**Current choice:** start the first porch feed with Automatic MIL + MOG2 at 320px / 5 requested FPS, with measured load fallback. Other feeds default to Frame difference. Manual MOG2 remains available. 480px is available for detail at a greater processing cost. All six calibrated MOG2/ROI workflows produced events in the test; video capture and recording remained usable, including after a simulated worker failure and explicit fallback. These measurements exclude optional MIL tracking.
 
 [Recorded measurements and methodology](../reference/browser-mog2-benchmark.json). Re-run the browser test on the target device before choosing its limits.

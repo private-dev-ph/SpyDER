@@ -194,11 +194,7 @@ try {
   await until(
     "window.spyderDemoWorkflowRuntime && window.spyderBrowserMog2 && spyderDemoWorkflowRuntime.presetsReady.then(()=>true)",
   );
-  assert.equal(
-    networkPaths.some((p) => p.includes("opencv-4.12.0")),
-    false,
-    "Default demo must not download OpenCV",
-  );
+  await until("spyder.cameras().some(c=>c.demo_clip_id==='porch-parcel' && c.motion_analysis.automatic && c.motion_analysis.config.tracking)");
   assert.equal(
     await evaluate(
       "(()=>{try{new Function('return 1')();return false}catch{return true}})()",
