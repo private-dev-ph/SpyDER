@@ -89,6 +89,7 @@ if (typeof module === "object" && module.exports)
   let simulationSuspended = false;
   const rows = new Map();
   const motionDefaults = Object.freeze({
+    tracking: false,
     history: 300,
     threshold: 16,
     min_area_percent: 0.5,
@@ -114,8 +115,9 @@ if (typeof module === "object" && module.exports)
     return (
       app
         .cameras()
-        .find((camera) => camera.id === active && camera.pipeline === "motion") ||
-      null
+        .find(
+          (camera) => camera.id === active && camera.pipeline === "motion",
+        ) || null
     );
   }
 
@@ -141,6 +143,8 @@ if (typeof module === "object" && module.exports)
         '<label>Warm-up frames (0–120)<input type="number" data-motion-config="warmup_frames" min="0" max="120" step="1"></label>',
         '<label>Learning rate (−1 = auto; otherwise 0–1)<input type="number" data-motion-config="learning_rate" min="-1" max="1" step="0.01"></label>',
         '<label class="browser-motion-check"><input type="checkbox" data-motion-config="detect_shadows"> Detect shadows</label>',
+        '<label class="browser-motion-check browser-mil-toggle"><input type="checkbox" data-motion-config="tracking" aria-describedby="browser-mil-help"> MIL tracking · one porch object</label>',
+        '<p id="browser-mil-help" class="field-help"></p>',
         "</div></div>",
         '<div class="browser-motion-diagnostics" aria-label="Motion processing diagnostics">',
         '<p class="browser-motion-state" id="browser-motion-state" role="status" aria-live="polite"></p>',
@@ -153,9 +157,15 @@ if (typeof module === "object" && module.exports)
         .querySelector("#browser-motion-engine")
         .addEventListener("change", (event) => {
           motionEngine = event.currentTarget.value;
+          if (motionEngine !== "mog2") {
+            motionConfig.tracking = false;
+            syncMotionFields();
+          }
           motionChanged();
         });
-      motionConfigFields = [...motionPanel.querySelectorAll("[data-motion-config]")];
+      motionConfigFields = [
+        ...motionPanel.querySelectorAll("[data-motion-config]"),
+      ];
       for (const field of motionConfigFields) {
         field.addEventListener("input", () => {
           readMotionConfigField(field);
@@ -182,14 +192,16 @@ if (typeof module === "object" && module.exports)
     motionPanel.querySelector("#browser-motion-engine").value = motionEngine;
     for (const field of motionConfigFields) {
       const key = field.dataset.motionConfig;
-      if (key === "detect_shadows") field.checked = !!motionConfig[key];
+      if (["detect_shadows", "tracking"].includes(key))
+        field.checked = !!motionConfig[key];
       else field.value = String(motionConfig[key]);
     }
   }
 
   function readMotionConfigField(field) {
     const key = field.dataset.motionConfig;
-    if (key === "detect_shadows") motionConfig[key] = field.checked;
+    if (["detect_shadows", "tracking"].includes(key))
+      motionConfig[key] = field.checked;
     else if (
       field.value !== "" &&
       field.validity.valid &&
@@ -210,12 +222,31 @@ if (typeof module === "object" && module.exports)
     motionPanel.querySelector("#browser-motion-config").hidden =
       motionEngine !== "mog2";
     for (const field of motionConfigFields) {
-      field.disabled = motionBusy;
+      field.disabled =
+        motionBusy ||
+        (field.dataset.motionConfig === "tracking" &&
+          (motionEngine !== "mog2" ||
+            showcaseMotionCamera()?.demo_clip_id !== "porch-parcel" ||
+            app
+              .cameras()
+              .some(
+                (c) =>
+                  c.id !== active &&
+                  c.motion_analysis?.engine === "mog2" &&
+                  c.motion_analysis.config?.tracking,
+              )));
     }
+    const milHelp = motionPanel.querySelector("#browser-mil-help");
+    milHelp.textContent =
+      showcaseMotionCamera()?.demo_clip_id === "porch-parcel"
+        ? "Optional real MIL tracking: one object in this demo tab, on one porch feed only; updates at up to 2 FPS. Loops reset the temporary track ID. Disable it to release the slot."
+        : "MIL tracking is available only for the Front porch: person and parcel demo scene. Other cameras keep MOG2 regions without tracking.";
     engine.disabled = motionBusy;
     const button = motionPanel.querySelector("#browser-motion-apply");
     button.disabled =
-      motionBusy || (!motionDirty && !canRetryMotion()) || !showcaseMotionCamera();
+      motionBusy ||
+      (!motionDirty && !canRetryMotion()) ||
+      !showcaseMotionCamera();
     button.textContent = motionBusy ? "Applying…" : "Apply motion engine";
   }
 
@@ -247,13 +278,14 @@ if (typeof module === "object" && module.exports)
     if (analysis) {
       const engineName =
         analysis.engine === "mog2" ? "MOG2" : "Frame difference";
-      const stateText = {
-        idle: "Waiting to start",
-        loading: "Loading local OpenCV.js…",
-        warming_up: "Learning the background…",
-        ready: "Ready",
-        error: "Failed",
-      }[analysis.state] || String(analysis.state || "status unavailable");
+      const stateText =
+        {
+          idle: "Waiting to start",
+          loading: "Loading local OpenCV.js…",
+          warming_up: "Learning the background…",
+          ready: "Ready",
+          error: "Failed",
+        }[analysis.state] || String(analysis.state || "status unavailable");
       text = engineName + " · " + stateText;
       if (analysis.state === "error") {
         text +=
@@ -264,6 +296,18 @@ if (typeof module === "object" && module.exports)
         text += " · " + analysis.error;
     } else if (showcaseMotionCamera()) {
       text = "Waiting for this camera’s motion status.";
+    }
+    if (analysis?.engine === "mog2" && analysis.config?.tracking) {
+      text +=
+        " · MIL " +
+        (analysis.tracking_state || "loading") +
+        " · " +
+        (analysis.track_count || 0) +
+        "/1 track";
+      if (analysis.tracking_error) {
+        text += " · " + analysis.tracking_error;
+        failed = true;
+      }
     }
     if (state.textContent !== text) state.textContent = text;
     state.classList.toggle("error", failed);
@@ -285,6 +329,13 @@ if (typeof module === "object" && module.exports)
       Number.isFinite(Number(analysis.region_count))
     )
       values.push(Number(analysis.region_count) + " regions");
+    if (analysis?.config?.tracking && analysis.tracking_ms != null)
+      values.push(
+        Number(analysis.tracking_ms).toFixed(1) +
+          " ms/MIL update · " +
+          Number(analysis.tracking_fps || 0).toFixed(1) +
+          " tracking FPS",
+      );
     const heap = formatMotionBytes(analysis?.heap_bytes);
     if (heap) values.push(heap + " shared Wasm heap");
     const metricText = values.join(" · ");
@@ -317,7 +368,8 @@ if (typeof module === "object" && module.exports)
       await app.request("/api/cameras/" + id + "/motion", payload);
       if (!current(id, token)) return;
       motionDirty = false;
-      motionFeedback = "Motion engine requested. Loading and processing stay on this device.";
+      motionFeedback =
+        "Motion engine requested. Loading and processing stay on this device.";
       await app.refresh();
       renderMotionDiagnostics();
     } catch (error) {

@@ -242,19 +242,41 @@
       error: camera.error,
       frames: camera.frames,
       capture_session: camera.capture_session,
-      motion_analysis: {engine:camera.motion_engine || "frame-difference", config:camera.motion_config,
-        ...(camera.motion_engine === "mog2" ? window.spyderBrowserMog2.status(camera.id) : {
-          state:camera.state === "running" ? "ready" : "idle",processing_ms:camera.differenceMs || 0,
-          mean_processing_ms:camera.differenceMean || 0,p95_processing_ms:camera.differenceP95 || 0,processed_frames:camera.differenceCount || 0,effective_fps:camera.differenceFps || 0,
-          width:80,height:45,heap_bytes:0,region_count:0,error:null,
-        }),
+      motion_analysis: {
+        engine: camera.motion_engine || "frame-difference",
+        config: camera.motion_config,
+        ...(camera.motion_engine === "mog2"
+          ? window.spyderBrowserMog2.status(camera.id)
+          : {
+              state: camera.state === "running" ? "ready" : "idle",
+              processing_ms: camera.differenceMs || 0,
+              mean_processing_ms: camera.differenceMean || 0,
+              p95_processing_ms: camera.differenceP95 || 0,
+              processed_frames: camera.differenceCount || 0,
+              effective_fps: camera.differenceFps || 0,
+              width: 80,
+              height: 45,
+              heap_bytes: 0,
+              region_count: 0,
+              error: null,
+            }),
       },
-      metadata: { motion_fraction: camera.motion || 0,
-        ...(camera.clip?.motion_preset && camera.pipeline === "motion" ? {motion_region:{
-          ...camera.clip.motion_preset, fraction:camera.motion || 0,
-          active:(camera.motion || 0)>=(camera.motion_engine==="mog2"?camera.clip.motion_preset.mog2_threshold:camera.clip.motion_preset.threshold),
-          frame_size:[camera.canvas.width,camera.canvas.height],
-        }} : {}),
+      metadata: {
+        motion_fraction: camera.motion || 0,
+        ...(camera.clip?.motion_preset && camera.pipeline === "motion"
+          ? {
+              motion_region: {
+                ...camera.clip.motion_preset,
+                fraction: camera.motion || 0,
+                active:
+                  (camera.motion || 0) >=
+                  (camera.motion_engine === "mog2"
+                    ? camera.clip.motion_preset.mog2_threshold
+                    : camera.clip.motion_preset.threshold),
+                frame_size: [camera.canvas.width, camera.canvas.height],
+              },
+            }
+          : {}),
       },
       reconnection: {
         ...camera.reconnection,
@@ -272,6 +294,33 @@
       idle_suspended: sleeping.has(camera.id),
       settings_state: camera.settings_state,
     };
+  }
+  function authorizeTracking(camera, engine, config) {
+    if (!config.tracking) return;
+    if (
+      engine !== "mog2" ||
+      camera.kind !== "sample" ||
+      camera.clip?.id !== "porch-parcel"
+    )
+      throw Error(
+        "Demo MIL is limited to Front porch: person and parcel using MOG2.",
+      );
+    if (
+      [...cameras.values()].some(
+        (c) =>
+          c.id !== camera.id &&
+          c.motion_engine === "mog2" &&
+          c.motion_config?.tracking,
+      )
+    )
+      throw Error(
+        "Only one porch feed can enable the demo MIL tracker. Disable tracking on the other porch feed first.",
+      );
+    window.spyderBrowserMog2.validateTracking(
+      camera.id,
+      config,
+      camera.clip.id,
+    );
   }
   async function apply(camera) {
     if (camera.state !== "running") {
@@ -662,8 +711,12 @@
       frames: 0,
       epoch: 0,
       motionEpoch: 0,
-      motion_engine: data.motion_engine === "mog2" ? "mog2" : "frame-difference",
-      motion_config: window.spyderBrowserMog2?.validate(data.motion_config || clip?.motion_preset?.mog2_config || {}) || {},
+      motion_engine:
+        data.motion_engine === "mog2" ? "mog2" : "frame-difference",
+      motion_config:
+        window.spyderBrowserMog2?.validate(
+          data.motion_config || clip?.motion_preset?.mog2_config || {},
+        ) || {},
       retryTimer: null,
       retryDeadline: null,
       openEpoch: null,
@@ -679,6 +732,7 @@
     };
     camera.sample.width = 80;
     camera.sample.height = 45;
+    authorizeTracking(camera, camera.motion_engine, camera.motion_config);
     cameras.set(camera.id, camera);
     camera.ptz = document.querySelector("#browser-ptz").checked;
     if (data.autostart) {
@@ -773,26 +827,55 @@
       } else ctx.drawImage(camera.video, 0, 0, canvas.width, canvas.height);
     }
     if (camera.pipeline === "motion") {
-      const motionBegan=performance.now();
-      if(camera.motion_engine === "mog2") {
-        camera.motionSample=window.spyderBrowserMog2.analyze(camera.id,canvas,camera.motion_config,camera.motionEpoch,camera.clip?.motion_preset?.roi || null);
+      const motionBegan = performance.now();
+      if (camera.motion_engine === "mog2") {
+        camera.motionSample = window.spyderBrowserMog2.analyze(
+          camera.id,
+          canvas,
+          camera.motion_config,
+          camera.motionEpoch,
+          camera.clip?.motion_preset?.roi || null,
+          camera.clip?.id || null,
+        );
       } else {
-        const sample=camera.sample.getContext("2d",{willReadFrequently:true});
-        sample.drawImage(canvas,0,0,80,45);
-        const pixels=sample.getImageData(0,0,80,45).data;
-        camera.motionSample=window.spyderBrowserMotion.measure(pixels,camera.previous);
-        camera.previous=pixels;
-
+        const sample = camera.sample.getContext("2d", {
+          willReadFrequently: true,
+        });
+        sample.drawImage(canvas, 0, 0, 80, 45);
+        const pixels = sample.getImageData(0, 0, 80, 45).data;
+        camera.motionSample = window.spyderBrowserMotion.measure(
+          pixels,
+          camera.previous,
+        );
+        camera.previous = pixels;
       }
-      camera.motion=window.spyderBrowserMotion.fraction(camera.motionSample,camera.clip?.motion_preset?.roi || null);
-      if(camera.motion_engine!=="mog2"){
-        const now=performance.now();camera.differenceMs=now-motionBegan;
-        camera.differenceSamples ||= [];camera.differenceSamples.push(camera.differenceMs);if(camera.differenceSamples.length>180)camera.differenceSamples.shift();
-        camera.differenceCount=(camera.differenceCount || 0)+1;
-        camera.differenceMean=camera.differenceSamples.reduce((a,b)=>a+b,0)/camera.differenceSamples.length;
-        const sorted=[...camera.differenceSamples].sort((a,b)=>a-b);camera.differenceP95=sorted[Math.floor((sorted.length-1)*.95)];
-        camera.differenceTimes ||= [];camera.differenceTimes.push(now);camera.differenceTimes=camera.differenceTimes.filter(t=>now-t<5000);
-        camera.differenceFps=camera.differenceTimes.length>1?(camera.differenceTimes.length-1)*1000/(now-camera.differenceTimes[0]):0;
+      camera.motion = window.spyderBrowserMotion.fraction(
+        camera.motionSample,
+        camera.clip?.motion_preset?.roi || null,
+      );
+      if (camera.motion_engine !== "mog2") {
+        const now = performance.now();
+        camera.differenceMs = now - motionBegan;
+        camera.differenceSamples ||= [];
+        camera.differenceSamples.push(camera.differenceMs);
+        if (camera.differenceSamples.length > 180)
+          camera.differenceSamples.shift();
+        camera.differenceCount = (camera.differenceCount || 0) + 1;
+        camera.differenceMean =
+          camera.differenceSamples.reduce((a, b) => a + b, 0) /
+          camera.differenceSamples.length;
+        const sorted = [...camera.differenceSamples].sort((a, b) => a - b);
+        camera.differenceP95 = sorted[Math.floor((sorted.length - 1) * 0.95)];
+        camera.differenceTimes ||= [];
+        camera.differenceTimes.push(now);
+        camera.differenceTimes = camera.differenceTimes.filter(
+          (t) => now - t < 5000,
+        );
+        camera.differenceFps =
+          camera.differenceTimes.length > 1
+            ? ((camera.differenceTimes.length - 1) * 1000) /
+              (now - camera.differenceTimes[0])
+            : 0;
       }
     }
     camera.frames++;
@@ -815,7 +898,8 @@
             camera: status(camera),
             canvas,
             motion_fraction: camera.motion || 0,
-            motion_sample: camera.pipeline === "motion" ? camera.motionSample : null,
+            motion_sample:
+              camera.pipeline === "motion" ? camera.motionSample : null,
             frameId: camera.frames,
             timestamp: camera.frameTime,
           }),
@@ -897,13 +981,29 @@
           sleeping.delete(camera.id);
           await start(camera);
         }
-      } else if(parts[3] === "motion") {
-        if(!["frame-difference","mog2"].includes(data.engine))throw Error("Choose frame difference or MOG2.");
-        const options={...data};delete options.engine;
-        const config=window.spyderBrowserMog2.validate({...camera.motion_config,...options});
-        camera.motion_engine=data.engine;camera.motion_config=config;camera.motionEpoch++;
-        camera.previous=null;camera.motionSample=null;camera.motion=0;
-        if(data.engine==="mog2" && camera.state==="running")window.spyderBrowserMog2.configure(camera.id,config);
+      } else if (parts[3] === "motion") {
+        if (!["frame-difference", "mog2"].includes(data.engine))
+          throw Error("Choose frame difference or MOG2.");
+        const options = { ...data };
+        delete options.engine;
+        const config = window.spyderBrowserMog2.validate({
+          ...camera.motion_config,
+          ...options,
+        });
+        if (data.engine !== "mog2") config.tracking = false;
+        authorizeTracking(camera, data.engine, config);
+        camera.motion_engine = data.engine;
+        camera.motion_config = config;
+        camera.motionEpoch++;
+        camera.previous = null;
+        camera.motionSample = null;
+        camera.motion = 0;
+        if (data.engine === "mog2" && camera.state === "running")
+          window.spyderBrowserMog2.configure(
+            camera.id,
+            config,
+            camera.clip?.id || null,
+          );
         else window.spyderBrowserMog2.release(camera.id);
       } else if (parts[3] === "settings") {
         camera.settings = validate(data.settings);
