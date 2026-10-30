@@ -32,6 +32,7 @@ def test_export_is_complete_static_and_config_independent(tmp_path):
         "demo-camera-picker.js",
         "browser-motion.js",
         "browser-mog2.js",
+        "browser-motion-policy.js",
         "404.html",
         "mog2-worker.js",
         "opencv-4.12.0.js",

@@ -50,7 +50,7 @@ before configuring DNS. A generated export does not deploy the site or configure
 | Feature | Installed app | Static showcase |
 | --- | --- | --- |
 | Sources | OpenCV devices, files, supported streams, bundled looping demo clips | Bundled home-camera loops, generated feeds, permitted webcams, selected local videos. |
-| Motion | MOG2, regions, tracking | Lightweight frame difference or optional local OpenCV.js MOG2 with foreground regions; opt-in MIL for one object on the bundled porch feed only. |
+| Motion | MOG2, regions, tracking | Lightweight frame difference or optional local OpenCV.js MOG2 with foreground regions; automatic MIL for one object on the first bundled porch feed, with measured fallback to MOG2 and frame difference. |
 | YOLO/InsightFace and native capacity assessment | Local Python engines | Unavailable. |
 | Workflow editing and JSON exchange | Supported | Browser-only drafts/import/export. |
 | Workflow execution | Full local graph execution | Supported browser-motion, cooldown, event, notification, capture and time-limited recording nodes; native model/code/subflow nodes are refused. |
@@ -91,7 +91,7 @@ cannot prove account-specific headers, DNS, or injected scripts are configured c
 
 ## Optional browser OpenCV
 
-Open **Camera Settings → Browser motion engine** on a motion-enabled camera and select **MOG2 background subtraction (OpenCV.js)**. Apply the engine separately from image tuning. This starts one lazily loaded browser worker shared by up to eight MOG2 cameras, with separate background models. The default Frame difference engine does not download OpenCV.
+Open **Camera Settings → Browser motion engine** on a motion-enabled camera and select **MOG2 background subtraction (OpenCV.js)**. Apply the engine separately from image tuning. This starts one lazily loaded browser worker shared by up to eight MOG2 cameras, with separate background models. The first porch camera starts Automatic MIL + MOG2 by default and loads this runtime. Other feeds start with Frame difference. Automatic mode reports measured load fallbacks; explicit manual choices persist.
 
 The pinned OpenCV 4.12.0 runtime is 10,872,779 bytes (about 3.52 MB using gzip in the development check), below [Cloudflare's 25 MiB per-asset limit](https://developers.cloudflare.com/workers/platform/limits/#static-assets). The build needs no npm installation: the verified distribution, embedded WebAssembly, license and provenance are package assets. See `opencv-runtime.json` in the export. Browser downloads are served as static bytes; processing and camera pixels stay on the device.
 

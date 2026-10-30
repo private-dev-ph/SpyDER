@@ -131,7 +131,7 @@ if (typeof module === "object" && module.exports)
         "<legend>Browser motion engine</legend>",
         '<p id="browser-motion-help" class="field-help">Runs on this device in a local browser worker. Frames stay on this device; no uploads. Frame difference measures inter-frame change; MOG2 measures foreground. Review workflow thresholds when switching. OpenCV.js failure keeps video live and does not silently switch engines.</p>',
         '<label for="browser-motion-engine">Engine</label>',
-        '<select id="browser-motion-engine"><option value="frame-difference">Frame difference</option><option value="mog2">MOG2 background subtraction (OpenCV.js)</option></select>',
+        '<select id="browser-motion-engine"><option value="auto">Automatic · MIL with performance fallback</option><option value="frame-difference">Frame difference</option><option value="mog2">MOG2 background subtraction (OpenCV.js)</option></select>',
         '<div class="browser-motion-config" id="browser-motion-config">',
         '<p class="field-help">Changing MOG2 settings resets its learned background. Existing workflows keep their thresholds. Load an updated Approach template or edit the MOG2 foreground fraction in its Browser motion node.</p>',
         '<div class="browser-motion-config-grid">',
@@ -224,6 +224,7 @@ if (typeof module === "object" && module.exports)
     for (const field of motionConfigFields) {
       field.disabled =
         motionBusy ||
+        motionEngine === "auto" ||
         (field.dataset.motionConfig === "tracking" &&
           (motionEngine !== "mog2" ||
             showcaseMotionCamera()?.demo_clip_id !== "porch-parcel" ||
@@ -239,8 +240,12 @@ if (typeof module === "object" && module.exports)
     const milHelp = motionPanel.querySelector("#browser-mil-help");
     milHelp.textContent =
       showcaseMotionCamera()?.demo_clip_id === "porch-parcel"
-        ? "Optional real MIL tracking: one object in this demo tab, on one porch feed only; updates at up to 2 FPS. Loops reset the temporary track ID. Disable it to release the slot."
+        ? "Automatic mode starts real MIL on one porch object at up to 2 FPS and reduces analysis under sustained device load. Choose a manual engine to override. Loops reset temporary track IDs."
         : "MIL tracking is available only for the Front porch: person and parcel demo scene. Other cameras keep MOG2 regions without tracking.";
+    const autoOption = engine.querySelector('option[value="auto"]');
+    if (autoOption)
+      autoOption.disabled =
+        showcaseMotionCamera()?.demo_clip_id !== "porch-parcel";
     engine.disabled = motionBusy;
     const button = motionPanel.querySelector("#browser-motion-apply");
     button.disabled =
@@ -253,9 +258,10 @@ if (typeof module === "object" && module.exports)
   function canRetryMotion() {
     const analysis = showcaseMotionCamera()?.motion_analysis;
     return (
-      motionEngine === "mog2" &&
-      analysis?.engine === "mog2" &&
-      analysis.state === "error"
+      (motionEngine === "auto" && analysis?.adaptation?.level > 0) ||
+      (motionEngine === "mog2" &&
+        analysis?.engine === "mog2" &&
+        (analysis.state === "error" || !!analysis.tracking_error))
     );
   }
 
@@ -297,6 +303,12 @@ if (typeof module === "object" && module.exports)
     } else if (showcaseMotionCamera()) {
       text = "Waiting for this camera’s motion status.";
     }
+    if (analysis?.automatic)
+      text +=
+        " · Auto: " +
+        (analysis.adaptation?.name || "starting") +
+        " · " +
+        (analysis.adaptation?.reason || "");
     if (analysis?.engine === "mog2" && analysis.config?.tracking) {
       text +=
         " · MIL " +
@@ -387,9 +399,11 @@ if (typeof module === "object" && module.exports)
 
   function resetMotionDraft() {
     const analysis = showcaseMotionCamera()?.motion_analysis;
-    motionEngine = ["frame-difference", "mog2"].includes(analysis?.engine)
-      ? analysis.engine
-      : "frame-difference";
+    motionEngine = analysis?.automatic
+      ? "auto"
+      : ["frame-difference", "mog2"].includes(analysis?.engine)
+        ? analysis.engine
+        : "frame-difference";
     motionConfig = {
       ...motionDefaults,
       ...(analysis?.config && typeof analysis.config === "object"
