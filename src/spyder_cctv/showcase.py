@@ -3,17 +3,26 @@
 from importlib.resources import files
 from pathlib import Path
 
+MAIN_CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; "
+    "img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'none'; worker-src 'self'; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
+WORKER_CSP = (
+    "default-src 'none'; script-src 'self' 'unsafe-eval'; connect-src 'none'; worker-src 'none'"
+)
+# CSP belongs to the execution context: the document stays eval-free; only the
+# dedicated worker permits Emscripten's generated bindings and embedded Wasm.
 HEADERS = (
     "/*\n"
-    "  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; "
-    "img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'none'; worker-src 'none'; "
-    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'\n"
-    """
-  Permissions-Policy: camera=(self), microphone=(), geolocation=()
-  Referrer-Policy: no-referrer
-  X-Content-Type-Options: nosniff
-  X-Frame-Options: DENY
-"""
+    "  Permissions-Policy: camera=(self), microphone=(), geolocation=()\n"
+    "  Referrer-Policy: no-referrer\n"
+    "  X-Content-Type-Options: nosniff\n"
+    "  X-Frame-Options: DENY\n"
+    f"/\n  Content-Security-Policy: {MAIN_CSP}\n"
+    f"/index.html\n  Content-Security-Policy: {MAIN_CSP}\n"
+    f"/404.html\n  Content-Security-Policy: {MAIN_CSP}\n"
+    f"/mog2-worker.js\n  Content-Security-Policy: {WORKER_CSP}\n"
 )
 
 
@@ -44,6 +53,12 @@ def export_showcase(output: Path) -> None:
         "demo-cameras.json",
         "demo-camera-picker.js",
         "browser-motion.js",
+        "browser-mog2.js",
+        "404.html",
+        "mog2-worker.js",
+        "opencv-4.12.0.js",
+        "opencv-LICENSE.txt",
+        "opencv-runtime.json",
         "demo-camera-picker.css",
         "activity.js",
         "icons.svg",

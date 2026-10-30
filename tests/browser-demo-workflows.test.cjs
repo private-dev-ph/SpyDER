@@ -105,6 +105,11 @@ function recordGraph(id) {
   await runtime.disable(scoped.id);
   scoped.nodes.find(n=>n.type==="browser_motion").params.roi=[1,0,0,1];
   assert.equal(runtime.inspect(scoped).supported,false);
+  const adaptive=graph("engine-threshold");adaptive.nodes.find(n=>n.type==="browser_motion").params.mog2_threshold=.01;
+  await runtime.enable(adaptive);const engineBefore=notifications.length;
+  frameListener({...frame(-1,4000,.05),camera:{id:"clip-1",motion_analysis:{engine:"mog2"}}});
+  assert.ok(notifications.length>engineBefore,"MOG2 uses an explicit foreground threshold, not the inter-frame threshold");
+  await runtime.disable(adaptive.id);
   notifications.length=0;
   const one = graph("one"), two = graph("two");
   const recordingAttachment = recordGraph("unsupported-event-recording");

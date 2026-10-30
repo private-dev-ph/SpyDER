@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Pinned third-party distribution; retain upstream bytes and avoid giant diffs.
+src/spyder_cctv/assets/opencv-4.12.0.js -text -diff

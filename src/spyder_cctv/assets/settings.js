@@ -91,6 +91,7 @@ if (typeof module === "object" && module.exports)
   const motionDefaults = Object.freeze({
     history: 300,
     threshold: 16,
+    min_area_percent: 0.5,
     detect_shadows: true,
     learning_rate: -1,
     warmup_frames: 15,
@@ -126,18 +127,19 @@ if (typeof module === "object" && module.exports)
       motionPanel.setAttribute("aria-describedby", "browser-motion-help");
       motionPanel.innerHTML = [
         "<legend>Browser motion engine</legend>",
-        '<p id="browser-motion-help" class="field-help">Runs on this device in a local browser worker. Frames stay on this device; no uploads. OpenCV.js failure keeps video live and does not silently switch engines.</p>',
+        '<p id="browser-motion-help" class="field-help">Runs on this device in a local browser worker. Frames stay on this device; no uploads. Frame difference measures inter-frame change; MOG2 measures foreground. Review workflow thresholds when switching. OpenCV.js failure keeps video live and does not silently switch engines.</p>',
         '<label for="browser-motion-engine">Engine</label>',
         '<select id="browser-motion-engine"><option value="frame-difference">Frame difference</option><option value="mog2">MOG2 background subtraction (OpenCV.js)</option></select>',
         '<div class="browser-motion-config" id="browser-motion-config">',
-        '<p class="field-help">Changing MOG2 settings resets its learned background.</p>',
+        '<p class="field-help">Changing MOG2 settings resets its learned background. Existing workflows keep their thresholds. Load an updated Approach template or edit the MOG2 foreground fraction in its Browser motion node.</p>',
         '<div class="browser-motion-config-grid">',
         '<label>Analysis rate (1–15 FPS)<input type="number" data-motion-config="inference_fps" min="1" max="15" step="1"></label>',
-        '<label>Input width<select data-motion-config="input_width"><option value="320">320 px · lower load</option><option value="480">480 px · native match</option></select></label>',
+        '<label>Input width<select data-motion-config="input_width"><option value="320">320 px · lower load</option><option value="480">480 px · native default width</option></select></label>',
         '<label>History frames (20–2000)<input type="number" data-motion-config="history" min="20" max="2000" step="1"></label>',
         '<label>Foreground threshold (4–128)<input type="number" data-motion-config="threshold" min="4" max="128" step="1"></label>',
+        '<label>Minimum region area (%)<input type="number" data-motion-config="min_area_percent" min="0.01" max="25" step="0.01"></label>',
         '<label>Warm-up frames (0–120)<input type="number" data-motion-config="warmup_frames" min="0" max="120" step="1"></label>',
-        '<label>Learning rate (−1 to 1)<input type="number" data-motion-config="learning_rate" min="-1" max="1" step="0.01"></label>',
+        '<label>Learning rate (−1 = auto; otherwise 0–1)<input type="number" data-motion-config="learning_rate" min="-1" max="1" step="0.01"></label>',
         '<label class="browser-motion-check"><input type="checkbox" data-motion-config="detect_shadows"> Detect shadows</label>',
         "</div></div>",
         '<div class="browser-motion-diagnostics" aria-label="Motion processing diagnostics">',
@@ -284,7 +286,7 @@ if (typeof module === "object" && module.exports)
     )
       values.push(Number(analysis.region_count) + " regions");
     const heap = formatMotionBytes(analysis?.heap_bytes);
-    if (heap) values.push(heap + " memory");
+    if (heap) values.push(heap + " shared Wasm heap");
     const metricText = values.join(" · ");
     if (metrics.textContent !== metricText) metrics.textContent = metricText;
     metrics.hidden = values.length === 0;

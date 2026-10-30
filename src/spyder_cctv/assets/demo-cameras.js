@@ -60,6 +60,12 @@
           cooldown_seconds: 6,
           description:
             "Watches the porch entry, person and parcel pickup area.",
+          mog2_threshold: 0.015,
+          mog2_config: {
+            detect_shadows: false,
+            min_area_percent: 0.1,
+            warmup_frames: 5,
+          },
         },
       },
       {
@@ -93,6 +99,12 @@
           cooldown_seconds: 6,
           description:
             "Watches the route from the sidewalk across the upper driveway.",
+          mog2_threshold: 0.003,
+          mog2_config: {
+            detect_shadows: false,
+            min_area_percent: 0.1,
+            warmup_frames: 5,
+          },
         },
       },
       {
@@ -126,6 +138,12 @@
           cooldown_seconds: 6,
           description:
             "Watches the path and doorstep, excluding the right-hand door reflection.",
+          mog2_threshold: 0.025,
+          mog2_config: {
+            detect_shadows: false,
+            min_area_percent: 0.1,
+            warmup_frames: 5,
+          },
         },
       },
       {
@@ -159,6 +177,12 @@
           cooldown_seconds: 6,
           description:
             "Watches the entrance and the person approaching the door.",
+          mog2_threshold: 0.003,
+          mog2_config: {
+            detect_shadows: false,
+            min_area_percent: 0.1,
+            warmup_frames: 5,
+          },
         },
       },
       {
@@ -217,6 +241,12 @@
           cooldown_seconds: 6,
           description:
             "Watches the person at the right edge of the doorstep near the end of the clip.",
+          mog2_threshold: 0.005,
+          mog2_config: {
+            detect_shadows: false,
+            min_area_percent: 0.1,
+            warmup_frames: 5,
+          },
         },
       },
       {
@@ -250,6 +280,12 @@
           cooldown_seconds: 6,
           description:
             "Watches the approach from the sidewalk to the porch path.",
+          mog2_threshold: 0.01,
+          mog2_config: {
+            detect_shadows: false,
+            min_area_percent: 0.1,
+            warmup_frames: 5,
+          },
         },
       },
     ],

@@ -7,6 +7,7 @@ Start with [Getting started](getting-started.md) for a working local installatio
 ## User guides
 
 - [Demo camera feeds](user-guide/demo-camera-feeds.md): bundled residential footage, software camera controls, browser automations, licensing and capability boundaries.
+- [Browser motion engines](user-guide/browser-motion-engines.md): Frame difference, OpenCV.js MOG2, tuning, browser resource costs and verification.
 
 - [Face galleries and ONVIF cameras](user-guide/face-galleries-and-onvif.md): local
   enrollment, workflow recognition, LAN discovery, and timed PTZ controls.

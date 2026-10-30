@@ -1,0 +1,429 @@
+{
+  "date": "2026-10-30",
+  "hardware": {
+    "cpu": "Intel Core i7-6700 @ 3.40 GHz",
+    "physical_cores": 4,
+    "logical_processors": 8
+  },
+  "browser": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+    "logical_processors": 8
+  },
+  "method": "One local headless-Chrome run, six person-camera motion engines plus the default vehicle view. Frame difference baseline ~6s; MOG2 320px ~20s; MOG2 480px ~16s. MOG2 requests 5 FPS. Means are processing-stage samples, not end-to-end latency or total CPU usage. Loopbacks serve uncompressed static assets. Heap is shared, not per camera.",
+  "results": {
+    "frame_difference": [
+      {
+        "scene": "porch-parcel",
+        "engine": "frame-difference",
+        "state": "ready",
+        "width": 80,
+        "height": 45,
+        "mean_processing_ms": 0.2550000011920929,
+        "p95_processing_ms": 0.40000003576278687,
+        "effective_fps": 4.9033628897510235,
+        "processed_frames": 40,
+        "heap_bytes": 0,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "front-walk-approach",
+        "engine": "frame-difference",
+        "state": "ready",
+        "width": 80,
+        "height": 45,
+        "mean_processing_ms": 0.2193548390942235,
+        "p95_processing_ms": 0.30000001192092896,
+        "effective_fps": 5.109862033725089,
+        "processed_frames": 31,
+        "heap_bytes": 0,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "front-door-close",
+        "engine": "frame-difference",
+        "state": "ready",
+        "width": 80,
+        "height": 45,
+        "mean_processing_ms": 0.2354838655840966,
+        "p95_processing_ms": 0.3999999761581421,
+        "effective_fps": 5.0133354723684525,
+        "processed_frames": 31,
+        "heap_bytes": 0,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "covered-porch",
+        "engine": "frame-difference",
+        "state": "ready",
+        "width": 80,
+        "height": 45,
+        "mean_processing_ms": 0.2322580583633915,
+        "p95_processing_ms": 0.30000001192092896,
+        "effective_fps": 5.113938550889431,
+        "processed_frames": 31,
+        "heap_bytes": 0,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "ring-doorbell-idle",
+        "engine": "frame-difference",
+        "state": "ready",
+        "width": 80,
+        "height": 45,
+        "mean_processing_ms": 0.20999999841054282,
+        "p95_processing_ms": 0.3999999761581421,
+        "effective_fps": 5.116555125739959,
+        "processed_frames": 30,
+        "heap_bytes": 0,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "front-yard-walk",
+        "engine": "frame-difference",
+        "state": "ready",
+        "width": 80,
+        "height": 45,
+        "mean_processing_ms": 0.19000000953674318,
+        "p95_processing_ms": 0.30000001192092896,
+        "effective_fps": 5.052954968040975,
+        "processed_frames": 30,
+        "heap_bytes": 0,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      }
+    ],
+    "mog2_320": [
+      {
+        "scene": "porch-parcel",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 320,
+        "height": 240,
+        "mean_processing_ms": 16.581249999503296,
+        "p95_processing_ms": 26.599999964237213,
+        "effective_fps": 4.639187214438522,
+        "processed_frames": 96,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "front-walk-approach",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 320,
+        "height": 180,
+        "mean_processing_ms": 12.323157892729107,
+        "p95_processing_ms": 18,
+        "effective_fps": 4.8576702612864,
+        "processed_frames": 95,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "front-door-close",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 320,
+        "height": 180,
+        "mean_processing_ms": 9.803191489995793,
+        "p95_processing_ms": 15.399999976158142,
+        "effective_fps": 4.6354546056735515,
+        "processed_frames": 94,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "covered-porch",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 320,
+        "height": 180,
+        "mean_processing_ms": 9.648913042700809,
+        "p95_processing_ms": 15.800000011920929,
+        "effective_fps": 4.3478260869565215,
+        "processed_frames": 92,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "ring-doorbell-idle",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 320,
+        "height": 180,
+        "mean_processing_ms": 14.2402173915635,
+        "p95_processing_ms": 22.700000047683716,
+        "effective_fps": 4.025515575678447,
+        "processed_frames": 92,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      },
+      {
+        "scene": "front-yard-walk",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 320,
+        "height": 180,
+        "mean_processing_ms": 11.345054946757935,
+        "p95_processing_ms": 17.899999976158142,
+        "effective_fps": 3.6118863897553766,
+        "processed_frames": 91,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 320
+        }
+      }
+    ],
+    "mog2_480": [
+      {
+        "scene": "porch-parcel",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 480,
+        "height": 360,
+        "mean_processing_ms": 33.512328765980186,
+        "p95_processing_ms": 47.799999952316284,
+        "effective_fps": 4.533194315337583,
+        "processed_frames": 73,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 480
+        }
+      },
+      {
+        "scene": "front-walk-approach",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 480,
+        "height": 270,
+        "mean_processing_ms": 25.99199999332428,
+        "p95_processing_ms": 38.5,
+        "effective_fps": 4.8349023065819825,
+        "processed_frames": 75,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 480
+        }
+      },
+      {
+        "scene": "front-door-close",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 480,
+        "height": 270,
+        "mean_processing_ms": 19.242105262059916,
+        "p95_processing_ms": 26.30000001192093,
+        "effective_fps": 4.675810473815462,
+        "processed_frames": 76,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 480
+        }
+      },
+      {
+        "scene": "covered-porch",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 480,
+        "height": 270,
+        "mean_processing_ms": 18.526666672229766,
+        "p95_processing_ms": 25.600000023841858,
+        "effective_fps": 4.651451252773676,
+        "processed_frames": 75,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 480
+        }
+      },
+      {
+        "scene": "ring-doorbell-idle",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 480,
+        "height": 270,
+        "mean_processing_ms": 26.685135140612317,
+        "p95_processing_ms": 40.40000003576279,
+        "effective_fps": 4.375984596519002,
+        "processed_frames": 74,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 480
+        }
+      },
+      {
+        "scene": "front-yard-walk",
+        "engine": "mog2",
+        "state": "ready",
+        "width": 480,
+        "height": 270,
+        "mean_processing_ms": 22.180000002043588,
+        "p95_processing_ms": 33.5,
+        "effective_fps": 4.280821917839427,
+        "processed_frames": 70,
+        "heap_bytes": 134217728,
+        "load_ms": 525,
+        "config": {
+          "history": 300,
+          "threshold": 16,
+          "min_area_percent": 0.1,
+          "detect_shadows": false,
+          "learning_rate": -1,
+          "warmup_frames": 5,
+          "inference_fps": 5,
+          "input_width": 480
+        }
+      }
+    ]
+  }
+}

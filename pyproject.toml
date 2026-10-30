@@ -22,7 +22,7 @@ spyder-cctv = "spyder_cctv.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-spyder_cctv = ["assets/*.html", "assets/*.json", "assets/*.js", "assets/*.css", "assets/*.svg", "assets/*.png", "assets/*.mp4"]
+spyder_cctv = ["assets/*.html", "assets/*.json", "assets/*.js", "assets/*.css", "assets/*.svg", "assets/*.png", "assets/*.mp4", "assets/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

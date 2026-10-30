@@ -1,0 +1,12 @@
+{
+  "version": "4.12.0",
+  "package": "@techstark/opencv-js@4.12.0-release.1",
+  "source": "https://registry.npmjs.org/@techstark/opencv-js/-/opencv-js-4.12.0-release.1.tgz",
+  "integrity": "sha512-LtTaph9v/HqLPXEg3m1xs2h7QJh10pUpuDT0nj8g77lelWnTwwQrehtd+fXElLOdrkqc4Fea6Z/sJBvEJLYPfw==",
+  "sha256": "bd0c3e6448043de04f6a64a12cb7b759f78c3ab8f7c35c9f2e0f71c88bb17103",
+  "bytes": 10872779,
+  "gzip_bytes": 3521844,
+  "license": "Apache-2.0",
+  "upstream": "https://github.com/opencv/opencv/tree/4.12.0",
+  "modifications": "None. Vendored package distribution; WebAssembly is embedded in the JavaScript file."
+}

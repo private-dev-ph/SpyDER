@@ -201,7 +201,7 @@
             <div class="vl-title"><div><h1>Motion &amp; ROI</h1><p>Choose a camera, frame the area, then tune motion detection.</p></div><span class="vl-chip">Local processing</span></div>
             <div class="vl-picker"><label for="vl-camera">Camera<select id="vl-camera" ${cams().length ? "" : "disabled"}></select></label><span class="vl-pipeline-label">App pipeline: <b class="vl-pipeline-value">${esc(c?.pipeline || pipeline)}</b><small>Motion analysis runs separately.</small></span></div>
             ${!cams().length ? '<p class="vl-empty" role="status">No cameras yet. Add a camera in Camera Setup to get started.</p>' : ""}
-            ${showcase ? '<div class="vl-showcase" role="status"><strong>Browser preview</strong><p>Demo motion is browser generated. Editing, foreground masks and capacity assessment require the local Python app.</p></div>' : ""}
+            ${showcase ? '<div class="vl-showcase" role="status"><strong>Browser preview</strong><p>Select Frame difference or real OpenCV.js MOG2 in the camera Settings. Live MOG2 regions appear in Control Room and feed browser motion workflows. This draft editor, foreground-mask viewer, MIL tracking and native capacity assessment require the local Python app.</p></div>' : ""}
           </section>
           <div class="vl-grid">
             <section class="workspace-panel vl-preview-panel">

@@ -19,6 +19,7 @@
       roi[1] < roi[3]
     );
   }
+  const fractionCache = new WeakMap();
   function fraction(sample, roi = null) {
     if (
       !sample ||
@@ -31,6 +32,10 @@
       (roi !== null && !validRoi(roi))
     )
       return 0;
+    // Samples are immutable; all consumers share one result per region/inference.
+    let cached = fractionCache.get(sample);
+    const key = roi ? roi.join(",") : "full";
+    if (cached?.has(key)) return cached.get(key);
     const [x1, y1, x2, y2] = roi || [0, 0, 1, 1];
     const left = Math.floor(x1 * sample.width),
       top = Math.floor(y1 * sample.height),
@@ -40,7 +45,14 @@
     for (let y = top; y < bottom; y++)
       for (let x = left; x < right; x++)
         changed += sample.mask[y * sample.width + x] ? 1 : 0;
-    return changed / ((right - left) * (bottom - top));
+    const result = changed / ((right - left) * (bottom - top));
+    if (!cached) {
+      cached = new Map();
+      fractionCache.set(sample, cached);
+    }
+    if (cached.size >= 64) cached.delete(cached.keys().next().value);
+    cached.set(key, result);
+    return result;
   }
   function measure(current, previous, width = 80, height = 45) {
     const mask = new Uint8Array(width * height);
@@ -90,7 +102,11 @@
           type: "browser_motion",
           x: 280,
           y: 90,
-          params: { threshold: preset.threshold, roi: [...preset.roi] },
+          params: {
+            threshold: preset.threshold,
+            mog2_threshold: preset.mog2_threshold ?? preset.threshold,
+            roi: [...preset.roi],
+          },
         },
         {
           id: "cooldown",
@@ -132,11 +148,16 @@
     storage.setItem(SEED_KEY, "1");
   }
   function renderRegion(stage, camera) {
-    const region = camera.metadata?.motion_region;
+    const region = camera.metadata?.motion_region,
+      analysis = camera.motion_analysis;
+    const boxes =
+      analysis?.engine === "mog2" && analysis.state === "ready"
+        ? analysis.regions || []
+        : [];
+    const showGuide = region && validRoi(region.roi);
     let svg = stage.querySelector(".demo-motion-region");
     if (
-      !region ||
-      !validRoi(region.roi) ||
+      (!showGuide && !boxes.length) ||
       camera.state !== "running" ||
       stage.querySelector(".camera-image")?.hidden
     ) {
@@ -147,12 +168,9 @@
       svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.classList.add("demo-motion-region");
       svg.setAttribute("aria-hidden", "true");
-      const rect = document.createElementNS(svg.namespaceURI, "rect");
-      svg.append(rect);
       stage.append(svg);
     }
-    const [w, h] = region.frame_size,
-      [x1, y1, x2, y2] = region.roi;
+    const [w, h] = region?.frame_size || [analysis.width, analysis.height];
     svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
     svg.setAttribute(
       "preserveAspectRatio",
@@ -160,15 +178,29 @@
         ? "xMidYMid slice"
         : "xMidYMid meet",
     );
-    svg.dataset.active = region.active ? "true" : "false";
-    const rect = svg.firstElementChild;
-    for (const [key, value] of Object.entries({
-      x: x1 * w,
-      y: y1 * h,
-      width: (x2 - x1) * w,
-      height: (y2 - y1) * h,
-    }))
-      rect.setAttribute(key, value);
+    svg.dataset.active = region?.active ? "true" : "false";
+    svg.replaceChildren();
+    const rect = (x, y, width, height, kind) => {
+      const r = document.createElementNS(svg.namespaceURI, "rect");
+      r.dataset.kind = kind;
+      for (const [key, value] of Object.entries({ x, y, width, height }))
+        r.setAttribute(key, value);
+      svg.append(r);
+    };
+    if (showGuide) {
+      const [x1, y1, x2, y2] = region.roi;
+      rect(x1 * w, y1 * h, (x2 - x1) * w, (y2 - y1) * h, "guide");
+    }
+    for (const box of boxes.slice(0, 32)) {
+      const [x, y, bw, bh] = box.bbox;
+      rect(
+        (x * w) / analysis.width,
+        (y * h) / analysis.height,
+        (bw * w) / analysis.width,
+        (bh * h) / analysis.height,
+        "region",
+      );
+    }
   }
   const api = {
     validRoi,
