@@ -18,22 +18,22 @@
       "files": [
         {
           "path": "doc-public/assets/control-room.mp4",
-          "bytes": 146887,
-          "sha256": "baffd35c9c904e443713343f32285f41badf6a86ef9034539cc5f2eac02f4f8e"
+          "bytes": 214630,
+          "sha256": "6a6992a144118eda26aeec977447c6b6fdd861c5e2d2563005a4721e5a9da90f"
         },
         {
           "path": "doc-public/assets/control-room.webp",
-          "bytes": 347440,
-          "sha256": "b8ebdd4617c167bda435dd99fbd0c034c164e9f21766ea9d6b9b2be6eda3eb89"
+          "bytes": 810614,
+          "sha256": "366b87a20ac240654af752f64f02d1d531836405ce52e2b2ae3e0dd0babb9cb4"
         },
         {
           "path": "doc-public/assets/control-room.png",
-          "bytes": 759399,
-          "sha256": "5a1f97597c9a1f98dc3ae67e129d8e77603cd07039eedf7949d8ce33472e0b43"
+          "bytes": 437162,
+          "sha256": "cc192735929705547fd950b0d8c731d6441096ee6dde40739a351ac8195c3633"
         }
       ],
       "animation_encoded_frames": 36,
-      "animation_duration_ms": 5999
+      "animation_duration_ms": 6000
     },
     {
       "id": "vision-lab",
@@ -46,22 +46,22 @@
       "files": [
         {
           "path": "doc-public/assets/vision-lab.mp4",
-          "bytes": 78474,
-          "sha256": "5801d4b7e2be6164af244f2309d7c90fe5b536f8742ecbeda58e12f02b975dcb"
+          "bytes": 124355,
+          "sha256": "6fac1058ac8e47f479a7f777c867aea4566c9ab098130999ac5b5131b84fe4bf"
         },
         {
           "path": "doc-public/assets/vision-lab.webp",
-          "bytes": 149818,
-          "sha256": "595c8e65495cbb11ed997dd6b2b80d9ba8c0d7b0112c1032edf48810b5e1d9f6"
+          "bytes": 409998,
+          "sha256": "71b000cef36cd2744a27f22d8c403ca632f0189f7f999dd58856e6e464f6aa2a"
         },
         {
           "path": "doc-public/assets/vision-lab.png",
-          "bytes": 514372,
-          "sha256": "950e4f7c3ce0c168be846c1c702edbd70490d265508a4311ad857e28028a65c4"
+          "bytes": 324529,
+          "sha256": "5476b1b762be0da2c99f4083be3c63e2253c161342236842f0b3ab40891154e7"
         }
       ],
-      "animation_encoded_frames": 28,
-      "animation_duration_ms": 5999
+      "animation_encoded_frames": 27,
+      "animation_duration_ms": 6000
     },
     {
       "id": "workflows",
@@ -74,22 +74,22 @@
       "files": [
         {
           "path": "doc-public/assets/workflows.mp4",
-          "bytes": 125878,
-          "sha256": "ba1ace609f4a533164d5363a5c9a0758df841a4f691bdf0fdf1c856a2ce856e5"
+          "bytes": 146446,
+          "sha256": "98b751f5badb7d59a6dda52536f619e80db4d29c6d1f38e1ea7dda88dd7cb5f6"
         },
         {
           "path": "doc-public/assets/workflows.webp",
-          "bytes": 68180,
-          "sha256": "a26a9f14222289e213d4ff83bf0278598260a1840f0b7745adca9539b64586ac"
+          "bytes": 83990,
+          "sha256": "7d3f91572433ceb357ffca7f29f680f299c76d8ff7f216da2f1aa34dccc42842"
         },
         {
           "path": "doc-public/assets/workflows.png",
-          "bytes": 272224,
-          "sha256": "884a8ade926b4bd190212182f1ade2c5c1efe442139f07b49d2ff4f3f107e990"
+          "bytes": 181159,
+          "sha256": "c5551bcd5e0087ec707b7a43cdfaf1fb679bb1f018604897093a23d2b157f2ed"
         }
       ],
-      "animation_encoded_frames": 3,
-      "animation_duration_ms": 5999
+      "animation_encoded_frames": 4,
+      "animation_duration_ms": 6000
     }
   ]
 }
