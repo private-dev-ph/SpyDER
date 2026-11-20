@@ -24,9 +24,6 @@
 .rail-current {
   font-size: 12px;
 }
-.rail-note {
-  margin-top: 28px;
-}
 .mobile-workspace {
   display: none;
 }
@@ -182,11 +179,6 @@
 }
 .workspace-message {
   margin: 0 0 18px;
-}
-@media (max-height: 900px) {
-  .rail-note {
-    display: none;
-  }
 }
 @media (max-width: 1100px) {
   #clock {

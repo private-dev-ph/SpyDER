@@ -1262,8 +1262,6 @@
             ? "demo"
             : "device:" + deviceSelect.value,
   };
-  document.querySelector(".rail-footer small").textContent =
-    "No video uploads · no cloud processing";
   document.querySelector("#empty p").textContent =
     "Add a generated feed, your webcam, or a local video. For RTSP and native driver controls, install the local Python app.";
   document.querySelector("#remove-dialog .field-help").textContent =

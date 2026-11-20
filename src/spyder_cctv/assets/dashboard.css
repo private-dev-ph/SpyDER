@@ -204,46 +204,15 @@ select:focus-visible {
   padding: 3px 6px;
   border-radius: 4px;
 }
-.rail-note {
-  margin: 58px 15px 35px;
-}
-.rail-note .scope-icon {
-  margin-bottom: 19px;
-}
-.rail-note strong {
-  display: block;
-  font-size: 23px;
-  font-weight: 600;
-  letter-spacing: -0.8px;
-  line-height: 1.35;
-}
-.rail-note p {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.8;
-  margin-top: 13px;
-}
 .rail-footer {
   margin-top: auto;
   padding: 22px 15px 0;
   border-top: 1px solid var(--border);
   font-size: 11px;
 }
-.rail-footer small {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-  margin: 7px 0 0 14px;
-}
-.connection-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 18px;
-}
-.connection-row .status-dot {
-  margin: 0;
-}
+.rail-footer { display: flex; flex-wrap: wrap; gap: 12px; }
+.rail-footer a { color: var(--ink); text-underline-offset: 3px; }
+.rail-footer a:hover { color: var(--accent); }
 .icon {
   width: 18px;
   height: 18px;
@@ -905,12 +874,6 @@ kbd {
   .rail {
     padding: 28px 10px;
   }
-  .rail-note {
-    margin-top: 45px;
-  }
-  .rail-note strong {
-    font-size: 21px;
-  }
   .overview {
     grid-template-columns: 1fr 1fr 1fr;
   }
@@ -1113,12 +1076,6 @@ kbd {
 .camera-card[data-state="released"] .camera-state i {
   background: var(--accent);
 }
-.connection-row[data-connected="false"] .status-dot {
-  background: var(--danger);
-}
-.connection-row[data-connected="true"][data-idle="true"] .status-dot {
-  background: var(--muted);
-}
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--accent) var(--rail);
@@ -1251,9 +1208,6 @@ button:disabled {
   .camera-footer {
     min-height: 44px;
     padding: 8px 12px;
-  }
-  .rail-note {
-    margin-top: 35px;
   }
   .wall-footer {
     padding-top: 14px;

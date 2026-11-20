@@ -751,18 +751,6 @@ function render() {
     );
   $("#add-camera").disabled = $("#empty-add").disabled = !connected;
   $("#open-profiles").disabled = !connected;
-  $("#connection").textContent = connected
-    ? window.spyderShowcase
-      ? "Browser workspace ready"
-      : "Local server online"
-    : "Server disconnected";
-  $(".connection-row").dataset.connected = String(connected);
-  $(".connection-row").dataset.idle = String(
-    cameras.some((c) => c.idle_suspended) &&
-      !cameras.some((c) =>
-        ["running", "starting", "reconnecting"].includes(c.state),
-      ),
-  );
   reflow();
   window.dispatchEvent(
     new CustomEvent("spyder:cameras", { detail: { cameras, connected } }),
