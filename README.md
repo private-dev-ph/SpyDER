@@ -8,6 +8,8 @@
   <img src="src/spyder_cctv/assets/spyder-emblem.png" alt="SpyDER spider and camera emblem" width="230">
 </p>
 
+[Try the browser demo](https://spyder.zachcodes.dev) | [Run locally](#run-locally) | [Documentation](doc-public/README.md)
+
 ## The idea
 
 Watching several cameras becomes more useful when a detection can lead to an action:
@@ -21,10 +23,9 @@ A separate static showcase demonstrates browser-supported features without a clo
 
 ## Showcase
 
-![SpyDER Control Room with generated demonstration feeds](doc-public/assets/control-room.png)
+![SpyDER Control Room running live motion analysis on bundled home-security clips](doc-public/assets/control-room.webp)
 
-*Control Room in the static browser showcase. These are generated test patterns,
-not surveillance footage or evidence of model accuracy.*
+*Recorded from SpyDER: three demo camera feeds with live OpenCV motion regions and a temporary MIL track. [Watch the MP4](doc-public/assets/control-room.mp4).*
 
 | Workspace | What the current prototype demonstrates |
 | --- | --- |
@@ -37,10 +38,17 @@ not surveillance footage or evidence of model accuracy.*
 | Layouts | Saved walls, fixed camera pins, activity priority, drag/keyboard ordering, visibility, featured/rotating views, import/export and browser-only dummy cameras for simulation. |
 | Setup and System | Supported device controls, reusable tuning profiles, focus policy, dependency diagnostics and configurable media output. |
 
-![SpyDER workflow editor using generated input](doc-public/assets/vision-lab.png)
+![SpyDER Vision Lab showing a live source, foreground mask and motion settings](doc-public/assets/vision-lab.webp)
 
-*Vision Lab with a synthetic camera and demonstration detection results. Actual inference
-requires compatible local models and runtime dependencies.*
+*Vision Lab in the installed Python app: side-by-side source and MOG2 mask, ROI, contours and tracking. [Watch the MP4](doc-public/assets/vision-lab.mp4).*
+
+![The enabled porch Approach workflow and its Browser motion node settings](doc-public/assets/workflows.webp)
+
+*An existing bundled workflow: Camera → Browser motion → Cooldown → Event, enabled in the static demo. [Watch the MP4](doc-public/assets/workflows.mp4).*
+
+These are recordings of the working application using licensed sample footage. Motion regions
+and track IDs demonstrate analysis behavior, not verified person identities or model accuracy.
+[Footage credits and presentation media](doc-public/assets/README.md).
 
 ## A representative flow
 
@@ -110,8 +118,9 @@ extras and compatible local models; weights are not included. Use
 
 ### Browser showcase
 
-The showcase is prepared for static hosting but is **not presented here as a deployed live
-service**. Export a fresh directory and preview it locally:
+Try **Front porch: person and parcel** in the [live demo](https://spyder.zachcodes.dev). Start the feed in Control Room, watch for motion inside the porch approach area, then open **Events** to review what triggered. Use **Add camera → Home security demo clip** to explore the other scenes. All eight clips loop on the visitor's device.
+
+To preview the same static export locally:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spyder_cctv export-showcase --output .\dist\showcase-preview
@@ -123,15 +132,13 @@ preview server does not apply Cloudflare's `_headers` file; verify deployment he
 
 | Capability | Installed Python app | Static browser showcase |
 | --- | --- | --- |
-| Capture | OpenCV-supported devices, streams and files | Generated feeds, permitted webcams and selected local video |
-| CV | Native OpenCV and optional model runtimes | Browser motion demonstration; no native YOLO/InsightFace execution |
-| Workflows/events | Native execution, persistent history and attachments | Native execution controls are unavailable |
+| Capture | OpenCV-supported devices, streams and files | Bundled home-security clips, generated feeds, permitted webcams and selected local video |
+| CV | Native OpenCV and optional model runtimes | OpenCV.js MOG2 and one automatic porch MIL tracker with load-based fallback; frame difference on other feeds by default |
+| Workflows/events | Reusable subflows, configurable execution history and event attachments | Camera, browser motion, cooldown and action nodes run in the tab; event metadata persists in the browser |
 | Recording | Local H.264 MP4 clips, storage profiles, schedules and captures | Browser recording; download media before closing the tab |
 | Hosting | User's computer, bound to loopback | Static assets; camera/video processing stays in the visitor's browser |
 
-System includes current health diagnostics and configuration backup/restore. The workflow
-editor offers node copy/paste, connection labels, validation review, and latest execution
-counts. See the [public documentation](doc-public/README.md) for setup and limitations.
+In the installed app, review a clip on the [recording timeline](doc-public/user-guide/timeline-playback.md), toggle its [saved detection overlays](doc-public/user-guide/recording-detection-replay.md), or open it for [face enrollment](doc-public/user-guide/face-galleries-and-onvif.md). The System workspace provides [backup and restore](doc-public/user-guide/backups.md), with footage included on request. See the [public documentation](doc-public/README.md) for setup and limitations.
 
 ## Engineering decisions
 
@@ -144,8 +151,7 @@ counts. See the [public documentation](doc-public/README.md) for setup and limit
   sessions transferred to manual control or another workflow.
 - **Design for installation.** Package resources and stable data paths avoid checkout-relative
   assumptions. Changing output folders retains access to earlier media.
-- **Keep the demo honest.** Static hosting serves the interface rather than remote Python
-  inference. The portfolio's Live control remains disabled until deployment is ready.
+- **Keep the demo honest.** Cloudflare serves static files. Each visitor’s browser decodes the demo clips, analyzes motion and records locally.
 
 ## Validation
 
@@ -153,8 +159,8 @@ Tests use injected camera/model fixtures, temporary storage and JavaScript runti
 Hardware and real-model validation are separate from synthetic regression evidence.
 
 ```powershell
-.\.venv\Scripts\python.exe -m ruff check src tests
-.\.venv\Scripts\python.exe -m ruff format --check src tests
+.\.venv\Scripts\python.exe -m ruff check src scripts/tests
+.\.venv\Scripts\python.exe -m ruff format --check src scripts/tests
 .\.venv\Scripts\python.exe -m pytest -q
 node --test
 .\.venv\Scripts\python.exe -m build --no-isolation
@@ -181,7 +187,7 @@ surveillance service or a guarantee of security or identification accuracy.
 - Layouts persist per browser and origin. Export arrangements for backup or transfer. Missing
   camera IDs remain unavailable until the original cameras return. Dummy cameras are simulations
   and stay outside CV, capture and recording.
-- Screenshots use generated inputs. Real cameras, models and environments need separate testing.
+- The showcase recordings use licensed residential-camera footage. Hardware performance and recognition accuracy depend on the device, model and scene.
 
 ## Public documentation and portfolio
 

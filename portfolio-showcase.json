@@ -6,64 +6,13 @@
     "src": "src/spyder_cctv/assets/spyder-emblem.png",
     "alt": "SpyDER spider and camera emblem"
   },
-  "internalDemoAvailable": false,
+  "internalDemoAvailable": true,
   "githubUrl": "https://github.com/private-dev-ph/SpyDER",
   "images": [
     {
-      "src": "doc-public/assets/control-room.png",
-      "alt": "SpyDER Control Room showing generated camera feeds in the browser showcase",
-      "caption": "Static browser showcase with generated test patterns; no surveillance footage."
-    },
-    {
-      "src": "doc-public/assets/vision-lab.png",
-      "alt": "SpyDER visual workflow editor with camera, detection, preview, cooldown and event nodes",
-      "caption": "Native workflow editor with a synthetic camera and demonstration detection results."
-    }
-  ],
-  "sections": [
-    {
-      "type": "problemPurpose"
-    },
-    {
-      "type": "image",
-      "title": "Control Room",
-      "summary": "A responsive camera wall with independent controls and recording actions. The showcase feeds are generated locally.",
-      "image": {
-        "src": "doc-public/assets/control-room.png",
-        "alt": "SpyDER Control Room showing generated camera feeds in the browser showcase",
-        "caption": "Static browser showcase with generated test patterns; no surveillance footage."
-      }
-    },
-    {
-      "type": "keyFeatures"
-    },
-    {
-      "type": "techStack"
-    },
-    {
-      "type": "role"
-    },
-    {
-      "type": "technicalHighlights"
-    },
-    {
-      "type": "image",
-      "title": "Visual detection workflows",
-      "summary": "Camera and model inputs lead to filters, previews and local actions. This view uses synthetic input rather than a production model result.",
-      "image": {
-        "src": "doc-public/assets/vision-lab.png",
-        "alt": "SpyDER visual workflow editor with camera, detection, preview, cooldown and event nodes",
-        "caption": "Native workflow editor with a synthetic camera and demonstration detection results."
-      }
-    },
-    {
-      "type": "challenges"
-    },
-    {
-      "type": "results"
-    },
-    {
-      "type": "lessons"
+      "src": "doc-public/assets/spyder-demo.webp",
+      "alt": "SpyDER Control Room with motion boxes, Vision Lab with its foreground mask, and the enabled porch Approach workflow",
+      "caption": "Recorded in SpyDER. Control Room and Vision Lab run locally in Python. The porch workflow runs in the browser demo. Footage credits and source clips are listed in doc-public/assets/README.md."
     }
   ],
   "problem": "Monitoring multiple cameras becomes fragmented when capture, device tuning, model inference, recording and alerts live in separate tools. Opening duplicate captures can create contention, while cloud inference introduces a remote dependency for private video.",
@@ -98,7 +47,7 @@
     "Optional face classification uses confidence margins and consecutive confirmations to reduce switching, while exposing the limitations of closed-set identity decisions.",
     "Timed event clips track recording-session ownership so manual or other workflow control is not stopped by an old attachment timer.",
     "Package-resource asset loading and stable data paths support installed execution outside the checkout; media output changes retain earlier catalogs.",
-    "The exported static showcase keeps native Python workflow controls unavailable and uses browser-local generated feeds, cameras, files and recording."
+    "The static showcase plays credited home-security clips and runs supported motion workflows on the visitor’s device. Its porch feed starts real OpenCV.js MIL + MOG2, with measured load fallback; native Vision Lab mask previews remain part of the installed Python app."
   ],
   "challengesAndSolutions": [
     {
@@ -119,20 +68,45 @@
     },
     {
       "challenge": "A static cloud demo cannot run the local Python inference stack.",
-      "solution": "Export a browser-only interface with local media processing and explicit native-only boundaries instead of proxying video to a cloud backend."
+      "solution": "Keep browser-compatible motion, media capture and event actions local to the visitor’s browser, use bundled licensed clips as camera sources, and expose unsupported native capabilities explicitly."
+    },
+    {
+      "challenge": "Street traffic can trigger motion alerts for a porch.",
+      "solution": "Limit analysis to the approach area and apply a cooldown before creating another event."
+    },
+    {
+      "challenge": "An alert can arrive after a visitor has already reached the door.",
+      "solution": "Keep a bounded pre-event buffer and attach the lead-in to a workflow event clip."
+    },
+    {
+      "challenge": "Tracking can compete with recording on a slower browser device.",
+      "solution": "Measure processing and queue delays and reduce porch tracking in stages while capture continues."
+    },
+    {
+      "challenge": "Detection boxes can obscure details when footage is reviewed later.",
+      "solution": "Store timestamped detection data separately and reapply overlays during playback."
     }
   ],
   "resultsImpact": [
     "Brings camera monitoring, CV-driven actions and local evidence review into one installable prototype without requiring cloud video processing.",
     "Supports a complete event-to-capture/clip workflow, with persistent metadata, local playback and exportable evidence references.",
     "Demonstrates a static-hostable camera wall while keeping native inference and persistent local-server features clearly separated.",
-    "Provides synthetic regression coverage for camera lifecycle, model adapters, workflow behavior, event storage and installed-package resources; target hardware and real models still need separate validation."
+    "Provides synthetic regression coverage for camera lifecycle, model adapters, workflow behavior, event storage and installed-package resources; target hardware and real models still need separate validation.",
+    "A resident can watch for activity at the doorstep while passing cars outside the selected area stay out of that rule.",
+    "Someone checking a delivery can review the approach and departure together from the event library.",
+    "A household can keep monitoring several views while the demo adjusts analysis to the device available.",
+    "A resident can inspect activity with boxes visible and review the original image when a box covers an important detail."
   ],
   "lessonsLearned": [
     "Local-first design changes the architecture: the browser, Python runtime and static showcase need explicit capability boundaries.",
     "Freshness, backpressure and capture ownership matter as much as model integration in a concurrent camera application.",
     "Stable classification output is not proof of correct identification or reliable unknown-person rejection.",
     "Package installation, resource paths and server lifecycle are part of the product experience, including safe transitions between editable and wheel installations.",
-    "Synthetic fixtures make regressions reproducible, but camera drivers, codecs, models and hardware capacity require real-device checks."
-  ]
+    "Synthetic fixtures make regressions reproducible, but camera drivers, codecs, models and hardware capacity require real-device checks.",
+    "Testing the ROI against ordinary street activity matters as much as testing a visitor entering it.",
+    "Choose the pre-event window around the decision the viewer needs to make and budget memory per feed.",
+    "Measure the time a frame spends waiting as well as the time spent processing it.",
+    "Treat detections as an interpretation of a frame and preserve the source pixels for later review."
+  ],
+  "liveDemoUrl": "https://spyder.zachcodes.dev"
 }

@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "capture_date": "2026-11-20",
+  "source": "Actual SpyDER interface with bundled licensed camera clips",
+  "footage_license": "CC BY 3.0",
+  "credits": "doc-public/assets/README.md",
+  "items": [
+    {
+      "id": "control-room",
+      "runtime": "Installed Python app",
+      "duration_seconds": 6,
+      "fps": 6,
+      "source_clip_ids": [
+        "porch-parcel",
+        "front-walk-approach",
+        "front-door-close"
+      ],
+      "files": [
+        {
+          "path": "doc-public/assets/control-room.mp4",
+          "bytes": 146887,
+          "sha256": "baffd35c9c904e443713343f32285f41badf6a86ef9034539cc5f2eac02f4f8e"
+        },
+        {
+          "path": "doc-public/assets/control-room.webp",
+          "bytes": 347440,
+          "sha256": "b8ebdd4617c167bda435dd99fbd0c034c164e9f21766ea9d6b9b2be6eda3eb89"
+        },
+        {
+          "path": "doc-public/assets/control-room.png",
+          "bytes": 759399,
+          "sha256": "5a1f97597c9a1f98dc3ae67e129d8e77603cd07039eedf7949d8ce33472e0b43"
+        }
+      ],
+      "animation_encoded_frames": 36,
+      "animation_duration_ms": 5999
+    },
+    {
+      "id": "vision-lab",
+      "runtime": "Installed Python app",
+      "duration_seconds": 6,
+      "fps": 6,
+      "source_clip_ids": [
+        "porch-parcel"
+      ],
+      "files": [
+        {
+          "path": "doc-public/assets/vision-lab.mp4",
+          "bytes": 78474,
+          "sha256": "5801d4b7e2be6164af244f2309d7c90fe5b536f8742ecbeda58e12f02b975dcb"
+        },
+        {
+          "path": "doc-public/assets/vision-lab.webp",
+          "bytes": 149818,
+          "sha256": "595c8e65495cbb11ed997dd6b2b80d9ba8c0d7b0112c1032edf48810b5e1d9f6"
+        },
+        {
+          "path": "doc-public/assets/vision-lab.png",
+          "bytes": 514372,
+          "sha256": "950e4f7c3ce0c168be846c1c702edbd70490d265508a4311ad857e28028a65c4"
+        }
+      ],
+      "animation_encoded_frames": 28,
+      "animation_duration_ms": 5999
+    },
+    {
+      "id": "workflows",
+      "runtime": "Static browser showcase",
+      "duration_seconds": 6,
+      "fps": 6,
+      "source_clip_ids": [
+        "porch-parcel"
+      ],
+      "files": [
+        {
+          "path": "doc-public/assets/workflows.mp4",
+          "bytes": 125878,
+          "sha256": "ba1ace609f4a533164d5363a5c9a0758df841a4f691bdf0fdf1c856a2ce856e5"
+        },
+        {
+          "path": "doc-public/assets/workflows.webp",
+          "bytes": 68180,
+          "sha256": "a26a9f14222289e213d4ff83bf0278598260a1840f0b7745adca9539b64586ac"
+        },
+        {
+          "path": "doc-public/assets/workflows.png",
+          "bytes": 272224,
+          "sha256": "884a8ade926b4bd190212182f1ade2c5c1efe442139f07b49d2ff4f3f107e990"
+        }
+      ],
+      "animation_encoded_frames": 3,
+      "animation_duration_ms": 5999
+    }
+  ]
+}
