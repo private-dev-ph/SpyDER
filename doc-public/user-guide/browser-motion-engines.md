@@ -69,9 +69,9 @@ The real-browser regression runs six bundled person scenes with their Approach w
 
 ```powershell
 .\.venv\Scripts\python.exe -m spyder_cctv export-showcase --output .\dist\mog2-check
-node tests/browser-mog2-browser.mjs .\dist\mog2-check
-node tests/browser-mil-browser.mjs .\dist\mog2-check
-node tests/browser-motion-auto-browser.mjs .\dist\mog2-check
+node scripts/tests/browser-mog2-browser.mjs .\dist\mog2-check
+node scripts/tests/browser-mil-browser.mjs .\dist\mog2-check
+node scripts/tests/browser-motion-auto-browser.mjs .\dist\mog2-check
 ```
 
 Use a fresh export path. Node runs the development harness; it does not execute the downloaded OpenCV distribution. OpenCV executes only in the isolated browser worker. Timings are sampled diagnostics, not a hardware capacity guarantee. Keep the page visible while testing.

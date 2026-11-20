@@ -60,8 +60,8 @@ Node.js 22+ is used for JavaScript tests, not as the application runtime. No npm
 installation is needed for those tests. Examples of focused checks:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q tests/test_recording_recovery.py tests/test_showcase.py
-node --test tests/browser-recording.test.cjs tests/showcase-runtime.test.cjs
+.\.venv\Scripts\python.exe -m pytest -q scripts/tests/test_recording_recovery.py scripts/tests/test_showcase.py
+node --test scripts/tests/browser-recording.test.cjs scripts/tests/showcase-runtime.test.cjs
 ```
 
 Tests use temporary storage and synthetic/injected inputs. A passing synthetic test
@@ -70,10 +70,10 @@ physical disk failure. For UI work, also check desktop, narrow and short-height 
 both themes, keyboard focus, console/network errors, and reduced-motion behavior.
 
 Browser regression scripts can use a fresh exported showcase with an isolated Chrome
-profile. For example, `node tests/layouts-browser.mjs <export-directory>` checks layouts;
-`node tests/workflow-templates-browser.mjs <export-directory>` checks template loading,
+profile. For example, `node scripts/tests/layouts-browser.mjs <export-directory>` checks layouts;
+`node scripts/tests/workflow-templates-browser.mjs <export-directory>` checks template loading,
 search, keyboard focus, themes, mobile layouts, and the static network boundary;
-`node tests/camera-priority-browser.mjs <export-directory>` exercises large synthetic
+`node scripts/tests/camera-priority-browser.mjs <export-directory>` exercises large synthetic
 walls. Set `CHROME_PATH` if Chrome is installed outside the script's default location.
 See [Layouts](../layouts.md#development-checks) for the distinction between layout
 stress tests and physical-camera capacity.

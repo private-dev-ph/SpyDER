@@ -91,7 +91,7 @@ For the browser regression, export a new showcase directory and run:
 
 ```powershell
 .venv/Scripts/python.exe -m spyder_cctv export-showcase --output .pytest_cache/layout-demo
-node tests/layouts-browser.mjs .pytest_cache/layout-demo
+node scripts/tests/layouts-browser.mjs .pytest_cache/layout-demo
 ```
 
 The regression uses a temporary Chrome profile and a local server with the export's actual CSP.
@@ -99,7 +99,7 @@ It checks draft/apply behavior, dummy isolation, reload persistence, fullscreen 
 mobile sizing, imports and resetting to Automatic wall. Set `CHROME_PATH` if Chrome is not installed
 at the Windows default path. No npm installation or frontend build is required.
 
-For large-wall verification, `node tests/camera-priority-browser.mjs <showcase-directory>` exercises
+For large-wall verification, `node scripts/tests/camera-priority-browser.mjs <showcase-directory>` exercises
 128 and 256 synthetic camera cards, pins, activity promotion, drag/apply/cancel, the scroll dock,
 rotation, fullscreen and mobile controls. Unit stress tests also check 200 ordering rounds at each
 count. These verify presentation and scheduling, not simultaneous physical-camera capacity.

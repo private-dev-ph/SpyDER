@@ -6,7 +6,7 @@ testing, and installed-wheel verification.
 Public documentation belongs in [doc-public/](doc-public/README.md). Keep engineering
 notes and drafts in the local `docs/` directory; it is ignored by Git and excluded
 from source distributions. Public pages must not link to local-only documentation.
-Keep the package under `src/` and tests under `tests/`.
+Keep the package under `src/` and tests under `scripts/tests/`.
 
 Use type annotations for public interfaces and descriptive names. Inject device and pipeline
 dependencies into the manager instead of requiring physical hardware in unit tests.
@@ -20,7 +20,7 @@ with a contribution.
 
 For fullscreen ribbon hit testing, export a fresh showcase with
 `python -m spyder_cctv export-showcase --output dist/ribbon-check`, then run
-`node tests/fullscreen-browser.mjs dist/ribbon-check` (Node 22+ and Chrome required).
+`node scripts/tests/fullscreen-browser.mjs dist/ribbon-check` (Node 22+ and Chrome required).
 Set `CHROME_PATH` when Chrome is installed elsewhere. The check uses an isolated
 temporary browser profile and real mouse presses in both themes.
 

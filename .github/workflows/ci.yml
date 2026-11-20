@@ -30,9 +30,11 @@ jobs:
         run: |
           python -m pip uninstall -y spyder-cctv
           python -m pip install dist/*.whl
-          cp -r tests "$RUNNER_TEMP/spyder-tests"
+          mkdir -p "$RUNNER_TEMP/spyder-check/scripts"
+          cp -r scripts/tests "$RUNNER_TEMP/spyder-check/scripts/tests"
+          cp -r examples "$RUNNER_TEMP/spyder-check/examples"
           cd "$RUNNER_TEMP"
           spyder-cctv --version
           spyder-cctv --config "$RUNNER_TEMP/spyder-config.json" init
           spyder-cctv --config "$RUNNER_TEMP/spyder-config.json" check
-          python -m pytest spyder-tests
+          python -m pytest spyder-check/scripts/tests
